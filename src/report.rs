@@ -274,6 +274,7 @@ mod tests {
             drag_n: None,
             thickness_in: t,
             density_pcf: rho,
+            mix: None,
             depth_in: 12.0,
             hull_weight_lb: wt,
             verdict: Some(Verdict {
@@ -315,6 +316,7 @@ mod tests {
             verified,
             on_grid_edge: edge,
             at_mix_data_edge: false,
+            diagrams: Default::default(),
         }
     }
 

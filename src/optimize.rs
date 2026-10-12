@@ -35,7 +35,11 @@ pub struct Candidate {
     /// None for a hull loaded from file.
     pub shape: Option<ShapeParams>,
     pub thickness_in: f64,
+    /// Mix density. With strength_model = "tested_mixes" this is the tested
+    /// mix's density and `mix` names it (T17).
     pub density_pcf: f64,
+    /// Name of the tested mix used (strength_model = "tested_mixes"), else None.
+    pub mix: Option<String>,
     pub depth_in: f64,
     /// Self weight from the section areas alone (trapz of A*rho/1728 over x).
     /// Computable even when equilibrium fails, so it is ALWAYS a real number:
@@ -67,6 +71,28 @@ pub struct Winner {
     /// (lowest/highest tested density -/+ density_extrapolation_pcf). Not a
     /// search-range problem: the team needs lab data for lighter/heavier mixes.
     pub at_mix_data_edge: bool,
+    /// Along-hull diagrams for the winner at verification resolution, governing
+    /// load case, for plotting (T18 fills these; empty until then).
+    pub diagrams: Diagrams,
+}
+
+/// Per-station arrays (same length as `x_in`) for the web plot tabs.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Diagrams {
+    pub x_in: Vec<f64>,
+    /// Shear, lb.
+    pub shear_lb: Vec<f64>,
+    /// Bending moment, lb*in (positive = sagging).
+    pub moment_lbin: Vec<f64>,
+    /// Bending tension stress |M| c / I, psi (0 at masked tip stations).
+    pub tension_psi: Vec<f64>,
+    /// Allowable bending tension (capacity / FS), psi, constant along the hull.
+    pub tension_allow_psi: f64,
+    /// Wall cross-section area, in^2, and second moment, in^4.
+    pub area_in2: Vec<f64>,
+    pub inertia_in4: Vec<f64>,
+    /// Local waterline height above keel, in.
+    pub waterline_in: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -181,7 +207,8 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     let n = params.hull.stations;
     let done = AtomicUsize::new(0);
 
-    let grids: Vec<Grid> = ds.par_iter().map(|&d| Grid::build(hull, d, n)).collect();
+    let grids: Vec<Grid> =
+        ds.par_iter().map(|&d| Grid::build_flared(hull, d, n, params.hull.flare_deg)).collect();
     let pairs: Vec<(usize, usize)> =
         (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
     let mut candidates: Vec<(usize, usize, usize, Candidate)> = pairs
@@ -210,7 +237,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     let winner = best.map(|c| {
         let stations = 2 * n - 1;
         on_progress(Progress::Verifying { stations });
-        let grid = Grid::build(hull, c.depth_in, stations);
+        let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
         let sec = sections(&grid, c.thickness_in);
         let v = evaluate(params, &fit, &grid, &sec, c.thickness_in, c.density_pcf);
         let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
@@ -232,6 +259,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                 || (edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
                 || edge(c.depth_in, &ds),
             at_mix_data_edge: mix_edge(c.density_pcf),
+            diagrams: Diagrams::default(),
         }
     });
 
@@ -290,6 +318,7 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         density_pcf: rho,
         depth_in: grid.depth,
         hull_weight_lb: hull_weight(grid, sec, rho),
+        mix: None,
         verdict: None,
         governing_case: None,
         error: None,

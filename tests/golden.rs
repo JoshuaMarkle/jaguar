@@ -56,6 +56,7 @@ fn golden_bending_dc() {
         let loads =
             equilibrium::solve(&grid, &sec, f(i, "density"), &crew(i), f(i, "knee_patch_in"), 12.0).unwrap();
         let mat = Material {
+            strength_model: jaguar::params::StrengthModel::Fit,
             mix_data: "unused".into(),
             flex_over_split: 1.0,
             density_extrapolation_pcf: 0.0,

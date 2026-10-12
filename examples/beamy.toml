@@ -8,6 +8,7 @@
 [hull]
 file = "beamy_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
+flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
 
 # A design must pass EVERY load case. Seats are knee positions from the bow;
 # omit seats_in to space the paddlers evenly.
@@ -17,6 +18,7 @@ weights_lb = [175.0, 165.0]
 # seats_in = [80.0, 160.0]
 
 [material]
+strength_model = "fit"          # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
 # Strength comes from the team's lab breaks (data/mix_tests.csv): final split
 # tensile strength is fitted against density; flexural and compressive strength
 # are derived from it (see src/mix.rs). 7-day breaks are scaled by 1/0.6.
@@ -37,6 +39,14 @@ dc_search = 0.93          # = 0.95 / (1 + 0.0219 worst drift per station doublin
 dc_verify = 0.95          # numerical margin, not a safety factor
 freeboard_min_in = 6.0
 thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+
+[punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
+method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)
+knees = 1                 # knees carrying one paddler: 1 = conservative, 2 = realistic kneeling
+knee_split = 0.5          # share on the heavier knee when knees = 2
+knee_spacing_in = 8.0     # centre-to-centre knee spacing
+pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
+d_over_t = 0.5            # effective depth to the mesh / wall thickness
 
 [stability]
 crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)

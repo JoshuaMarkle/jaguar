@@ -200,6 +200,7 @@ mod tests {
 
     fn mat() -> Material {
         Material {
+            strength_model: crate::params::StrengthModel::Fit,
             mix_data: "unused".into(),
             flex_over_split: 1.0,
             density_extrapolation_pcf: 0.0,

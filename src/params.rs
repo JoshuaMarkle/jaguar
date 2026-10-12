@@ -23,6 +23,8 @@ pub struct Params {
     pub gates: Gates,
     pub stability: Stability,
     pub objective: Objective,
+    /// Knee punching-shear model (see docs/PUNCHING.md, T16).
+    pub punching: Punching,
     /// Present = optimize the hull SHAPE too (hull.file must then be absent).
     /// See docs/SHAPE_PLAN.md.
     #[serde(default)]
@@ -38,6 +40,11 @@ pub struct HullParams {
     pub file: Option<PathBuf>,
     /// Longitudinal stations used for the search. The verify pass uses 2n-1.
     pub stations: usize,
+    /// Outward lean of the hull sides above the design waterline, degrees from
+    /// vertical (0 = straight up, the default). Applies to every hull, fixed or
+    /// generated. Typical canoe flare 5-15 deg.
+    #[serde(default)]
+    pub flare_deg: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -54,6 +61,12 @@ pub struct LoadCase {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Material {
+    /// "fit": strength from the straight-line fit through all lab rows, any
+    /// density in the trusted range can be chosen. "tested_mixes": only the
+    /// mixes actually tested can be chosen, each with its own measured
+    /// strength (rows grouped by `mix` name, mean final strength and density).
+    /// T17 implements tested_mixes.
+    pub strength_model: StrengthModel,
     /// Lab data CSV (see `src/mix.rs` and `data/mix_tests.csv`), relative to the
     /// canoe.toml. Final split tensile strength vs density is fitted from it and
     /// every strength (flexural, compressive) is derived from that fit.
@@ -72,6 +85,44 @@ pub struct Material {
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging (see old/CLAUDE.md).
     pub knee_patch_in: f64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrengthModel {
+    Fit,
+    TestedMixes,
+}
+
+/// How a kneeling paddler loads the hull bottom (punching shear). T16.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Punching {
+    /// "aci_22_6": ACI 318-19 Table 22.6.5.2 two-way shear (reinforced slab,
+    /// critical section d/2 from the patch, v_u = V_u / (b0 d)).
+    /// "plain_14_5": ACI 318-19 Table 14.5.5.1 plain-concrete two-way shear
+    /// (critical section h/2 from the patch, on b0 h).
+    pub method: PunchingMethod,
+    /// Knees carrying one paddler: 1 (all weight on one knee, conservative) or 2.
+    pub knees: u32,
+    /// Share of the paddler's weight on the heavier knee when knees = 2 (0.5-1).
+    pub knee_split: f64,
+    /// Centre-to-centre knee spacing, in (used to check whether the two critical
+    /// perimeters overlap; if so the full load acts on the combined perimeter).
+    pub knee_spacing_in: f64,
+    /// Knee pad thickness, in; spreads the contact (ASCE limit 0.5 in).
+    pub pad_in: f64,
+    /// Effective depth to the mesh as a fraction of wall thickness (aci_22_6), e.g. 0.5.
+    pub d_over_t: f64,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PunchingMethod {
+    #[serde(rename = "aci_22_6")]
+    Aci22_6,
+    #[serde(rename = "plain_14_5")]
+    Plain14_5,
 }
 
 /// Transverse stability of the loaded canoe.
@@ -197,6 +248,21 @@ impl Params {
     pub fn validate(&self) -> Result<()> {
         if self.hull.stations < 11 {
             bail!("hull.stations must be >= 11");
+        }
+        if !(0.0..=45.0).contains(&self.hull.flare_deg) {
+            bail!("hull.flare_deg must be in [0, 45], got {}", self.hull.flare_deg);
+        }
+        let pu = &self.punching;
+        if !(pu.knees == 1 || pu.knees == 2)
+            || !(0.5..=1.0).contains(&pu.knee_split)
+            || pu.knee_spacing_in.is_nan()
+            || pu.knee_spacing_in < 0.0
+            || !(0.0..=0.5).contains(&pu.pad_in)
+            || !(pu.d_over_t > 0.0 && pu.d_over_t <= 1.0)
+        {
+            bail!(
+                "punching: need knees 1|2, knee_split 0.5..1, knee_spacing_in >= 0, pad_in 0..0.5, 0 < d_over_t <= 1"
+            );
         }
         if self.load_cases.is_empty() {
             bail!("at least one [[load_case]] is required");

@@ -158,6 +158,17 @@ impl Grid {
     /// Resample `hull` to `n` stations and extrude the top waterline up to
     /// `depth`. Matches the prototype `build()` (golden-tested).
     pub fn build(hull: &Hull, depth: f64, n: usize) -> Grid {
+        Self::build_flared(hull, depth, n, 0.0)
+    }
+
+    /// Like [`Grid::build`], but the topsides above the design waterline lean
+    /// OUTWARD by `flare_deg` from vertical: half-breadth grows by
+    /// `(z - draft_design) * tan(flare)` at every station that has a waterline
+    /// (stations with zero top half-breadth, the stem tips, stay closed).
+    /// 0 = vertical sides (the prototype). Flare adds wall area (weight), raises
+    /// reserve buoyancy and widens the gunwale (stability, freeboard).
+    pub fn build_flared(hull: &Hull, depth: f64, n: usize, flare_deg: f64) -> Grid {
+        let flare = flare_deg.to_radians().tan();
         let x = linspace(0.0, hull.length, n);
         let mut z = hull.z.clone();
         let extrude = depth > hull.draft_design;
@@ -173,7 +184,8 @@ impl Grid {
             }
             let top = y[i * nz + nw - 1];
             for k in nw..nz {
-                y[i * nz + k] = top;
+                let rise = z[k] - hull.draft_design;
+                y[i * nz + k] = if top > 0.0 { top + rise * flare } else { top };
             }
         }
         Grid { x, z, y, depth }
@@ -230,6 +242,23 @@ mod tests {
         assert_eq!(*g.z.last().unwrap(), 14.0);
         let mid = 80;
         assert_eq!(g.y(mid, g.nz() - 1), g.y(mid, h.z.len() - 1));
+    }
+
+    #[test]
+    fn flare_widens_topsides_only() {
+        let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        let v = Grid::build(&h, 14.0, 161);
+        let f = Grid::build_flared(&h, 14.0, 161, 10.0);
+        let nw = h.z.len();
+        assert_eq!(&v.y[..], &Grid::build_flared(&h, 14.0, 161, 0.0).y[..]);
+        let mid = 80;
+        for k in 0..nw {
+            assert_eq!(v.y(mid, k), f.y(mid, k), "below the waterline is unchanged");
+        }
+        let gunwale = f.y(mid, f.nz() - 1) - v.y(mid, v.nz() - 1);
+        let want = (14.0 - h.draft_design) * 10f64.to_radians().tan();
+        assert!((gunwale - want).abs() < 1e-9, "{gunwale} vs {want}");
+        assert_eq!(f.y(0, f.nz() - 1), 0.0, "closed stem stays closed");
     }
 
     #[test]
