@@ -216,7 +216,7 @@ pub fn check(
         let (c_top, c_bot) = (grid.depth - sec.zbar[i], sec.zbar[i]);
         // Sagging (M > 0): top in compression, bottom in tension.
         // Tension keeps the conservative max fibre: the signed tension fibre
-        // misses the prototype golden (0.49 vs 0.84), so the oracle used max(c).
+        // misses the golden reference (0.49 vs 0.84), which uses max(c).
         let cc = if m >= 0.0 { c_top } else { c_bot };
         let s = m.abs() * c_top.max(c_bot) / ii;
         if s > st {

@@ -60,18 +60,16 @@ P = 175 x 1.2 = 210 lb, d = 0.1875 in, b0 = pi (3 + 0.1875) = 10.01 in.
 
 | model | demand v_u (psi) | allowable (psi) | D/C |
 |---|---|---|---|
-| OLD (before this fix): square 3 in, demand on b0*t, 1 knee, 51 pcf | 43.9 | 47.6 | 0.92 |
-| NEW aci_22_6, 1 knee, 51 pcf (f'c 760 psi) | 111.8 | 50.5 | 2.21 FAIL |
-| NEW aci_22_6, 2 knees 60/40, 51 pcf | 67.1 | 50.5 | 1.33 FAIL |
-| NEW aci_22_6, 2 knees 60/40, 58 pcf (f'c 1639 psi), **the new winner** | 67.1 | 74.2 | 0.90 |
+| aci_22_6, 1 knee, 51 pcf (f'c 760 psi) | 111.8 | 50.5 | 2.21 FAIL |
+| aci_22_6, 2 knees 60/40, 51 pcf | 67.1 | 50.5 | 1.33 FAIL |
+| aci_22_6, 2 knees 60/40, 58 pcf (f'c 1639 psi), **the winner** | 67.1 | 74.2 | 0.90 |
 | plain_14_5, 1 knee, 51 pcf | 52.8 | 49.0 | 1.08 FAIL |
+| wrong: demand on b0*t instead of b0*d, square 3 in, 1 knee, 51 pcf | 43.9 | 47.6 | 0.92 |
 
-**The old check was unconservative.** It divided the knee load by `b0 * t` (full
-wall) while the code divides by `b0 * d` (effective depth, half the wall). That
-understated punching stress by 2x. Two knees instead of one gives back most of
-that, but the net result is that the lab mix must be stronger (58 pcf instead of
-51 pcf), so the example winner gets heavier: 92.6 lb -> 105.4 lb. Punching still
-governs, now honestly.
+The demand must be divided by `b0 * d` (effective depth, half the wall), not `b0 * t`. Using the
+full wall understates punching stress by 2x and makes 51 pcf look fine. With the correct demand,
+two knees give back most of that, but the mix still has to be stronger (58 pcf), so punching sets
+the mix and governs every example.
 
 ## How sure is this
 
@@ -81,9 +79,9 @@ governs, now honestly.
 * That two-way shear STRESS is taken on the critical section area b0*d (22.6.1.2 / 22.6.4) is the
   standard reading used in every slab design text; the clause wording was not re-read from the
   printed code here. Check it in the team's copy of ACI 318 before citing in the design paper.
-* The old check (b0*t) was 2x LESS conservative than that reading. If in doubt, run
+* Dividing by b0*t would be 2x LESS conservative than that reading. If in doubt, run
   `method = "plain_14_5"`: it uses the full thickness and a lower capacity, and gives a similar
-  answer (D/C 1.08 vs 2.21 for one knee at 51 pcf), i.e. the old 0.92 was optimistic either way.
+  answer (D/C 1.08 vs 2.21 for one knee at 51 pcf).
 
 ## What would change the answer (and is worth testing)
 

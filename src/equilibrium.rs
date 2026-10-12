@@ -191,7 +191,7 @@ fn metacentric_height(
 /// Shear and moment at `x` from a unit load spread uniformly over
 /// `[xc - w/2, xc + w/2]`, integrated from the bow: returns (V, M) per lb.
 /// Closed form, so the crew load is exact at any station spacing or seat.
-/// (The prototype sampled the patch at nodes, which caught 2 or 3 nodes
+/// (Sampling the patch at nodes, as the golden reference script does, catches 2 or 3 nodes
 /// depending on seat position, losing up to a third of a paddler and breaking
 /// free-free closure for 3+ crew.)
 fn patch_vm(x: f64, xc: f64, w: f64) -> (f64, f64) {

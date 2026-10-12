@@ -59,14 +59,15 @@ team's target mix, kept under the name the raw sheet implies.
 ## Extrapolation limit
 
 A straight line through a few points is only trustworthy near those points. The search only tries
-densities within `density_extrapolation_pcf` (default 4) of the tested range: today 51-64 pcf.
+densities within `density_extrapolation_pcf` (default 4) of the tested range: today 54.9-60 pcf
+tested, so 51-64 pcf searched. With only 3 lab points `jaguar check` warns that the fit is weak.
 If the winner sits at the low end, the summary prints
 `NOTE density 51 pcf is the lightest the lab data supports`; that means **test lighter mixes**.
 
-Since the punching fix (docs/PUNCHING.md) the example winners are at about 58 pcf instead: knee
-punching needs f'c of about 1640 psi, so the optimizer now picks the lightest mix that is STRONG
-enough, not the lightest the data allows. What would lower weight now is a light mix with higher
-strength (more data points around 55-60 pcf and above), or a knee pad.
+In practice knee punching (docs/PUNCHING.md) needs f'c of about 1640 psi, so the example winners
+sit at about 58 pcf: the lightest mix that is strong enough, not the lightest the data allows.
+What would lower weight is a light mix with higher strength (more data around 55-60 pcf), or a
+knee pad.
 
 ## Adding rows
 

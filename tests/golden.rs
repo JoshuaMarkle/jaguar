@@ -1,5 +1,5 @@
-//! Golden tests: the Rust pipeline must reproduce the deleted Python prototype
-//! (`docs/reference/prototype_optimize.py`) on `tests/golden/bending_v0.json`.
+//! Golden tests: the pipeline must reproduce `tests/golden/reference.py`,
+//! which generated `tests/golden/*_v0.json`.
 //! Never loosen a tolerance to make one pass: find the bug.
 
 use jaguar::equilibrium::{self, CrewLoad};
@@ -62,7 +62,7 @@ fn golden_bending_dc() {
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),
         };
-        // The prototype's tensile line f_t = slope*rho + icpt, expressed as a
+        // The reference script's tensile line f_t = slope*rho + icpt, expressed as a
         // StrengthFit with flex/split = 1 so bending capacity is identical.
         let fit = StrengthFit {
             points: vec![],
@@ -97,9 +97,9 @@ fn crew(i: &Value) -> Vec<CrewLoad> {
         .collect()
 }
 
-/// Grid::build reproduces prototype build() at depth 14, 161 stations.
+/// Grid::build reproduces the reference build() at depth 14, 161 stations.
 #[test]
-fn golden_grid_matches_prototype() {
+fn golden_grid_matches_reference() {
     let g: Value =
         serde_json::from_str(&std::fs::read_to_string("tests/golden/grid_v0.json").unwrap()).unwrap();
     let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();

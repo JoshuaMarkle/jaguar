@@ -1,5 +1,5 @@
 {
- "generator": "optimize.py (temporary single-file prototype, deleted after capture; see git history 0fb4903)",
+ "generator": "tests/golden/reference.py",
  "tolerance_rel": 0.01,
  "cases": [
   {

@@ -28,8 +28,8 @@ src/report.rs       terminal summary, result.json
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step)
 src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | serve
 
-tests/golden.rs     must match the Python prototype (docs/reference/prototype_optimize.py)
-tests/golden/       golden JSON + the Michlet files the reference hull came from
+tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
+tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
 tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search
 examples/           runnable canoe.toml files and hulls (docs/HULLS.md)
 data/               lab mix data (mix_tests.csv, cleaned from data/raw/)
@@ -59,7 +59,8 @@ make serve     # web UI at http://127.0.0.1:8000
 2. **Fail, never fabricate.** When a value cannot be computed, return `Err` or mark the candidate
    failed with a reason. No `0.0`/`NaN`/`-1` sentinel a gate could read as a real number, and no
    "best failing design" fallback. A sentinel is safe only if failure and the legitimate value point
-   the same way. The legacy app read `GM_T = 0.0` as "neutrally stable" and skipped the gate.
+   the same way. Example: `GM_T = 0.0` reads as "neutrally stable", so a gate that treats it as
+   "not computed" silently skips stability.
 3. **Knee load is a 3 in patch, never a point load.** Point loads make D/C not converge.
 4. **Inputs are strict.** `deny_unknown_fields` on every input struct. New parameter = add it to
    `Params`, `examples/canoe.toml`, and `docs/SPEC.md` in the same commit.
@@ -78,5 +79,5 @@ make serve     # web UI at http://127.0.0.1:8000
 ## Physics notes
 * D/C drifts up about 1-2% per station doubling, so the search gates at `dc_search` (0.93) and the
   winner is re-checked at 2n-1 stations against `dc_verify` (0.95).
-* The legacy Python app is gone from the tree. To look at it, use `git show legacy-final:old/<path>`.
-  Do this for physics intent only, never architecture.
+* Knee punching governs every example hull, so changes to `check::punching_calc`, the mix fit or
+  crew loads move the answer most. Re-run the examples and update `docs/HULLS.md`.

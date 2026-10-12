@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
-"""TEMPORARY minimal canoe optimizer (terminal only).
+"""Golden reference for tests/golden.rs (needs numpy + scipy).
 
-Question answered: lightest uniform wall (thickness, mix density) for a given
-hull that does not crack under the crew, in longitudinal bending.
+Generated tests/golden/bending_v0.json and grid_v0.json. A minimal, independent
+implementation of grid, section, equilibrium and bending tension only, kept so the
+golden values can be regenerated and audited. Do not extend it.
 
     hull table -> shell section per station -> weight/buoyancy/crew -> M(x)
     -> bending tension vs f_t/FS -> lightest passing design -> recheck at 2x stations
 
-Units: inches, pounds, psi, pcf.  Needs numpy + scipy.
-
-DELIBERATELY NOT HERE: biaxial Kupfer-Gerstle check, multizone mixes,
-5 race categories, seating search, torsion, stability/GM_T, freeboard gate, PDF.
-Strength constants below are PLACEHOLDERS from the old Mix Lab fit (4 points, not
-a real fit): weights are relative comparisons only.
+Units: inches, pounds, psi, pcf. The strength line below is a fixed test input,
+not real mix data.
 """
 import argparse
 import re
@@ -24,9 +21,9 @@ from scipy.optimize import brentq
 trapz = getattr(np, "trapezoid", None) or np.trapz   # numpy 1.x / 2.x
 M_TO_IN = 39.3701
 WATER_PCF = 62.4
-FT_SLOPE, FT_ICPT = 27.797, -1648.6      # f_t[psi] = slope*density[pcf] + icpt  (old Mix Lab)
-FS = 1.5                                 # old structural.factor_of_safety (ASD)
-ACCEPT_SEARCH, ACCEPT_VERIFY = 0.93, 0.95   # old refinement-gate margins
+FT_SLOPE, FT_ICPT = 27.797, -1648.6      # f_t[psi] = slope*density[pcf] + icpt  (fixed test input)
+FS = 1.5                                 # factor of safety
+ACCEPT_SEARCH, ACCEPT_VERIFY = 0.93, 0.95   # dc_search, dc_verify
 KNEE_PATCH_IN = 3.0
 
 

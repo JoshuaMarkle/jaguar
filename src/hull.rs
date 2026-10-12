@@ -156,7 +156,7 @@ impl Grid {
     }
 
     /// Resample `hull` to `n` stations and extrude the top waterline up to
-    /// `depth`. Matches the prototype `build()` (golden-tested).
+    /// `depth`. Matches `tests/golden/reference.py` `build()` (golden-tested).
     pub fn build(hull: &Hull, depth: f64, n: usize) -> Grid {
         Self::build_flared(hull, depth, n, 0.0)
     }
@@ -165,7 +165,7 @@ impl Grid {
     /// OUTWARD by `flare_deg` from vertical: half-breadth grows by
     /// `(z - draft_design) * tan(flare)` at every station that has a waterline
     /// (stations with zero top half-breadth, the stem tips, stay closed).
-    /// 0 = vertical sides (the prototype). Flare adds wall area (weight), raises
+    /// 0 = vertical sides (as in the golden reference). Flare adds wall area (weight), raises
     /// reserve buoyancy and widens the gunwale (stability, freeboard).
     pub fn build_flared(hull: &Hull, depth: f64, n: usize, flare_deg: f64) -> Grid {
         let flare = flare_deg.to_radians().tan();
@@ -233,7 +233,7 @@ mod tests {
         assert!((imported.draft_design - golden.draft_design).abs() < 1e-4);
         let (a, b) = (&imported.half_breadth, &golden.half_breadth);
         let max = a.iter().flatten().zip(b.iter().flatten()).map(|(p, q)| (p - q).abs()).fold(0.0, f64::max);
-        // 1e-4 in: the golden file used the legacy 39.3701 in/m, we use the exact factor.
+        // 1e-4 in: the golden file used 39.3701 in/m, we use the exact factor.
         assert!(max < 1e-4, "max offset diff {max}");
     }
 

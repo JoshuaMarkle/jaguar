@@ -1,70 +1,59 @@
 # Hull shape search
 
-With `[shape_search]` in canoe.toml (and no `hull.file`), JAGUAR picks the hull SHAPE as well as the wall
-(thickness, mix density, mold depth). The user is a programmer, not a hull designer, so the
-search must be bounded by things that make a canoe physically sensible, and every number it
-reports must come from a check, never a guess.
+With `[shape_search]` in canoe.toml (and no `hull.file`), JAGUAR picks the hull shape as well as
+the wall. Example: `examples/shape_opt.toml`. Shape factors are documented in `src/hullgen.rs`.
 
-## Structure: two nested searches
+## Two nested searches
 
 ```
-outer (shapeopt.rs): shape s in [shape_search] bounds         ~ 100-400 shapes
+outer (shapeopt.rs): shape s inside the [shape_search] bounds   ~100-400 shapes
   hull = hullgen::generate(s, 41 stations, 21 waterlines)
-  inner (optimize.rs, unchanged): wall grid t x rho x depth   ~ 700 candidates, ~0.1 s
+  inner (optimize.rs): wall grid t x rho x depth               ~700 candidates, ~0.1 s
   score(s) = objective of the inner winner (+inf if nothing passes)
 ```
 
-The inner search already exists and is fast and verified. The outer loop only changes the
-hull it is given, so all strength/freeboard logic stays in one place.
+The outer loop only changes the hull it hands to the inner search, so all strength, freeboard and
+stability logic lives in one place.
 
-## Why gates are needed (or the optimizer cheats)
+## Why the gates matter here
 
-* **Weight objective alone** shrinks the hull: shorter and narrower = less wall. It is stopped
-  by real constraints: freeboard (the crew must float with 6 in to spare), the strength checks
-  (a short hull concentrates the crew), and a NEW **stability gate**: loaded transverse
-  metacentric height GM_T >= `stability.gm_min_in`. Without GM a "canoe" 10 in wide wins.
-* **Drag objective** (`objective.kind = "drag"`): lowest total water resistance at race speed
-  (Michell wave resistance + ITTC-57 friction, loaded draft). This rewards long and slender,
-  balanced by the same gates. This is what a racing team actually wants once the hull is
-  strong enough; weight still matters through draft and wetted surface.
-* Bounds in `[shape_search]` encode the ASCE rules / mold limits (e.g. length 18-22 ft).
+* With the **weight** objective alone the optimizer would shrink the hull: shorter and narrower
+  means less wall. Freeboard (the crew must float with 6 in to spare), the strength checks (a short
+  hull concentrates the crew) and the **stability gate** GM_T >= `stability.gm_min_in` stop it.
+  Without the GM gate a "canoe" 10 in wide wins.
+* The **drag** objective (`objective.kind = "drag"`) rewards long and slender, held in check by
+  the same gates. Weight still matters through draft and wetted surface.
+* `[shape_search]` bounds encode the ASCE rules and mold limits (e.g. length 18-22 ft).
 
-## Outer search algorithm (deterministic)
+## Algorithm (deterministic)
 
-1. **Latin hypercube** of `samples` shapes inside the bounds (seeded PRNG implemented in the
-   file, e.g. SplitMix64; no new crates). Parameters with min == max are held fixed.
-2. Evaluate all in parallel (rayon over shapes; the inner search runs serially per shape,
-   `optimize::run_inner(.., parallel = false, ..)`, to avoid nested parallelism thrash).
-3. **Pattern search refinement**, `refine_rounds` rounds: around the current best K=4 shapes,
-   try +/- step on each free parameter (step starts at 1/8 of the range, halves when no
-   improvement), clamp to bounds, skip already-seen shapes.
-4. Winner = best score; its full inner RunResult (with verification at 2n-1 stations) is the
-   run result, with `candidate.shape = Some(s)`, `winner_hull` = generated hull.
-5. `RunResult.candidates` = for each shape, its inner winner (or its best failing candidate
-   with passes=false and the reason), so the web scatter shows one dot per shape.
+1. **Latin hypercube** of `samples` shapes inside the bounds (seeded SplitMix64). Parameters with
+   min == max are held fixed.
+2. Shapes are evaluated in parallel. Each inner search runs on one thread
+   (`optimize::run_inner(.., parallel = false, ..)`) to avoid nested parallelism.
+3. **Pattern search**, `refine_rounds` rounds: around the best 4 shapes, step +/- on each free
+   parameter (step starts at range/8 and halves after a round without improvement), clamped to
+   the bounds, skipping shapes already seen.
+4. The best shape is re-run with the normal parallel inner search, so the winner is verified at
+   2n-1 stations. `winner_hull` in result.json is the generated hull.
+5. `candidates` holds one entry per shape (its inner winner, or its best failing candidate with
+   the reason), so the web UI scatter shows one dot per shape.
 
-Reported per winner: length, beam, draft, all shape factors, weight, drag, GM, every check.
+`tests/shapeopt.rs` pins determinism and bounds. `docs/HULLS.md` has the current result.
 
-## Acceptance (pinned by `tests/shapeopt.rs` and `docs/HULLS.md`)
+## Drag model accuracy
 
-* `jaguar run examples/shape_opt.toml` finishes in < 60 s release, returns a VERIFIED winner whose
-  shape is inside the bounds and lighter (weight objective) than every fixed example hull run
-  with the same settings, with GM >= gm_min and freeboard >= 6 in.
-* Same toml twice -> byte-identical result.json.
-* drag objective winner is longer/slenderer than the weight objective winner.
+Measured on the off1 hull at design draft:
 
-## Drag model status (measured 2026-10-12, off1 hull at design draft)
+| speed m/s | wave N | friction N |
+|---|---|---|
+| 1.5 | 2.6 | 12.3 |
+| 2.5 | 10.7 | 31.3 |
+| 3.5 | 33.6 | 58.0 |
 
-| speed m/s | wave N (Rust) | wave N (old Python) | friction N (Rust) |
-|---|---|---|---|
-| 1.5 | 2.6 | 3.8 | 12.3 |
-| 2.5 | 10.7 | 14.5 | 31.3 |
-| 3.5 | 33.6 | 33.5 | 58.0 |
-
-* Wave: Rust is grid-converged (<1% vs a 4x finer theta grid). The old Python kernel undersamples
-  short transverse waves at low speed, which is where the two differ. Michlet's own out.mlt has
-  Rw = 0 (wave drag was not computed in that run), so there is no external reference yet.
-* Wetted surface: Rust 3.52 m^2 vs Michlet's S = 3.19 m^2 (+10%), so friction is ~10% high
-  and conservative. The old Python's 1.84 m^2 ignores girth slope and is not a valid reference.
-* Use drag to RANK shapes (all shapes get the same model), not as an absolute race prediction.
-  To validate: run Michlet with wave drag on for one hull and compare.
+* Wave drag (Michell integral) is grid-converged: within 1% of a 4x finer angle grid. There is no
+  external reference yet: the Michlet `out.mlt` for this hull was run without wave drag.
+* Wetted surface is 3.52 m^2 vs Michlet's 3.19 m^2 (+10%), so friction is about 10% high
+  (conservative).
+* Use drag to **rank** shapes (every shape gets the same model), not as an absolute race
+  prediction. To validate it, run Michlet with wave drag on for one hull and compare.
