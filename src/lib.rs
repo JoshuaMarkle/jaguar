@@ -20,6 +20,7 @@
 pub mod check;
 pub mod equilibrium;
 pub mod export;
+pub mod flotation;
 pub mod hull;
 pub mod hullgen;
 pub mod mix;

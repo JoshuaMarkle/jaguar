@@ -29,6 +29,19 @@ pub struct Params {
     /// See docs/SHAPE_SEARCH.md.
     #[serde(default)]
     pub shape_search: Option<ShapeSearch>,
+    /// Present = gate on swamped flotation with bow/stern air pockets (src/flotation.rs).
+    #[serde(default)]
+    pub flotation: Option<FlotationParams>,
+}
+
+/// Swamped flotation (ASCE: the canoe must float when swamped).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlotationParams {
+    /// Max length of each sealed air pocket, measured in from the bow and from the stern, in.
+    pub air_pocket_max_in: f64,
+    /// Wall + pocket volume must displace >= swamp_factor x canoe weight (fresh water).
+    pub swamp_factor: f64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -426,6 +439,11 @@ impl Params {
         }
         if self.stability.crew_cg_in.is_nan() || self.stability.crew_cg_in < 0.0 {
             bail!("stability.crew_cg_in must be >= 0");
+        }
+        if let Some(f) = &self.flotation
+            && !(f.air_pocket_max_in >= 0.0 && f.swamp_factor > 0.0 && f.swamp_factor.is_finite())
+        {
+            bail!("flotation: need air_pocket_max_in >= 0 and swamp_factor > 0");
         }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");

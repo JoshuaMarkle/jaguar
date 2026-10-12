@@ -19,6 +19,7 @@ src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid
 src/hullgen.rs      parametric hull from shape factors (gen-hull, shape search)
 src/section.rs      shell A, zbar, I per station
 src/equilibrium.rs  float + trim, GM, V(x), M(x)
+src/flotation.rs    swamped flotation: bow/stern air pocket length
 src/resistance.rs   Michell wave + ITTC friction drag
 src/check.rs        bending/compression/shear/punching (docs/PUNCHING.md), freeboard
 src/optimize.rs     wall grid search, verify at 2n-1 stations, progress events
