@@ -108,6 +108,7 @@
   .tbl td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair-soft); white-space: nowrap; }
   .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
   .tbl tr.gov td { font-weight: 600; }
+  .mixedit td { padding: 1px 2px; } .mixedit input { height: 22px; padding: 0 4px; min-width: 52px; text-align: right; } .mixedit .btn { height: 22px; padding: 0 6px; }
   .bar { display: inline-block; height: 6px; border-radius: 2px; vertical-align: middle; }
 
   /* ---------- resizers ---------- */
@@ -440,7 +441,7 @@ function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
   const c = $('plot'), dpr = window.devicePixelRatio || 1;
-  c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); drawPlot();
+  c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); drawPlot(); drawMix();
 }
 window.addEventListener('resize', resize);
 (function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); })();
@@ -782,15 +783,101 @@ async function loadHull(file) {
   const r = await fetch('/api/hull' + (file ? '?file=' + encodeURIComponent(file) : ''));
   if (r.ok) { const h = await r.json(); setHull(h, 'Picked hull: ' + (h.name || file || '')); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
 }
+// ---------- mix data: chart + editable lab table (saved via POST /api/mix) ----------
+// CSV kept as {pre: comment lines before the header, header: [...], rows: [[...]]}. Comments are preserved on save.
+let mixFit = null, mixCsv = null, mixDirty = false;
+function csvSplit(line) { const out = []; let cur = '', q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === ',' && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; }
+const csvCell = v => /[",]/.test(v) ? '"' + v.replace(/"/g, '') + '"' : v;
+function parseCsv(text) {
+  const pre = [], rows = []; let header = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (!header) { if (!l || l.startsWith('#')) pre.push(raw); else header = csvSplit(l).map(h => h.trim()); continue; }
+    if (!l || l.startsWith('#')) continue;
+    const f = csvSplit(l); while (f.length < header.length) f.push(''); rows.push(f.slice(0, header.length));
+  }
+  if (!header) throw new Error('no header line');
+  return { pre, header, rows };
+}
+const csvText = c => [...c.pre, c.header.join(','), ...c.rows.map(r => r.map(csvCell).join(','))].join('\n') + '\n';
+function mixTable() {
+  const c = mixCsv;
+  return `<div style="overflow-x:auto"><table class="tbl mixedit"><tr>${c.header.map(h => `<th>${esc(h)}</th>`).join('')}<th></th></tr>
+    ${c.rows.map((r, i) => `<tr>${r.map((v, j) => `<td><input data-r="${i}" data-c="${j}" value="${esc(v)}"></td>`).join('')}<td><button type="button" class="btn soft" data-del="${i}" title="Delete this row">&times;</button></td></tr>`).join('')}</table></div>
+    <div style="display:flex;gap:var(--s1);flex-wrap:wrap;margin-top:var(--s1)">
+      <button type="button" class="btn soft" id="mixadd">Add row</button>
+      <button type="button" class="btn soft" id="miximport" title="Replace the table with a CSV file (parsed here; nothing is saved until Save)">Import CSV</button>
+      <input type="file" id="mixfile" accept=".csv,text/csv" style="display:none">
+      <button type="button" class="btn" id="mixsave" ${mixDirty ? '' : 'disabled'}>Save</button>
+      <span class="hint" id="mixnote" style="align-self:center"></span></div>`;
+}
+function drawMix() {
+  const cv = $('mixplot'); if (!cv || !mixFit) return;
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  const m = mixFit, showFc = $('mixfc') && $('mixfc').checked;
+  const pts = m.points.map(p => [p.density_pcf, p.final_psi]);
+  const xr = range2([m.density_min_pcf - 5, m.density_max_pcf + 5, ...pts.map(p => p[0])], 0);
+  const split = x => m.split_slope_psi_per_pcf * x + m.split_intercept_psi, flex = x => m.flex_over_split * split(x);
+  const fc = x => { const s = split(x); return s <= 0 ? 0 : (s / 6.7) ** 2; };
+  const r = { l: 56, t: 22, w: W - 56 - (showFc ? 52 : 12), h: H - 22 - 40 };
+  const ys = [...pts.map(p => p[1]), split(xr[0]), split(xr[1]), flex(xr[0]), flex(xr[1]), 0];
+  const yr = range2(ys);
+  const { px, py } = axes(ctx, r, xr, yr, 'density, pcf', 'final strength, psi');
+  ctx.save(); ctx.beginPath(); ctx.rect(r.l, r.t, r.w, r.h); ctx.clip();
+  // tested range
+  ctx.fillStyle = 'rgba(20,20,20,0.04)'; ctx.fillRect(px(m.density_min_pcf), r.t, px(m.density_max_pcf) - px(m.density_min_pcf), r.h);
+  const line = (f, col, dash, py2 = py) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash); ctx.beginPath();
+    for (let i = 0; i <= 60; i++) { const x = xr[0] + (xr[1] - xr[0]) * i / 60; i ? ctx.lineTo(px(x), py2(f(x))) : ctx.moveTo(px(x), py2(f(x))); } ctx.stroke(); ctx.setLineDash([]); };
+  line(split, C.ink, []);
+  if (m.flex_over_split !== 1) line(flex, C.muted, [5, 3]);
+  let fy = null;
+  if (showFc) {
+    const fr = range2([0, fc(xr[0]), fc(xr[1])]);
+    fy = y => r.t + r.h - (y - fr[0]) / (fr[1] - fr[0] || 1) * r.h;
+    line(fc, C.faint, [2, 3], fy);
+    ctx.restore(); ctx.save();
+    ctx.font = font(11); ctx.fillStyle = C.muted; ctx.textAlign = 'left';
+    for (const v of niceTicks(fr[0], fr[1], 4)) ctx.fillText(fmt(v), r.l + r.w + 6, fy(v) + 4);
+    ctx.translate(r.l + r.w + 46, r.t + r.h / 2); ctx.rotate(Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText("f'c, psi", 0, 0);
+  }
+  ctx.restore();
+  for (const [x, y] of pts) { ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(px(x), py(y), 3, 0, 2 * Math.PI); ctx.fill(); }
+  const items = [[C.ink, 'split fit'], ...(m.flex_over_split !== 1 ? [[C.muted, 'flexural', [5, 3]]] : []), ...(showFc ? [[C.faint, "f'c (right)", [2, 3]]] : [])];
+  legend(ctx, r.l + 6, 14, items);
+}
+function renderMix() {
+  const m = mixFit, f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
+  $('mix').innerHTML = `<canvas id="mixplot" style="width:100%;height:200px;display:block" title="Dots = lab breaks scaled to final strength. Line = fitted split tensile. Shaded = tested density range."></canvas>
+    ${row('mixfc', "Show f'c", "Overlay compressive strength f'c = (split / 6.7)^2 on a right-hand axis.", '<input type="checkbox" class="switch" id="mixfc">')}
+    ${m ? kv('Split tensile', `${f(m.split_slope_psi_per_pcf, 2)} &times; density ${m.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi`, 'Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.')
+      + kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`) : ''}
+    ${mixCsv ? mixTable() : ''}`;
+  $('mixfc').onchange = drawMix; drawMix();
+  if (!mixCsv) return;
+  const dirty = () => { mixDirty = true; $('mixsave').disabled = false; $('mixnote').textContent = 'unsaved'; };
+  for (const i of $('mix').querySelectorAll('input[data-r]')) i.oninput = () => { mixCsv.rows[+i.dataset.r][+i.dataset.c] = i.value; dirty(); };
+  for (const b of $('mix').querySelectorAll('button[data-del]')) b.onclick = () => { mixCsv.rows.splice(+b.dataset.del, 1); mixDirty = true; renderMix(); };
+  $('mixadd').onclick = () => { mixCsv.rows.push(mixCsv.header.map(h => h === 'fraction_of_final' ? '1' : '')); mixDirty = true; renderMix(); };
+  $('miximport').onclick = () => $('mixfile').click();
+  $('mixfile').onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    try { mixCsv = parseCsv(await file.text()); mixDirty = true; renderMix(); $('mixnote').textContent = 'imported ' + file.name + ', unsaved'; }
+    catch (err) { $('mixnote').innerHTML = `<span class="t-error">import failed: ${esc(err.message)}</span>`; }
+  };
+  $('mixsave').onclick = async () => {
+    const r = await fetch('/api/mix', { method: 'POST', body: csvText(mixCsv) }); const v = await r.json();
+    if (!r.ok) { $('mixnote').innerHTML = `<span class="t-error">not saved: ${esc(v.error)}</span>`; return; }
+    mixFit = v; mixCsv = parseCsv(v.csv); mixDirty = false; renderMix(); $('mixnote').textContent = 'saved (previous kept as .bak)';
+  };
+}
 async function loadMix() {
   const r = await fetch('/api/mix'); const m = await r.json();
   if (!r.ok) { $('mix').innerHTML = `<div class="note-box error">${esc(m.error)}</div>`; return; }
-  const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
-  $('mix').innerHTML = `<table class="tbl"><tr><th>mix</th><th>pcf</th><th>measured psi</th><th>fraction</th><th>final psi</th></tr>
-    ${m.points.map(p => `<tr><td>${esc(p.mix)}</td><td>${f(p.density_pcf, 1)}</td><td>${f(p.measured_psi, 0)}</td><td>${f(p.fraction_of_final, 2)}</td><td>${f(p.final_psi, 0)}</td></tr>`).join('')}</table>
-    ${kv('Split tensile', `${f(m.split_slope_psi_per_pcf, 2)} &times; density ${m.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi`, 'Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.')}
-    ${kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`)}
-    ${kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)}`;
+  mixFit = m;
+  if (!mixDirty) { try { mixCsv = parseCsv(m.csv); } catch (e) { mixCsv = null; } }
+  renderMix();
 }
 async function loadResult() {
   const r = await fetch('/api/result');

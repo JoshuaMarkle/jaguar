@@ -199,15 +199,14 @@ impl App {
                 Err(e) => return err_reply(500, format!("{e:#}")),
             },
         };
+        // Prefs hold absolute paths, so strip the canonical dir as well.
+        let canon = absolute(&self.base_dir);
+        let rel_to = |f: &Path| -> PathBuf {
+            f.strip_prefix(&self.base_dir).or_else(|_| f.strip_prefix(&canon)).unwrap_or(f).to_path_buf()
+        };
         let mut rel = params;
-        if let Some(f) = &rel.hull.file
-            && let Ok(r) = f.strip_prefix(&self.base_dir)
-        {
-            rel.hull.file = Some(r.to_path_buf());
-        }
-        if let Ok(r) = rel.material.mix_data.strip_prefix(&self.base_dir) {
-            rel.material.mix_data = r.to_path_buf();
-        }
+        rel.hull.file = rel.hull.file.as_deref().map(rel_to);
+        rel.material.mix_data = rel_to(&rel.material.mix_data);
         match serde_json::to_value(&rel) {
             Ok(pj) => json_reply(
                 200,
