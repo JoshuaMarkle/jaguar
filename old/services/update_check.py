@@ -70,8 +70,10 @@ def check_for_update(
                 return
             if _parse_semver(latest_tag) > _parse_semver(APP_VERSION):
                 callback(APP_VERSION, latest_tag.lstrip("v"))
-        except ImportError:
-            pass   # network unavailable, rate-limited, or repo private — ignore
+        except Exception:                    # noqa: BLE001
+            # Offline, rate-limited, repo private/missing (404): the check is
+            # advisory, so any failure is silent rather than a thread traceback.
+            pass
 
     t = threading.Thread(target=_fetch, daemon=True, name="update-check")
     t.start()

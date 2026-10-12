@@ -1311,10 +1311,11 @@ def _physical_core_count():
     core share one FPU, so the sibling adds far less than a whole core.
     """
     try:
-        out = os.popen("wmic cpu get NumberOfCores").read()
-        n = sum(int(x) for x in out.split() if x.isdigit())
-        if n:
-            return n
+        if sys.platform == "win32":     # wmic does not exist elsewhere
+            out = os.popen("wmic cpu get NumberOfCores").read()
+            n = sum(int(x) for x in out.split() if x.isdigit())
+            if n:
+                return n
     except Exception as _exc:
         domain_only(_exc)   # a bug is not a skippable condition
         pass

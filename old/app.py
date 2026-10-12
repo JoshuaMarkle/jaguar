@@ -18,6 +18,24 @@ setup_logging()
 from run_log import start_capture as _start_capture
 _RUN_LOG = _start_capture()
 
+# A native crash (segfault) kills the interpreter with no Python traceback.
+# faulthandler dumps every thread's Python stack to the run log on SIGSEGV etc.,
+# so "it crashed after I ran something" names the line that was executing.
+import faulthandler
+try:
+    _FAULT_FH = open(_RUN_LOG or os.path.join("logs", "crash.log"), "a")
+    faulthandler.enable(file=_FAULT_FH, all_threads=True)
+except Exception:                                # noqa: BLE001
+    faulthandler.enable(all_threads=True)
+
+# Chromium's default GL path segfaults on many Linux setups ("GBM is not
+# supported", "GPU state invalid").  ANGLE-on-Vulkan avoids GBM and keeps WebGL
+# (the 3D hull view) working.  Windows is untouched.  A user-set
+# QTWEBENGINE_CHROMIUM_FLAGS always wins (e.g. "--disable-gpu" for no GPU).
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS",
+                          "--use-angle=vulkan --enable-features=Vulkan")
+
 import PyQt6.QtWebEngineWidgets  # must be imported before QApplication is created
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
@@ -99,12 +117,22 @@ if __name__ == "__main__":
     window.show()
 
     # Non-blocking update check — shows a status-bar message if newer release exists
+    # The callback fires on a worker thread, which has no Qt event loop, so
+    # QTimer.singleShot there never runs.  A signal emitted from the worker is
+    # queued onto the GUI thread (the bridge lives there).
+    from PyQt6.QtCore import QObject, pyqtSignal
+
+    class _UpdateBridge(QObject):
+        available = pyqtSignal(str, str)
+
+    _bridge = _UpdateBridge()
+    _bridge.available.connect(lambda current, latest: window.log(
+        f"ℹ️  Update available: v{latest}  (you have v{current}) — "
+        "visit the project repo to download."
+    ))
+
     def _on_update_available(current: str, latest: str):
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, lambda: window.log(
-            f"ℹ️  Update available: v{latest}  (you have v{current}) — "
-            "visit the project repo to download."
-        ))
+        _bridge.available.emit(current, latest)
 
     from services.update_check import check_for_update
     check_for_update(_on_update_available)
