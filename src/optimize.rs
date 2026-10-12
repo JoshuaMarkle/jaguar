@@ -23,6 +23,9 @@ pub struct Candidate {
     pub thickness_in: f64,
     pub density_pcf: f64,
     pub depth_in: f64,
+    /// Self weight from the section areas alone (trapz of A*rho/1728 over x).
+    /// Computable even when equilibrium fails, so it is ALWAYS a real number:
+    /// never NaN (serde would write NaN as `null`, a sentinel).
     pub hull_weight_lb: f64,
     /// Worst verdict over all load cases, or None if analysis failed.
     pub verdict: Option<Verdict>,

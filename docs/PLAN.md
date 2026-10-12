@@ -21,10 +21,16 @@ graph LR
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |
 | 2 | **T3** equilibrium | `equilibrium.rs` | `golden_weight_and_draft` un-ignored and passing; Err on a sinking hull (test) |
 | 3 | **T4** checks | `check.rs` | `golden_bending_dc` un-ignored and passing; capacity <= 0 gives fail (test) |
-| 4 | **T5** optimizer | `optimize.rs` | `jaguar run examples/canoe.toml` finds a verified winner (expected, from the prototype physics: t=0.25 in, 70 pcf, depth 12 in, ~84.8 lb, D/C ~0.786, verify ~0.783, freeboard estimated at midship); two runs give identical result.json (test) |
+| 4 | **T5** optimizer | `optimize.rs` | `jaguar run examples/canoe.toml` finds a verified winner (expected, from the prototype physics: t=0.25 in, 70 pcf, depth 12 in, ~84.8 lb, D/C ~0.786, verify ~0.783, min freeboard ~6.42 in); two runs give identical result.json (test) |
 | 5 | **T6** report | `report.rs` | summary <= 40 lines, shows winner, VERIFIED flag, grid-edge warning |
 | 5 | **T7b** serve | `serve.rs` | `jaguar serve` serves `/`, `/result.json`, `/hull.json`; refresh picks up a new run |
 | 5 | **T8** performance | `section.rs` `equilibrium.rs` (perf only) | default example < 1 s release; golden still passes; add `benches/` or a timed test |
+
+## Contract proven
+A throwaway implementation of T2-T5 written only against the stub signatures in this repo passed
+all golden tests unchanged, produced the expected T5 winner above, ran 693 candidates in ~0.1 s
+(release, 20 threads), was byte-deterministic across runs, and returned exit 2 with per-candidate
+errors on a sinking crew. So the contracts are sufficient; agents should not need to change them.
 
 ## Notes per task
 
@@ -42,7 +48,8 @@ For this, T3's `Loads` already exposes `draft_in` and `trim_in`.
 
 **T5 optimize**: build each `Grid` once per depth and each `Sections` once per (depth, t), then
 sweep density (density only scales self weight). rayon `par_iter` over (depth, t) pairs, collect, then
-sort deterministically. Default seats when `seats_in` is None: `L*(i+1)/(n+1)`.
+sort deterministically. Compute `hull_weight_lb` from sections (not from `Loads`) so failed
+candidates still carry a real weight. Default seats when `seats_in` is None: `L*(i+1)/(n+1)`.
 
 **T7 web**: single `web/index.html`, three.js r128 from CDN, fetches `/result.json` and `/hull.json`.
 Show: 3D hull at winning depth, info box (t, rho, D, weight, D/C, VERIFIED), and a 2D plot of D/C vs
