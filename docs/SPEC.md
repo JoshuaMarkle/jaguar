@@ -68,6 +68,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    * shell shear VQ/(I*2t) vs 2 sqrt(f'c)
    * knee punching for the heaviest paddler, ACI 318-19 Table 22.6.5.2 or plain Table 14.5.5.1,
      one or two knees (docs/PUNCHING.md)
+   * biaxial (Kupfer-Gerstle): per station, principal stresses of the bending fibre stress (both
+     fibres) with the peak shell shear; sigma_1 <= f_t/FS (1 - 0.8 |sigma_2| / (f'c/FS))
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
    GM_T >= `gm_min_in` for every load case, and, with `[flotation]`, the canoe floats swamped
    (`src/flotation.rs`): wall volume + sealed bow and stern air pockets (equal length l from each

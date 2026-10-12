@@ -221,6 +221,13 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             if let Some(v) = v {
                 for k in &v.checks {
                     let mark = if k.name == v.governing_check { "  <- governs" } else { "" };
+                    if k.name == "biaxial" {
+                        out.push(format!(
+                            "        {:<20} Kupfer envelope{:>29}D/C {:.3}{mark}",
+                            k.name, "", k.dc
+                        ));
+                        continue;
+                    }
                     out.push(format!(
                         "        {:<20} demand {:>8.1} psi  capacity {:>8.1} psi  D/C {:.3}{mark}",
                         k.name, k.demand, k.capacity, k.dc

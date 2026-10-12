@@ -26,11 +26,14 @@
 //!   dynamic factor); knees = 2 -> knee_split share, unless the two critical
 //!   circles overlap, then the whole paddler on the merged obround perimeter
 //!   b0 = 2 spacing + pi (d_load + d). Capacity = v / FS (no phi on top).
+//! * `biaxial`: Kupfer-Gerstle tension-compression envelope on the principal
+//!   stresses of (bending fibre stress, peak shear) per station, see
+//!   [`kupfer_dc`]. Demand is the D/C itself, capacity 1.
 //! * Freeboard: depth - max local draft (not a D/C; gated separately).
 //!
 //! f'c <= 0 or capacity <= 0 makes that check dc = +inf; optimize treats a
 //! +inf verdict as a FAILED candidate (verdict kept), NaN as an error.
-//! Order of `checks`: bending_tension, bending_compression, shear, punching.
+//! Order of `checks`: bending_tension, bending_compression, shear, punching, biaxial.
 //! A check that cannot be computed FAILS. Never
 //! default, never skip.
 
@@ -43,7 +46,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {
-    /// Stable id: "bending_tension" | "bending_compression" | "shear" | "punching".
+    /// Stable id: "bending_tension" | "bending_compression" | "shear" | "punching" | "biaxial".
     pub name: &'static str,
     /// Demand and capacity in psi (stresses), capacity already divided by FS.
     pub demand: f64,
@@ -183,6 +186,22 @@ pub fn fibres(m: f64, c_top: f64, c_bot: f64) -> (f64, f64) {
     if m >= 0.0 { (c_bot, c_top) } else { (c_top, c_bot) }
 }
 
+/// Kupfer-Gerstle (1973) biaxial D/C at one station, tension-compression
+/// branch: sigma_1 <= f_t (1 - 0.8 |sigma_2| / f'c). Conservatively combines
+/// the extreme-fibre bending stress with the section's peak shear stress
+/// (which really peaks at the axis). Both fibres are tried: the tension
+/// fibre (sigma = +st) and the compression fibre (sigma = -sc). `ft`, `fc`
+/// are already divided by FS. Non-finite or exhausted capacity -> +inf.
+pub fn kupfer_dc(st: f64, sc: f64, tau: f64, ft: f64, fc: f64) -> f64 {
+    let one = |s: f64| {
+        let r = (0.25 * s * s + tau * tau).sqrt();
+        let (s1, s2) = (0.5 * s + r, 0.5 * s - r);
+        let cap = ft * (1.0 - 0.8 * s2.abs() / fc);
+        if !(cap > 0.0) || !cap.is_finite() { f64::INFINITY } else { s1.max(0.0) / cap }
+    };
+    one(st).max(one(-sc))
+}
+
 fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> CheckResult {
     let dc = if capacity.is_nan() || capacity <= 0.0 || !capacity.is_finite() || !demand.is_finite() {
         f64::INFINITY
@@ -213,6 +232,9 @@ pub fn check(
     let (mut st, mut xt) = (f64::NEG_INFINITY, f64::NAN);
     let (mut sc, mut xc) = (f64::NEG_INFINITY, f64::NAN);
     let (mut tau, mut xs) = (f64::NEG_INFINITY, f64::NAN);
+    let ft_cap = fit.flexural_psi(rho) / fs;
+    let fc_kupfer = if fc > 0.0 { fc / fs } else { f64::NAN };
+    let (mut kz, mut xk) = (f64::NEG_INFINITY, f64::NAN);
     for i in 0..grid.nx() {
         let ii = sec.inertia[i];
         if ii <= 1e-3 * imax {
@@ -234,8 +256,11 @@ pub fn check(
         if s > tau {
             (tau, xs) = (s, grid.x[i]);
         }
+        let k = kupfer_dc(m.abs() * ct / ii, m.abs() * cc / ii, s, ft_cap, fc_kupfer);
+        if !(k <= kz) {
+            (kz, xk) = (k, grid.x[i]);
+        }
     }
-    let ft_cap = fit.flexural_psi(rho) / fs;
     let (fc_cap, v_cap) =
         if fc > 0.0 { (0.85 * fc / fs, 2.0 * lambda * fc.sqrt() / fs) } else { (f64::NAN, f64::NAN) };
     let pc = punching_calc(max_paddler_lb, t, fc, lambda, mat.knee_patch_in, pu);
@@ -245,6 +270,8 @@ pub fn check(
         result("bending_compression", sc, fc_cap, Some(xc)),
         result("shear", tau, v_cap, Some(xs)),
         result("punching", vu, p_cap, None),
+        // Kupfer is already a ratio: demand = D/C, capacity = 1.
+        result("biaxial", kz, 1.0, Some(xk)),
     ];
     let gov = checks.iter().fold(&checks[0], |g, c| if c.dc > g.dc { c } else { g });
     let l = grid.x[grid.nx() - 1];
@@ -402,7 +429,21 @@ mod tests {
         assert!((get(&sag, "bending_tension").demand - 1000.0 * zb / i).abs() < 1e-9);
         assert!((get(&hog, "bending_tension").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
         let names: Vec<_> = sag.checks.iter().map(|c| c.name).collect();
-        assert_eq!(names, ["bending_tension", "bending_compression", "shear", "punching"]);
+        assert_eq!(names, ["bending_tension", "bending_compression", "shear", "punching", "biaxial"]);
+    }
+
+    #[test]
+    fn kupfer_hand_calc() {
+        // Pure bending: sigma_1 = st, sigma_2 = 0 -> D/C = st / ft.
+        assert!((kupfer_dc(100.0, 0.0, 0.0, 200.0, 1000.0) - 0.5).abs() < 1e-12);
+        // Pure shear tau: sigma_1 = tau, sigma_2 = -tau -> tau / (ft (1 - 0.8 tau / fc)).
+        let want = 50.0 / (200.0 * (1.0 - 0.8 * 50.0 / 1000.0));
+        assert!((kupfer_dc(0.0, 0.0, 50.0, 200.0, 1000.0) - want).abs() < 1e-12);
+        // Shear raises the D/C above uniaxial bending alone.
+        assert!(kupfer_dc(100.0, 100.0, 30.0, 200.0, 1000.0) > 0.5);
+        // Compression past 1.25 fc exhausts the tension capacity.
+        assert!(kupfer_dc(0.0, 1300.0, 1.0, 200.0, 1000.0).is_infinite());
+        assert!(kupfer_dc(1.0, 1.0, 1.0, 200.0, f64::NAN).is_infinite());
     }
 
     #[test]
@@ -416,5 +457,6 @@ mod tests {
         assert!(get(&v, "punching").dc.is_infinite());
         assert!(get(&v, "shear").dc.is_infinite());
         assert!(get(&v, "bending_tension").dc.is_infinite());
+        assert!(get(&v, "biaxial").dc.is_infinite());
     }
 }

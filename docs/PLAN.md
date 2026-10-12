@@ -40,7 +40,7 @@ against the code on 2026-10-12. Comparison with the legacy report: `data/review_
 | Graph: utilization along length | done (A3): D/C(x) per case |
 | LRFD 1.2 / 1.6 | open (B1) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
-| Kupfer combined shear + moment | open (B3) |
+| Kupfer combined shear + moment | done (T45, B3) |
 | Air pockets / swamped flotation | done (T43, gate + result; STEP export of pockets open) |
 | Multi-mix zones, I-beam middle, light ends | open, SPEC out of scope (C1) |
 | Graph: multi-pour side view | open, needs C1 |
@@ -86,8 +86,8 @@ user's approval and a SPEC update before starting.
   capacity instead of FS (never both). Expect heavier designs (crew factor ~2.6 vs 1.8 now).
 - **B2. Auto seat solver.** Default: per case, seats that minimize the wall that passes, then the
   check enveloped over +/- `seat_variance_in`. Manual `seats_in` overrides. Can move hogging ~40%.
-- **B3. Kupfer-Gerstle biaxial check** (shear + bending, plus hoop stress from turning). Matters
-  once bending governs.
+- **B3. Kupfer-Gerstle biaxial check.** DONE (T45): `biaxial` check, bending fibre + peak shear.
+  Hoop stress from turning is not modelled (no input for it). Example D/C 0.32.
 - **B4. Swamped flotation.** DONE (T43) except pockets in the STEP export. Bow/stern air pocket length (max `air_pocket_max_in`) sized so
   concrete volume + pockets displace >= `swamp_factor` x canoe weight. Gate, and pocket length in
   the result and the STEP export.
