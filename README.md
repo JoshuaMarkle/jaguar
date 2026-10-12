@@ -1,0 +1,21 @@
+# JAGUAR
+
+Finds the lightest concrete canoe wall (thickness, mix density, mold depth) for a given hull that
+survives the crew. Terminal first. Browser view optional.
+
+```bash
+cargo build --release
+./target/release/jaguar check examples/canoe.toml
+./target/release/jaguar run   examples/canoe.toml      # -> result.json
+./target/release/jaguar serve result.json              # optional: http://127.0.0.1:8000
+
+# bring your own hull from Godzilla/Michlet
+./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json
+```
+
+* Parameters: `canoe.toml` (see `examples/canoe.toml`)
+* Hull: `jaguar-hull/1` JSON offset table (see `docs/SPEC.md`)
+* Result: `jaguar-result/1` JSON
+
+Status: rewrite in progress, see `docs/PLAN.md`. Contributors and agents: read `AGENTS.md`.
+The previous application lives in `old/` for reference.
