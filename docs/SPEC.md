@@ -9,6 +9,7 @@ Given a hull shape, a crew, and a concrete strength fit: **what is the lightest 
 jaguar check  [canoe.toml]                     validate inputs, print hull summary
 jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no verified design, 1 error
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
+jaguar gen-hull shape.toml [-o hull.json]       parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar serve  [canoe.toml] [-p 8000]           optional web UI: 3D canoe, edit params, run + watch live
 ```
 
@@ -46,7 +47,11 @@ Topsides above `draft_design` are extruded vertically to the mold depth, which i
    `knee_patch_in` patch at each seat (default seats: evenly spaced L*(i+1)/(n+1)). Solve midship draft
    and trim (brentq-style bracketing) so buoyancy (fresh water 62.4 pcf) balances force and moment.
    Integrate q -> V -> M (trapezoid). Free-free closure: |V(L)| <= 1e-3 W, |M(L)| <= 1e-3 W L.
-4. **Check**: sigma = |M| c / I, c = max(zbar, D - zbar), stations with I > 1e-3 max I.
+4. **Checks** (all must pass; governing D/C = max; details in `src/check.rs`):
+   bending tension (below), bending compression vs 0.85 f'c/FS, shell shear VQ/(I*2t) vs
+   2 lambda sqrt(f'c)/FS, and knee punching shear (ACI 318-19 22.6.5.2, min of three v_c)
+   for the heaviest paddler. f'c = fc_slope*rho + fc_intercept.
+   Bending tension: sigma = |M| c / I, c = max(zbar, D - zbar), stations with I > 1e-3 max I.
    capacity = (slope*rho + intercept)/FS. D/C = max sigma / capacity. Freeboard = D - local draft,
    min over stations.
 5. **Gates**: candidate passes iff D/C <= dc_search and freeboard >= freeboard_min_in, for every load
@@ -63,5 +68,5 @@ laptop. The Python prototype takes ~30 s for the same 693 candidates.
 
 ## Out of scope for v1 (do not build)
 Race simulation, wave resistance, Godzilla/Fortran runs, GUI, mix database, PDF/LaTeX reports,
-multizone pours, Kupfer biaxial envelope, torsion, punching shear, stability GM_T, seating search,
+multizone pours, Kupfer biaxial envelope, torsion, stability GM_T, seating search,
 STEP/STL export. Candidates for v2 are listed in `docs/PLAN.md`; each needs the user's approval.

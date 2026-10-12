@@ -14,7 +14,8 @@ src/params.rs       canoe.toml -> Params (the only input)         DONE
 src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid      DONE
 src/section.rs      shell A, zbar, I per station                  DONE
 src/equilibrium.rs  float + trim, V(x), M(x)                      DONE
-src/check.rs        bending D/C, freeboard                        DONE
+src/check.rs        bending/compression/shear/punching, freeboard DONE
+src/hullgen.rs      parametric hull generator (gen-hull)          DONE
 src/optimize.rs     grid search, verify at 2n-1, progress events  DONE
 src/report.rs       terminal summary                              DONE
 src/serve.rs + web/ optional localhost web UI (API in serve.rs)   DONE

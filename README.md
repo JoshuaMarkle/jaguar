@@ -10,7 +10,8 @@ cargo build --release
 ./target/release/jaguar serve examples/canoe.toml     # optional web UI: http://127.0.0.1:8000
                                                        # (view canoe, edit params, Run, watch live)
 
-# bring your own hull from Godzilla/Michlet
+# example hulls: canoe (real), sleek, beamy, barge (bad on purpose); see docs/HULLS.md
+# bring your own hull from Godzilla/Michlet, or generate one: jaguar gen-hull shape.toml
 ./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json
 ```
 
