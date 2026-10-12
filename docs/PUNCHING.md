@@ -73,6 +73,18 @@ that, but the net result is that the lab mix must be stronger (58 pcf instead of
 51 pcf), so the example winner gets heavier: 92.6 lb -> 105.4 lb. Punching still
 governs, now honestly.
 
+## How sure is this
+
+* Table 22.6.5.2 (the three v_c expressions, alpha_s = 40 interior, size factor lambda_s) and
+  Table 14.5.5.1 (plain, critical section at h/2) were checked against published excerpts of
+  ACI 318-19 / 318-25.
+* That two-way shear STRESS is taken on the critical section area b0*d (22.6.1.2 / 22.6.4) is the
+  standard reading used in every slab design text; the clause wording was not re-read from the
+  printed code here. Check it in the team's copy of ACI 318 before citing in the design paper.
+* The old check (b0*t) was 2x LESS conservative than that reading. If in doubt, run
+  `method = "plain_14_5"`: it uses the full thickness and a lower capacity, and gives a similar
+  answer (D/C 1.08 vs 2.21 for one knee at 51 pcf), i.e. the old 0.92 was optimistic either way.
+
 ## What would change the answer (and is worth testing)
 
 * **Knee pad** (`pad_in`, ASCE allows up to 0.5 in): 0.5 in pad = 4 in contact,
