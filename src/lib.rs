@@ -18,6 +18,7 @@
 pub mod check;
 pub mod equilibrium;
 pub mod hull;
+pub mod hullgen;
 pub mod optimize;
 pub mod params;
 pub mod report;

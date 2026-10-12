@@ -1,0 +1,12 @@
+# OBVIOUSLY BAD: short, wide, boxy flat-bottomed sections, blunt ends.
+# Lots of wall area per foot of length -> heavy. Do not build this.
+length_in = 192.0
+beam_in = 40.0
+draft_in = 8.0
+fore_wp = 0.0
+section = 0.08
+fore_rocker = 0.0
+aft_wp = 0.0
+aft_rocker = 0.0
+fore_len_frac = 0.08
+aft_len_frac = 0.08

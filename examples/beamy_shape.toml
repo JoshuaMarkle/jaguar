@@ -1,0 +1,11 @@
+# Recreational: wider, fuller sections and ends, stable.
+length_in = 230.0
+beam_in = 28.0
+draft_in = 6.5
+fore_wp = 0.7
+section = 0.3
+fore_rocker = 0.3
+aft_wp = 0.6
+aft_rocker = 0.25
+fore_len_frac = 0.38
+aft_len_frac = 0.35

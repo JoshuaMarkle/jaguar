@@ -1,0 +1,11 @@
+# Racing: long, narrow, fine hollow ends, moderate rocker.
+length_in = 240.0
+beam_in = 19.0
+draft_in = 5.5
+fore_wp = 1.4
+section = 0.45
+fore_rocker = 0.5
+aft_wp = 1.0
+aft_rocker = 0.4
+fore_len_frac = 0.48
+aft_len_frac = 0.45

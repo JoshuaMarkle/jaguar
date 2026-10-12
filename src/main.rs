@@ -33,6 +33,19 @@ enum Cmd {
         #[arg(short, long, default_value = "hull.json")]
         out: PathBuf,
     },
+    /// Generate a jaguar-hull/1 JSON from Michlet Series 7 shape factors (shape.toml).
+    GenHull {
+        shape: PathBuf,
+        #[arg(short, long, default_value = "hull.json")]
+        out: PathBuf,
+        #[arg(long, default_value_t = 41)]
+        stations: usize,
+        #[arg(long, default_value_t = 21)]
+        waterlines: usize,
+        /// Hull name (default: file stem of shape.toml).
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
         #[arg(default_value = "canoe.toml")]
@@ -69,6 +82,14 @@ fn main() -> Result<()> {
         }
         Cmd::ImportMichlet { off1, out_mlt, out } => {
             let hull = Hull::from_michlet(&off1, &out_mlt)?;
+            hull.save(&out)?;
+            println!("wrote {} ({} x {})", out.display(), hull.x.len(), hull.z.len());
+        }
+        Cmd::GenHull { shape, out, stations, waterlines, name } => {
+            let text = std::fs::read_to_string(&shape)?;
+            let sp: jaguar::hullgen::ShapeParams = toml::from_str(&text)?;
+            let name = name.unwrap_or_else(|| shape.file_stem().unwrap_or_default().to_string_lossy().into());
+            let hull = jaguar::hullgen::generate(&sp, stations, waterlines, &name)?;
             hull.save(&out)?;
             println!("wrote {} ({} x {})", out.display(), hull.x.len(), hull.z.len());
         }

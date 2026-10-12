@@ -1,0 +1,42 @@
+# canoe.toml: everything one JAGUAR run needs. Units: in, lb, psi, pcf.
+# Unknown keys are an error, so a typo cannot silently become a default.
+#
+#   jaguar check examples/canoe.toml     # validate only
+#   jaguar run   examples/canoe.toml     # optimize -> result.json
+#   jaguar serve examples/canoe.toml     # optional web UI
+
+[hull]
+file = "sleek_hull.json"   # jaguar-hull/1, relative to this file
+stations = 161            # search resolution; the winner is re-checked at 2n-1
+
+# A design must pass EVERY load case. Seats are knee positions from the bow;
+# omit seats_in to space the paddlers evenly.
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 165.0]
+# seats_in = [80.0, 160.0]
+
+[material]
+# f_t = slope * density + intercept. PLACEHOLDER fit from 4 lab points in the
+# old Mix Lab; replace with your team's fit before trusting absolute weights.
+ft_slope_psi_per_pcf = 27.797
+ft_intercept_psi = -1648.6
+factor_of_safety = 1.5
+dynamic_load_factor = 1.2
+knee_patch_in = 3.0       # never 0: a point load does not converge
+# f'c = slope * density + intercept. From the old Mix Lab cylinder fit
+# (density = 0.0062 f'c + 59.309). PLACEHOLDER: replace with your team's fit.
+fc_slope_psi_per_pcf = 161.29
+fc_intercept_psi = -9566.0
+lambda_lightweight = 0.75 # ACI 318 all-lightweight concrete
+
+[search]                  # [min, max, step], inclusive
+thickness_in = [0.375, 0.75, 0.0625]
+density_pcf  = [60.0, 80.0, 2.0]
+depth_in     = [10.0, 16.0, 1.0]
+
+[gates]
+dc_search = 0.93          # = 0.95 / (1 + 0.0219 worst drift per station doubling)
+dc_verify = 0.95          # numerical margin, not a safety factor
+freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
