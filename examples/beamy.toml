@@ -42,8 +42,8 @@ thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
 
 [punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
 method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)
-knees = 1                 # knees carrying one paddler: 1 = conservative, 2 = realistic kneeling
-knee_split = 0.5          # share on the heavier knee when knees = 2
+knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on one knee, very conservative)
+knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
 knee_spacing_in = 8.0     # centre-to-centre knee spacing
 pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
 d_over_t = 0.5            # effective depth to the mesh / wall thickness

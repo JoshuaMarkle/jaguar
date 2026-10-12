@@ -75,7 +75,15 @@ fn golden_bending_dc() {
             density_max_pcf: 0.0,
             flex_over_split: 1.0,
         };
-        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2);
+        let pu = jaguar::params::Punching {
+            method: jaguar::params::PunchingMethod::Aci22_6,
+            knees: 1,
+            knee_split: 0.5,
+            knee_spacing_in: 8.0,
+            pad_in: 0.0,
+            d_over_t: 0.5,
+        };
+        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2, &pu);
         let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();
         assert_rel("dc", bt.dc, f(o, "dc"), tol);
     }

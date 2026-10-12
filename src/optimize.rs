@@ -281,7 +281,11 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                 || (!mixes_mode && edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
                 || edge(c.depth_in, &ds),
             at_mix_data_edge: mix_edge(c.density_pcf),
-            diagrams: Diagrams::default(),
+            diagrams: v
+                .governing_case
+                .as_deref()
+                .and_then(|name| diagrams(params, &axis[ri].1, &grid, &sec, c.density_pcf, name))
+                .unwrap_or_default(),
         }
     });
 
@@ -293,6 +297,66 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         winner_hull,
         candidates,
         winner,
+    })
+}
+
+/// Allowable bending tension (flexural capacity / FS) at density `rho`.
+/// Isolated so strength-API changes touch one place.
+fn tension_allow(params: &Params, fit: &StrengthFit, rho: f64) -> f64 {
+    fit.flexural_psi(rho) / params.material.factor_of_safety
+}
+
+/// Along-hull diagrams for one load case (the winner's governing case). None if
+/// the case is unknown or equilibrium fails (then the plots are simply empty).
+pub fn diagrams(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    case_name: &str,
+) -> Option<Diagrams> {
+    let case = params.load_cases.iter().find(|c| c.name == case_name)?;
+    let mat = &params.material;
+    let n = grid.nx();
+    let length = grid.x[n - 1] - grid.x[0];
+    let k = case.weights_lb.len();
+    let crew: Vec<CrewLoad> = (0..k)
+        .map(|i| CrewLoad {
+            x_in: match &case.seats_in {
+                Some(s) => s[i],
+                None => grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64,
+            },
+            lb: case.weights_lb[i] * mat.dynamic_load_factor,
+        })
+        .collect();
+    let loads = solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in).ok()?;
+    let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
+    let tension_psi = (0..n)
+        .map(|i| {
+            let ii = sec.inertia[i];
+            if ii <= 1e-3 * imax {
+                return 0.0;
+            }
+            let c = sec.zbar[i].max(grid.depth - sec.zbar[i]);
+            loads.moment[i].abs() * c / ii
+        })
+        .collect();
+    let l = grid.x[n - 1];
+    let waterline_in = grid
+        .x
+        .iter()
+        .map(|&x| (loads.draft_in + loads.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
+        .collect();
+    Some(Diagrams {
+        x_in: grid.x.clone(),
+        shear_lb: loads.shear,
+        moment_lbin: loads.moment,
+        tension_psi,
+        tension_allow_psi: tension_allow(params, fit, rho),
+        area_in2: sec.area.clone(),
+        inertia_in4: sec.inertia.clone(),
+        waterline_in,
     })
 }
 
@@ -375,7 +439,7 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
                 if heaviest.is_none_or(|(h, _)| lb > h) {
                     heaviest = Some((lb, loads.draft_in));
                 }
-                check(grid, sec, &loads, rho, mat, fit, max_paddler)
+                check(grid, sec, &loads, rho, mat, fit, max_paddler, &params.punching)
             }
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));

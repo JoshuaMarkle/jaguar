@@ -16,10 +16,16 @@
 //! * `shear`: tau = |V| Q / (I b) for the thin shell, b = 2t (two walls), Q =
 //!   first moment of the shell below zbar (section.rs segment model), same
 //!   station mask as bending, vs 2 lambda sqrt(f'c) / FS (ACI one-way).
-//! * `punching`: one knee on the hull bottom, ACI 318-19 22.6.5.2:
-//!   b0 = 4 (patch + d), d = t/2, v_u = P/(b0 t) with P = heaviest paddler *
-//!   dynamic factor; capacity = min of the three ACI v_c / FS. Port intent from
-//!   old/structural.py::punching_shear_check (keep the min-of-three rule).
+//! * `punching`: kneeling paddler on the hull bottom (docs/PUNCHING.md).
+//!   Round contact d_load = knee_patch_in + 2 pad_in, beta = 1. Two methods:
+//!   `aci_22_6` (ACI 318-19 22.6.4 / Table 22.6.5.2): d = d_over_t * t,
+//!   b0 = pi (d_load + d), v_u = P / (b0 d), v_c = min(4, 2 + 4/beta,
+//!   2 + 40 d / b0) lambda_s lambda sqrt(f'c). `plain_14_5` (Table 14.5.5.1):
+//!   h = t, b0 = pi (d_load + h), v_u = P / (b0 h), v_n = min((4/3)(1 + 2/beta),
+//!   8/3) lambda sqrt(f'c). P per knee: knees = 1 -> whole paddler (times the
+//!   dynamic factor); knees = 2 -> knee_split share, unless the two critical
+//!   circles overlap, then the whole paddler on the merged obround perimeter
+//!   b0 = 2 spacing + pi (d_load + d). Capacity = v / FS (no phi on top).
 //! * Freeboard: depth - max local draft (not a D/C; gated separately).
 //!
 //! f'c <= 0 or capacity <= 0 makes that check dc = +inf; optimize treats a
@@ -31,7 +37,7 @@
 use crate::equilibrium::Loads;
 use crate::hull::Grid;
 use crate::mix::StrengthFit;
-use crate::params::Material;
+use crate::params::{Material, Punching, PunchingMethod};
 use crate::section::Sections;
 use serde::Serialize;
 
@@ -91,11 +97,84 @@ pub fn first_moment_below(y: &[f64], z: &[f64], t: f64, zb: f64) -> f64 {
     q
 }
 
-/// ACI 318-19 22.6.5.2 two-way shear capacity (before FS): min of three v_c.
-pub fn punching_vc(fc: f64, lambda: f64, d: f64, b0: f64) -> f64 {
-    let sq = lambda * fc.sqrt();
-    let (beta, alpha_s) = (1.0, 40.0);
+/// ACI 318-19 Table 22.6.5.2 two-way shear stress v_c (before FS), psi: the
+/// least of (a) 4, (b) 2 + 4/beta, (c) 2 + alpha_s d / b0, each times
+/// lambda_s lambda sqrt(f'c). lambda_s = sqrt(2 / (1 + d/10)) <= 1 (22.5.5.1.3).
+pub fn punching_vc(fc: f64, lambda: f64, d: f64, b0: f64, beta: f64, alpha_s: f64) -> f64 {
+    let lambda_s = (2.0 / (1.0 + d / 10.0)).sqrt().min(1.0);
+    let sq = lambda_s * lambda * fc.sqrt();
     (4.0 * sq).min((2.0 + 4.0 / beta) * sq).min((2.0 + alpha_s * d / b0) * sq)
+}
+
+/// ACI 318-19 Table 14.5.5.1 plain-concrete two-way shear stress v_n = V_n /
+/// (b0 h) (before FS), psi: least of (4/3)(1 + 2/beta) and 2 (4/3), times
+/// lambda sqrt(f'c).
+pub fn punching_plain_vn(fc: f64, lambda: f64, beta: f64) -> f64 {
+    let c = (4.0 / 3.0 * (1.0 + 2.0 / beta)).min(2.0 * 4.0 / 3.0);
+    c * lambda * fc.sqrt()
+}
+
+/// One knee punching calculation, every intermediate kept for the docs/tests.
+#[derive(Debug, Clone, Serialize)]
+pub struct PunchingCalc {
+    /// Shear depth: d (aci_22_6) or h = t (plain_14_5), in.
+    pub depth_in: f64,
+    /// Contact diameter knee + 2 pad, in.
+    pub d_load_in: f64,
+    /// Critical perimeter, in.
+    pub b0_in: f64,
+    /// Load on that perimeter, lb.
+    pub load_lb: f64,
+    /// True when the two knees' critical circles overlap (merged perimeter).
+    pub merged: bool,
+    /// Demand v_u = load / (b0 depth), psi.
+    pub v_u: f64,
+    /// Nominal stress capacity before FS, psi.
+    pub v_nominal: f64,
+}
+
+/// Punching under one kneeling paddler of weight `paddler_lb` (dynamic factor
+/// already applied) on a wall of thickness `t`.
+pub fn punching_calc(
+    paddler_lb: f64,
+    t: f64,
+    fc: f64,
+    lambda: f64,
+    knee_in: f64,
+    pu: &Punching,
+) -> PunchingCalc {
+    // A round knee (with pad) is a circular loaded area: beta = 1.
+    let (beta, alpha_s) = (1.0, 40.0);
+    let d_load = knee_in + 2.0 * pu.pad_in;
+    let depth = match pu.method {
+        PunchingMethod::Aci22_6 => pu.d_over_t * t,
+        PunchingMethod::Plain14_5 => t,
+    };
+    // Critical circle: depth/2 outside the contact (22.6.4.1 / 14.5.5.2).
+    let single = std::f64::consts::PI * (d_load + depth);
+    let merged = pu.knees == 2 && pu.knee_spacing_in < d_load + depth;
+    let (b0, load) = match (pu.knees, merged) {
+        (1, _) => (single, paddler_lb),
+        (_, false) => (single, pu.knee_split * paddler_lb),
+        (_, true) => (2.0 * pu.knee_spacing_in + single, paddler_lb),
+    };
+    let v_nominal = if fc > 0.0 {
+        match pu.method {
+            PunchingMethod::Aci22_6 => punching_vc(fc, lambda, depth, b0, beta, alpha_s),
+            PunchingMethod::Plain14_5 => punching_plain_vn(fc, lambda, beta),
+        }
+    } else {
+        f64::NAN
+    };
+    PunchingCalc {
+        depth_in: depth,
+        d_load_in: d_load,
+        b0_in: b0,
+        load_lb: load,
+        merged,
+        v_u: load / (b0 * depth),
+        v_nominal,
+    }
 }
 
 fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> CheckResult {
@@ -107,6 +186,7 @@ fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> 
     CheckResult { name, demand, capacity, dc, x_in }
 }
 
+#[allow(clippy::too_many_arguments)] // each input is a distinct physical quantity
 pub fn check(
     grid: &Grid,
     sec: &Sections,
@@ -115,6 +195,7 @@ pub fn check(
     mat: &Material,
     fit: &StrengthFit,
     max_paddler_lb: f64,
+    pu: &Punching,
 ) -> Verdict {
     let fs = mat.factor_of_safety;
     let fc = fit.fc_psi(rho);
@@ -152,18 +233,10 @@ pub fn check(
         }
     }
     let ft_cap = fit.flexural_psi(rho) / fs;
-    let (fc_cap, v_cap, p_cap, vu) = if fc > 0.0 {
-        let d = t / 2.0;
-        let b0 = 4.0 * (mat.knee_patch_in + d);
-        (
-            0.85 * fc / fs,
-            2.0 * lambda * fc.sqrt() / fs,
-            punching_vc(fc, lambda, d, b0) / fs,
-            max_paddler_lb / (b0 * t),
-        )
-    } else {
-        (f64::NAN, f64::NAN, f64::NAN, max_paddler_lb / (4.0 * (mat.knee_patch_in + t / 2.0) * t))
-    };
+    let (fc_cap, v_cap) =
+        if fc > 0.0 { (0.85 * fc / fs, 2.0 * lambda * fc.sqrt() / fs) } else { (f64::NAN, f64::NAN) };
+    let pc = punching_calc(max_paddler_lb, t, fc, lambda, mat.knee_patch_in, pu);
+    let (vu, p_cap) = (pc.v_u, pc.v_nominal / fs);
     let checks = vec![
         result("bending_tension", st, ft_cap, Some(xt)),
         result("bending_compression", sc, fc_cap, Some(xc)),
@@ -239,18 +312,63 @@ mod tests {
         v.checks.iter().find(|c| c.name == n).unwrap()
     }
 
+    fn pu1() -> Punching {
+        Punching {
+            method: PunchingMethod::Aci22_6,
+            knees: 1,
+            knee_split: 0.5,
+            knee_spacing_in: 8.0,
+            pad_in: 0.0,
+            d_over_t: 0.5,
+        }
+    }
+
+    /// f'c = 6000 psi (fit()), t = 0.5, knee 3 in, one knee, ACI 22.6.5.2.
     #[test]
-    fn punching_hand_calc() {
+    fn punching_aci_one_knee_hand_calc() {
         let g = box_grid(3);
         let t = 0.5;
         let sec = crate::section::sections(&g, t);
-        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0);
+        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu1());
         let p = get(&v, "punching");
-        // fc = 6000, d = .25, b0 = 13, (c): 2 + 40*.25/13 = 2.769 < 4.
-        let b0 = 13.0;
-        assert!((p.demand - 210.0 / (b0 * t)).abs() < 1e-9);
-        let cap = (2.0 + 10.0 / 13.0) * 6000f64.sqrt() / 2.0;
-        assert!((p.capacity - cap).abs() < 1e-9);
+        let d = 0.25;
+        let b0 = std::f64::consts::PI * (3.0 + d);
+        // demand on b0 * d (22.6.1.2), not b0 * t
+        assert!((p.demand - 210.0 / (b0 * d)).abs() < 1e-9);
+        // (c) governs for a thin wall: 2 + 40 d / b0; lambda_s = 1 for d << 10 in
+        let cap = (2.0 + 40.0 * d / b0) * 6000f64.sqrt() / 2.0;
+        assert!((p.capacity - cap).abs() < 1e-9, "{} vs {cap}", p.capacity);
+    }
+
+    #[test]
+    fn punching_two_knees_split_and_merge() {
+        let mut pu = pu1();
+        pu.knees = 2;
+        pu.knee_split = 0.6;
+        let one = punching_calc(210.0, 0.5, 6000.0, 1.0, 3.0, &pu1());
+        let two = punching_calc(210.0, 0.5, 6000.0, 1.0, 3.0, &pu);
+        assert!(!two.merged);
+        assert!((two.load_lb - 126.0).abs() < 1e-9);
+        assert!((two.v_u / one.v_u - 0.6).abs() < 1e-9);
+        // knees closer than d_load + d: critical circles overlap -> full load on obround
+        pu.knee_spacing_in = 3.0;
+        let m = punching_calc(210.0, 0.5, 6000.0, 1.0, 3.0, &pu);
+        assert!(m.merged && (m.load_lb - 210.0).abs() < 1e-9);
+        assert!((m.b0_in - (6.0 + std::f64::consts::PI * 3.25)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn punching_plain_14_5_hand_calc_and_pad() {
+        let mut pu = pu1();
+        pu.method = PunchingMethod::Plain14_5;
+        let c = punching_calc(210.0, 0.5, 6000.0, 1.0, 3.0, &pu);
+        let b0 = std::f64::consts::PI * 3.5; // h/2 outside a 3 in circle, h = t
+        assert!((c.v_u - 210.0 / (b0 * 0.5)).abs() < 1e-9);
+        // beta = 1: (4/3)(1 + 2) = 4 vs 2 (4/3) = 2.667 -> 2.667
+        assert!((c.v_nominal - 8.0 / 3.0 * 6000f64.sqrt()).abs() < 1e-9);
+        pu.pad_in = 0.5;
+        let padded = punching_calc(210.0, 0.5, 6000.0, 1.0, 3.0, &pu);
+        assert!(padded.v_u < c.v_u && padded.d_load_in == 4.0);
     }
 
     #[test]
@@ -262,7 +380,7 @@ mod tests {
         // Keel 12*t at z=0 plus two walls; Q below zbar by hand.
         let q = 12.0 * t * zb + 2.0 * t * zb * zb / 2.0;
         assert!((first_moment_below(g.row(1), &g.z, t, zb) - q).abs() < 1e-9);
-        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), &fit(), 0.0);
+        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), &fit(), 0.0, &pu1());
         let s = get(&v, "shear");
         assert!((s.demand - 100.0 * q / (sec.inertia[1] * 2.0 * t)).abs() < 1e-9);
         assert!((s.capacity - 2.0 * 6000f64.sqrt() / 2.0).abs() < 1e-9);
@@ -273,9 +391,9 @@ mod tests {
         let g = box_grid(3);
         let sec = crate::section::sections(&g, 0.5);
         let (zb, i) = (sec.zbar[1], sec.inertia[1]);
-        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), &fit(), 0.0);
+        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1());
         assert!((get(&sag, "bending_compression").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
-        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0);
+        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1());
         assert!((get(&hog, "bending_compression").demand - 1000.0 * zb / i).abs() < 1e-9);
         let names: Vec<_> = sag.checks.iter().map(|c| c.name).collect();
         assert_eq!(names, ["bending_tension", "bending_compression", "shear", "punching"]);
@@ -287,7 +405,7 @@ mod tests {
         let sec = crate::section::sections(&g, 0.5);
         let mut f = fit();
         f.split_intercept_psi = -1e6;
-        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &mat(), &f, 100.0);
+        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &mat(), &f, 100.0, &pu1());
         assert!(v.dc.is_infinite());
         assert!(get(&v, "punching").dc.is_infinite());
         assert!(get(&v, "shear").dc.is_infinite());

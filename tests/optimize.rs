@@ -45,12 +45,13 @@ fn example_finds_verified_winner() {
     eprintln!("run: {} candidates in {:?}", r.candidates.len(), t0.elapsed());
     let w = r.winner.expect("winner");
     let c = &w.candidate;
-    // Strength from data/mix_tests.csv: the lightest mix the lab data supports
-    // (54.86 pcf tested - 4 pcf extrapolation -> 51 pcf) wins.
-    assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 51.0, 12.0));
-    assert!((c.hull_weight_lb / 92.64 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
-    let dc = c.verdict.as_ref().unwrap().dc;
-    assert!((dc - 0.924).abs() < 2e-3, "{dc}");
+    // Strength from data/mix_tests.csv; knee punching (ACI 318-19 22.6.5.2,
+    // demand on b0*d, two knees with a 60/40 split) governs and needs 58 pcf.
+    assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 58.0, 12.0));
+    assert!((c.hull_weight_lb / 105.35 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
+    let v = c.verdict.as_ref().unwrap();
+    assert!((v.dc - 0.904).abs() < 2e-3, "{}", v.dc);
+    assert_eq!(v.governing_check, "punching");
     assert!(w.verified, "verify_dc {}", w.verify_dc);
     assert!(
         (c.length_in - 240.12).abs() < 0.1 && (c.beam_in - 20.7).abs() < 0.2,
@@ -61,7 +62,7 @@ fn example_finds_verified_winner() {
     // At the buildable floor (0.375) and at the mix-data limit: real constraints,
     // not a too-narrow search range.
     assert!(!w.on_grid_edge);
-    assert!(w.at_mix_data_edge);
+    assert!(!w.at_mix_data_edge);
     assert!(r.candidates.iter().all(|c| c.density_pcf >= 51.0 - 1e-9));
     assert!(r.candidates.iter().all(|c| c.thickness_in >= 0.375 - 1e-9));
 }
@@ -144,4 +145,24 @@ fn example_winner_gm_and_drag() {
     p.objective.kind = jaguar::params::ObjectiveKind::Drag;
     let r = optimize::run(&p, &h).unwrap();
     eprintln!("drag-mode winner drag {:?} N", r.winner.unwrap().candidate.drag_n);
+}
+
+#[test]
+fn winner_carries_diagrams_matching_bending_check() {
+    let (p, h) = example();
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    let d = &w.diagrams;
+    let n = d.x_in.len();
+    assert_eq!(n, w.verify_stations);
+    for v in [&d.shear_lb, &d.moment_lbin, &d.tension_psi, &d.area_in2, &d.inertia_in4, &d.waterline_in] {
+        assert_eq!(v.len(), n);
+        assert!(v.iter().all(|x| x.is_finite()));
+    }
+    let v = w.candidate.verdict.as_ref().unwrap();
+    let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();
+    let smax = d.tension_psi.iter().cloned().fold(0.0, f64::max);
+    // verification grid is finer than the search grid: close, not identical
+    assert!((smax - bt.demand).abs() < 0.05 * bt.demand, "{smax} vs {}", bt.demand);
+    assert!((d.tension_allow_psi - bt.capacity).abs() < 1e-6 * bt.capacity);
+    assert!(d.waterline_in.iter().all(|&z| z > 0.0 && z < w.candidate.depth_in));
 }
