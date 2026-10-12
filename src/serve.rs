@@ -56,6 +56,8 @@ struct Shared {
 /// Request handler, independent of the socket so it can be unit tested.
 struct App {
     toml_text: String,
+    /// Params as loaded at startup, hull.file relative to `base_dir` (for the form).
+    params_json: serde_json::Value,
     base_dir: PathBuf,
     result_path: PathBuf,
     shared: Arc<Mutex<Shared>>,
@@ -77,9 +79,14 @@ impl App {
             .with_context(|| format!("reading {}", params_path.display()))?;
         let params = Params::load(params_path)?;
         let base_dir = params_path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let mut rel = params.clone();
+        if let Ok(r) = rel.hull.file.strip_prefix(&base_dir) {
+            rel.hull.file = r.to_path_buf();
+        }
+        let params_json = serde_json::to_value(&rel)?;
         let result_path = base_dir.join("result.json");
         let shared = Shared { state: "idle", hull_file: params.hull.file.clone(), ..Default::default() };
-        Ok(App { toml_text, base_dir, result_path, shared: Arc::new(Mutex::new(shared)) })
+        Ok(App { toml_text, params_json, base_dir, result_path, shared: Arc::new(Mutex::new(shared)) })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
@@ -92,9 +99,24 @@ impl App {
             ("GET", "/") | ("GET", "/index.html") => {
                 (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
             }
-            ("GET", "/api/params") => json_reply(200, serde_json::json!({ "toml": self.toml_text })),
+            ("GET", "/api/params") => json_reply(
+                200,
+                serde_json::json!({
+                    "toml": self.toml_text,
+                    "params": self.params_json,
+                    "dir": self.base_dir.display().to_string(),
+                }),
+            ),
+            ("GET", "/api/hulls") => self.hulls(),
             ("GET", "/api/hull") => {
-                let file = self.lock().hull_file.clone();
+                let requested = query.split('&').find_map(|kv| kv.strip_prefix("file="));
+                let file = match requested {
+                    Some(name) => match safe_name(name) {
+                        Some(n) => self.base_dir.join(n),
+                        None => return err_reply(400, format!("bad hull file name: {name:?}")),
+                    },
+                    None => self.lock().hull_file.clone(),
+                };
                 match Hull::load(&file).and_then(|h| Ok(serde_json::to_string(&h)?)) {
                     Ok(s) => (200, "application/json", s),
                     Err(e) => err_reply(500, format!("{e:#}")),
@@ -108,11 +130,37 @@ impl App {
             ("POST", "/api/run") => self.start_run(body),
             (
                 _,
-                "/" | "/index.html" | "/api/params" | "/api/hull" | "/api/status" | "/api/result"
-                | "/api/run",
+                "/" | "/index.html" | "/api/params" | "/api/hulls" | "/api/hull" | "/api/status"
+                | "/api/result" | "/api/run",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
         }
+    }
+
+    /// Every jaguar-hull/1 JSON in `base_dir`, sorted by file name. Read fresh each call.
+    fn hulls(&self) -> Reply {
+        let entries = match std::fs::read_dir(&self.base_dir) {
+            Ok(e) => e,
+            Err(e) => return err_reply(500, format!("reading {}: {e}", self.base_dir.display())),
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        names.sort();
+        let list: Vec<serde_json::Value> = names
+            .into_iter()
+            .filter_map(|n| {
+                let text = std::fs::read_to_string(self.base_dir.join(&n)).ok()?;
+                let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+                (v["format"] == crate::hull::FORMAT).then(|| {
+                    serde_json::json!({
+                        "file": n, "name": v["name"], "length": v["length"], "notes": v["source"],
+                    })
+                })
+            })
+            .collect();
+        json_reply(200, serde_json::Value::Array(list))
     }
 
     fn status(&self, query: &str) -> Reply {
@@ -158,6 +206,26 @@ impl App {
         std::thread::spawn(move || run_job(params, shared, out));
         json_reply(202, serde_json::json!({ "ok": true }))
     }
+}
+
+/// Percent-decode a query value and accept it only as a bare file name in the dir.
+fn safe_name(raw: &str) -> Option<String> {
+    let mut bytes = Vec::new();
+    let b = raw.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let h = std::str::from_utf8(&b[i + 1..i + 3]).ok()?;
+            bytes.push(u8::from_str_radix(h, 16).ok()?);
+            i += 3;
+        } else {
+            bytes.push(if b[i] == b'+' { b' ' } else { b[i] });
+            i += 1;
+        }
+    }
+    let name = String::from_utf8(bytes).ok()?;
+    let bad = name.is_empty() || name.contains(['/', '\\', '\0']) || name.contains("..");
+    (!bad).then_some(name)
 }
 
 fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
@@ -254,6 +322,34 @@ mod tests {
         assert_eq!(a.handle("GET", "/api/result", "").0, 404);
         assert_eq!(a.handle("GET", "/nope", "").0, 404);
         assert_eq!(a.handle("DELETE", "/api/run", "").0, 405);
+    }
+
+    #[test]
+    fn params_hulls_and_hull_by_file() {
+        let a = app();
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/params", "").2).unwrap();
+        assert_eq!(v["params"]["hull"]["file"], "off1_hull.json");
+        assert_eq!(v["params"]["search"]["thickness_in"][0], 0.375);
+        assert!(v["dir"].as_str().unwrap().ends_with("examples"));
+        let (st, _, body) = a.handle("GET", "/api/hulls", "");
+        assert_eq!(st, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let list = v.as_array().unwrap();
+        assert!(list.iter().any(|h| h["file"] == "off1_hull.json" && h["length"].as_f64().unwrap() > 0.0));
+        assert!(list.iter().all(|h| h["file"] != "canoe.toml" && h["file"] != "result.json"));
+        let (st, _, body) = a.handle("GET", "/api/hull?file=off1_hull.json", "");
+        assert_eq!(st, 200, "{body}");
+        assert!(body.contains("jaguar-hull/1"));
+    }
+
+    #[test]
+    fn hull_rejects_path_traversal() {
+        let a = app();
+        for q in ["../Cargo.toml", "..%2FCargo.toml", "%2Fetc%2Fpasswd", "/etc/passwd", "a\\b.json", ".."] {
+            let (st, _, body) = a.handle("GET", &format!("/api/hull?file={q}"), "");
+            assert_eq!(st, 400, "{q}: {body}");
+        }
+        assert_eq!(a.handle("GET", "/api/hull?file=missing.json", "").0, 500);
     }
 
     #[test]
