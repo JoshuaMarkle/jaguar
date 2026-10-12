@@ -77,6 +77,9 @@ pub struct RunResult {
     pub strength: StrengthFit,
     /// Winning hull geometry (jaguar-hull/1), so viewers need not regenerate it.
     pub winner_hull: Option<Hull>,
+    /// Fixed hull: every grid candidate. Shape search: one representative per
+    /// evaluated shape (its inner winner, or its lowest-D/C failing candidate),
+    /// in evaluation order, each with `shape` set.
     pub candidates: Vec<Candidate>,
     /// None = no design passed. Never a fallback "best failing" design.
     pub winner: Option<Winner>,
@@ -111,7 +114,7 @@ pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
 pub fn run_params(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
     match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => run_with_progress(params, &Hull::load(f)?, on_progress),
-        (None, Some(_)) => anyhow::bail!("shape search not implemented yet (T13)"),
+        (None, Some(_)) => crate::shapeopt::run(params, on_progress),
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     }
 }
@@ -148,6 +151,26 @@ pub fn run_with_progress(
     hull: &Hull,
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> Result<RunResult> {
+    run_inner(params, hull, true, on_progress)
+}
+
+/// [`run_with_progress`] with a choice of parallelism. `parallel = false` runs
+/// the whole search on one thread (a private 1-thread rayon pool) so the shape
+/// search can parallelize over shapes instead. Output is identical either way.
+pub fn run_inner(
+    params: &Params,
+    hull: &Hull,
+    parallel: bool,
+    on_progress: &(dyn Fn(Progress) + Sync),
+) -> Result<RunResult> {
+    if parallel {
+        return run_search(params, hull, on_progress);
+    }
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
+    pool.install(|| run_search(params, hull, on_progress))
+}
+
+fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
     let floor = params.gates.thickness_min_buildable_in;
     let ts: Vec<f64> = range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect();
     let fit = strength(params)?;
