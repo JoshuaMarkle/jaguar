@@ -12,11 +12,15 @@
 //!
 //! Must stay deterministic: same canoe.toml => byte-identical result.json.
 
-use crate::check::Verdict;
-use crate::hull::Hull;
-use crate::params::Params;
+use crate::check::{Verdict, check};
+use crate::equilibrium::{CrewLoad, solve};
+use crate::hull::{Grid, Hull};
+use crate::params::{Params, range};
+use crate::section::{Sections, sections};
 use anyhow::Result;
+use rayon::prelude::*;
 use serde::Serialize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Candidate {
@@ -75,11 +79,128 @@ pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
 }
 
 /// Same result as [`run`] (byte-identical JSON), plus progress events.
+///
+/// If the winner's analysis fails at verification resolution, it is reported
+/// as not verified with `verify_dc = f64::MAX` (a finite, obviously failing
+/// number, so result.json stays numeric).
 pub fn run_with_progress(
     params: &Params,
     hull: &Hull,
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> Result<RunResult> {
-    let _ = (params, hull, on_progress);
-    todo!("T5: grid search + verify; see module docs")
+    let ts = range(params.search.thickness_in);
+    let rhos = range(params.search.density_pcf);
+    let ds = range(params.search.depth_in);
+    let total = ts.len() * rhos.len() * ds.len();
+    on_progress(Progress::Started { total });
+    let n = params.hull.stations;
+    let done = AtomicUsize::new(0);
+
+    let grids: Vec<Grid> = ds.par_iter().map(|&d| Grid::build(hull, d, n)).collect();
+    let pairs: Vec<(usize, usize)> =
+        (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
+    let mut candidates: Vec<(usize, usize, usize, Candidate)> = pairs
+        .par_iter()
+        .flat_map_iter(|&(gi, ti)| {
+            let grid = &grids[gi];
+            let t = ts[ti];
+            let sec = sections(grid, t);
+            let done = &done;
+            rhos.iter()
+                .enumerate()
+                .map(|(ri, &rho)| {
+                    let c = evaluate(params, grid, &sec, t, rho);
+                    let k = done.fetch_add(1, Ordering::SeqCst) + 1;
+                    on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
+                    (ti, ri, gi, c)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    candidates.sort_by_key(|&(t, r, d, _)| (t, r, d));
+    let candidates: Vec<Candidate> = candidates.into_iter().map(|x| x.3).collect();
+
+    let best = candidates
+        .iter()
+        .filter(|c| c.passes)
+        .reduce(|a, b| if b.hull_weight_lb < a.hull_weight_lb { b } else { a });
+
+    let winner = best.map(|c| {
+        let stations = 2 * n - 1;
+        on_progress(Progress::Verifying { stations });
+        let grid = Grid::build(hull, c.depth_in, stations);
+        let sec = sections(&grid, c.thickness_in);
+        let v = evaluate(params, &grid, &sec, c.thickness_in, c.density_pcf);
+        let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
+        let edge = |x: f64, r: &[f64]| r.len() > 1 && (x == r[0] || x == r[r.len() - 1]);
+        Winner {
+            candidate: c.clone(),
+            verify_stations: stations,
+            verify_dc,
+            verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
+            on_grid_edge: edge(c.thickness_in, &ts) || edge(c.density_pcf, &rhos) || edge(c.depth_in, &ds),
+        }
+    });
+
+    Ok(RunResult { format: RESULT_FORMAT, params: params.clone(), candidates, winner })
+}
+
+/// Self weight in lb: trapezoid of A*rho/1728 over x.
+fn hull_weight(grid: &Grid, sec: &Sections, rho: f64) -> f64 {
+    let w: f64 =
+        grid.x.windows(2).zip(sec.area.windows(2)).map(|(x, a)| 0.5 * (a[0] + a[1]) * (x[1] - x[0])).sum();
+    w * rho / 1728.0
+}
+
+fn evaluate(params: &Params, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> Candidate {
+    let mut c = Candidate {
+        thickness_in: t,
+        density_pcf: rho,
+        depth_in: grid.depth,
+        hull_weight_lb: hull_weight(grid, sec, rho),
+        verdict: None,
+        governing_case: None,
+        error: None,
+        passes: false,
+    };
+    let mat = &params.material;
+    let length = grid.x[grid.x.len() - 1] - grid.x[0];
+    let mut worst: Option<(Verdict, String)> = None;
+    for case in &params.load_cases {
+        let k = case.weights_lb.len();
+        let crew: Vec<CrewLoad> = case
+            .weights_lb
+            .iter()
+            .enumerate()
+            .map(|(i, &w)| CrewLoad {
+                x_in: match &case.seats_in {
+                    Some(s) => s[i],
+                    None => grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64,
+                },
+                lb: w * mat.dynamic_load_factor,
+            })
+            .collect();
+        let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in) {
+            Ok(loads) => check(grid, sec, &loads, rho, mat),
+            Err(e) => {
+                c.error = Some(format!("{}: {e:#}", case.name));
+                return c;
+            }
+        };
+        if !v.dc.is_finite() || !v.freeboard_in.is_finite() {
+            c.error = Some(format!("{}: non-finite check result", case.name));
+            return c;
+        }
+        if worst.as_ref().is_none_or(|(w, _)| v.dc > w.dc) {
+            worst = Some((v, case.name.clone()));
+        }
+    }
+    if let Some((v, name)) = worst {
+        c.passes = v.dc <= params.gates.dc_search && v.freeboard_in >= params.gates.freeboard_min_in;
+        c.verdict = Some(v);
+        c.governing_case = Some(name);
+    } else {
+        c.error = Some("no load cases".into());
+    }
+    c
 }
