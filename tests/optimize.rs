@@ -5,8 +5,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
+/// examples/canoe.toml with the weight objective (it ships with drag); these
+/// tests assert lightest-passing winners.
 fn example() -> (Params, Hull) {
-    let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+    let mut p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+    p.objective.kind = jaguar::params::ObjectiveKind::Weight;
     let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
     (p, h)
 }

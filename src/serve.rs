@@ -1,8 +1,8 @@
 //! Optional localhost web UI.
 //!
 //! `jaguar serve [canoe.toml] [-p 8000]` starts tiny_http on 127.0.0.1:<port>.
-//! The page shows the canoe in 3D, lets the user edit canoe.toml text and
-//! press Run, and watches the optimization live. The optimizer never depends
+//! The page shows the canoe in 3D, lets the user edit the parameters in a form
+//! (the only editor; it builds canoe.toml text) and press Run, and watches the optimization live. The optimizer never depends
 //! on this module.
 //!
 //! HTTP API (all JSON unless noted; this is the contract with web/index.html):

@@ -65,7 +65,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
    GM_T >= `gm_min_in` for every load case. Thicknesses below `thickness_min_buildable_in` are
    never tried.
-7. **Objective** (`objective.kind`): `weight` = lightest passing; `drag` = lowest Michell wave +
+7. **Objective** (`objective.kind`, default `drag` when omitted): `weight` = lightest passing; `drag` = lowest Michell wave +
    ITTC-57 friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction).
 8. **Verify**: the winner is re-run at 2n-1 stations. It is VERIFIED iff D/C there <= `dc_verify`

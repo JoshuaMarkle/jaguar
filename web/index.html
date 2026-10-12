@@ -21,7 +21,7 @@
   body { margin: 0; font: 450 12px/1.4 var(--font); color: var(--ink); background: var(--canvas);
     display: grid; grid-template-columns: var(--side) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--plot); overflow: hidden;
     -webkit-font-smoothing: antialiased; }
-  button, input, select, textarea { font: inherit; color: inherit; }
+  button, input, select { font: inherit; color: inherit; }
 
   /* ---------- left sidebar ---------- */
   #left { grid-row: 1 / 3; position: relative; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--hair); }
@@ -58,17 +58,15 @@
   .kv > :first-child { color: var(--muted); }
   .kv > :nth-child(2) { grid-column: 2 / 4; font-variant-numeric: tabular-nums; }
 
-  input[type=number], input[type=text], input:not([type]), select, textarea {
+  input[type=number], input[type=text], input:not([type]), select {
     width: 100%; height: var(--ctl-h); padding: 0 10px; border: 0; border-radius: var(--r-sm); background: var(--field); outline: none; min-width: 0; }
   input[type=number] { font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
   input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-  input::placeholder, textarea::placeholder { color: var(--faint); }
-  input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--ink); }
+  input::placeholder { color: var(--faint); }
+  input:focus, select:focus { box-shadow: 0 0 0 2px var(--ink); }
   input:invalid { box-shadow: inset 0 0 0 1px var(--error); }
   select { appearance: none; -webkit-appearance: none; padding-right: 26px; cursor: pointer; text-overflow: ellipsis;
     background: var(--field) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23707070'/%3E%3C/svg%3E") no-repeat right 10px center; }
-  textarea { height: auto; padding: var(--s2) 10px; border-radius: var(--r-md); font: 11px/1.45 var(--mono); resize: vertical; }
-  #toml { height: 40vh; } #gen { height: 30vh; }
 
   input.switch { appearance: none; -webkit-appearance: none; width: 28px; height: 16px; border-radius: var(--r-full); background: var(--hair);
     position: relative; cursor: pointer; margin: 0; justify-self: start; transition: background .12s; }
@@ -142,10 +140,6 @@
   <div id="head"><b>Jaguar</b><span>lightest wall that does not crack</span></div>
   <div id="scroll">
     <form id="form" onsubmit="return false"></form>
-    <details class="sec" id="raw"><summary>Raw TOML<span class="note">when open, submitted instead of the form</span></summary>
-      <div class="body"><textarea id="toml" spellcheck="false"></textarea></div></details>
-    <details class="sec" id="gendet"><summary>Generated canoe.toml</summary>
-      <div class="body"><textarea id="gen" readonly></textarea><button id="copy" type="button" class="btn soft">Copy</button></div></details>
     <details class="sec keep" id="sec-winner" open><summary>Result</summary><div class="body" id="winner"></div></details>
     <details class="sec keep" id="sec-mix" open><summary>Mix data</summary><div class="body" id="mix">loading</div></details>
   </div>
@@ -161,7 +155,7 @@
 <div id="plotwrap"><div class="gutter" id="gutter-plot" title="Drag to resize. Double-click to reset."></div><div id="plotctl"></div><canvas id="plot"></canvas><div id="tabs"></div></div>
 <script>
 const $ = id => document.getElementById(id);
-let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'weight', hullLabel = '';
+let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'drag', hullLabel = '';
 // Monochrome palette shared by the canvas plots (docs/DESIGN.md). Accent marks the winner only.
 // Semantic colors (Carbon) report state only: pass, near the gate, fail/error.
 const C = { ink: '#141414', soft: '#262626', muted: '#707070', faint: '#adadad', hair: '#e0e0e0', grid: '#f0f0f0', bg: '#ffffff', accent: '#0066ff',
@@ -314,14 +308,13 @@ function buildForm() {
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
     + section('objective',
-      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="weight">weight (lightest hull)</option><option value="drag">drag (least resistance)</option></select>')
+      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option></select>')
       + FIELDS.objective.map(f => numRow('objective', f)).join(''));
   $('addcase').onclick = () => lcBlock({ name: 'case' + ($('cases').children.length + 1), weights_lb: [] });
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
-  // Remember which sections are collapsed. The raw TOML panel is deliberately not remembered:
-  // when open it replaces the form, which must never happen silently on reload.
+  // Remember which sections are collapsed.
   for (const d of document.querySelectorAll('details.keep')) {
     if (store.get('sec.' + d.id) === '0') d.open = false;
     d.addEventListener('toggle', () => store.set('sec.' + d.id, d.open ? '1' : '0'));
@@ -344,7 +337,7 @@ function fillForm(p, hulls) {
   if (p.hull.file && !hulls.some(h => h.file === p.hull.file)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(p.hull.file)}">${esc(p.hull.file)}</option>`);
   if (p.hull.file) sel.value = p.hull.file;
   $('material.mix_data').value = p.material.mix_data;
-  $('objective.kind').value = p.objective.kind;
+  $('objective.kind').value = p.objective.kind || 'drag';
   $('material.strength_model').value = p.material.strength_model || 'fit';
   const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0, d_over_t: 0.5 };
   $('punching.method').value = pu.method; $('punching.knees').value = String(pu.knees);
@@ -394,7 +387,6 @@ function formToml() {
   }
   return out.join('\n');
 }
-$('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText($('gen').value);
 
 // ---------- 3D ----------
 const view = $('view');
@@ -806,23 +798,19 @@ async function poll() {
 }
 $('run').onclick = async () => {
   let text;
-  if ($('raw').open) text = $('toml').value;
-  else {
-    try { text = formToml(); } catch (e) { $('err').textContent = 'form: ' + e.message; return; }
-    $('gen').value = text;
-  }
+  try { text = formToml(); } catch (e) { $('err').textContent = 'form: ' + e.message; return; }
   parseTomlBits(text);
   const r = await fetch('/api/run', { method: 'POST', body: text });
   if (r.status !== 202) { $('err').textContent = `run rejected (${r.status}): ` + ((await r.json()).error || ''); return; }
   $('err').textContent = ''; cands = []; result = null; showWinner(); drawPlot();
   $('run').disabled = true;
-  await loadHull($('raw').open || $('shapemode').checked ? null : $('hull.file').value);
+  await loadHull($('shapemode').checked ? null : $('hull.file').value);
   loadMix();
   if (!polling) { polling = true; poll(); }
 };
 (async () => {
   const p = await (await fetch('/api/params')).json();
-  $('toml').value = p.toml; parseTomlBits(p.toml);
+  parseTomlBits(p.toml);
   buildForm();
   const hulls = await (await fetch('/api/hulls')).json();
   fillForm(p.params, hulls);
