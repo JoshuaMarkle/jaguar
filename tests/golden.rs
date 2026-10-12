@@ -60,6 +60,9 @@ fn golden_bending_dc() {
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),
+            fc_slope_psi_per_pcf: 161.29,
+            fc_intercept_psi: -9566.0,
+            lambda_lightweight: 0.75,
         };
         let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat);
         assert_rel("dc", v.dc, f(o, "dc"), tol);

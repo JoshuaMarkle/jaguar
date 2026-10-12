@@ -7,8 +7,14 @@
 //!
 //! HTTP API (all JSON unless noted; this is the contract with web/index.html):
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
-//! * `GET  /api/params`    -> {"toml": "<text of the canoe.toml given on the CLI>"}
-//! * `GET  /api/hull`      -> jaguar-hull/1 of the current params' hull file
+//! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file
+//!   made relative to the CLI canoe.toml dir>, "dir": "<that dir>"} (UI prefills its form)
+//! * `GET  /api/hulls`     -> [{"file": "off1_hull.json", "name": ..., "length": in,
+//!   "notes": hull.source}] for every *.json in the CLI canoe.toml's dir whose
+//!   "format" is jaguar-hull/1 (sorted by file name). Feeds the hull picker.
+//! * `GET  /api/hull`      -> jaguar-hull/1 of the current params' hull file;
+//!   `?file=<name from /api/hulls>` returns that one instead (reject any path
+//!   separator or `..` with 400: no arbitrary file reads).
 //! * `POST /api/run`       body = canoe.toml text. Validates with
 //!   `Params::parse(text, <dir of the CLI canoe.toml>)`; 400 {"error"} if
 //!   invalid, 409 if a run is already going, else 202 {"ok":true} and starts

@@ -55,6 +55,12 @@ pub struct Material {
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging (see old/CLAUDE.md).
     pub knee_patch_in: f64,
+    /// Compressive strength fit: f'c [psi] = slope * density [pcf] + intercept.
+    /// Used by the compression, shear and punching checks (strength agent, T9).
+    pub fc_slope_psi_per_pcf: f64,
+    pub fc_intercept_psi: f64,
+    /// Lightweight-concrete factor lambda (ACI 318: 0.75 all-lightweight).
+    pub lambda_lightweight: f64,
 }
 
 /// Search axes. Each is an inclusive `[min, max, step]` range.
@@ -75,6 +81,10 @@ pub struct Gates {
     pub dc_verify: f64,
     /// Minimum loaded freeboard at the worst station, in.
     pub freeboard_min_in: f64,
+    /// Thinnest wall the team can actually build, in. Candidates thinner than
+    /// this are never generated, and a winner AT this floor is not flagged as
+    /// a grid-edge result (it is a real constraint, not a too-narrow range).
+    pub thickness_min_buildable_in: f64,
 }
 
 impl Params {
@@ -129,6 +139,12 @@ impl Params {
             if !(lo > 0.0 && hi >= lo && step > 0.0) {
                 bail!("search.{name} must be [min > 0, max >= min, step > 0], got {r:?}");
             }
+        }
+        if self.gates.thickness_min_buildable_in > self.search.thickness_in[1] {
+            bail!("gates.thickness_min_buildable_in is above search.thickness_in max");
+        }
+        if self.material.lambda_lightweight <= 0.0 || self.material.lambda_lightweight > 1.0 {
+            bail!("material.lambda_lightweight must be in (0, 1]");
         }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");

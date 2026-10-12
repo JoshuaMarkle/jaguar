@@ -24,9 +24,14 @@ ft_intercept_psi = -1648.6
 factor_of_safety = 1.5
 dynamic_load_factor = 1.2
 knee_patch_in = 3.0       # never 0: a point load does not converge
+# f'c = slope * density + intercept. From the old Mix Lab cylinder fit
+# (density = 0.0062 f'c + 59.309). PLACEHOLDER: replace with your team's fit.
+fc_slope_psi_per_pcf = 161.29
+fc_intercept_psi = -9566.0
+lambda_lightweight = 0.75 # ACI 318 all-lightweight concrete
 
 [search]                  # [min, max, step], inclusive
-thickness_in = [0.25, 0.75, 0.0625]   # min = thinnest wall you can actually build
+thickness_in = [0.375, 0.75, 0.0625]
 density_pcf  = [60.0, 80.0, 2.0]
 depth_in     = [10.0, 16.0, 1.0]
 
@@ -34,3 +39,4 @@ depth_in     = [10.0, 16.0, 1.0]
 dc_search = 0.93          # = 0.95 / (1 + 0.0219 worst drift per station doubling)
 dc_verify = 0.95          # numerical margin, not a safety factor
 freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375   # thinnest wall the team can cast

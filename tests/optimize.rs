@@ -19,11 +19,14 @@ fn example_finds_verified_winner() {
     eprintln!("run: {} candidates in {:?}", r.candidates.len(), t0.elapsed());
     let w = r.winner.expect("winner");
     let c = &w.candidate;
-    assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.25, 70.0, 12.0));
-    assert!((c.hull_weight_lb / 84.77 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
+    assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 66.0, 12.0));
+    assert!((c.hull_weight_lb / 119.89 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
     let dc = c.verdict.as_ref().unwrap().dc;
-    assert!((dc - 0.786).abs() < 2e-3, "{dc}");
+    assert!((dc - 0.809).abs() < 2e-3, "{dc}");
     assert!(w.verified, "verify_dc {}", w.verify_dc);
+    // At the buildable floor (0.375): a real constraint, not a grid-edge warning.
+    assert!(!w.on_grid_edge);
+    assert!(r.candidates.iter().all(|c| c.thickness_in >= 0.375 - 1e-9));
 }
 
 #[test]

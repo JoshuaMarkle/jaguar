@@ -88,7 +88,8 @@ pub fn run_with_progress(
     hull: &Hull,
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> Result<RunResult> {
-    let ts = range(params.search.thickness_in);
+    let floor = params.gates.thickness_min_buildable_in;
+    let ts: Vec<f64> = range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect();
     let rhos = range(params.search.density_pcf);
     let ds = range(params.search.depth_in);
     let total = ts.len() * rhos.len() * ds.len();
@@ -138,7 +139,10 @@ pub fn run_with_progress(
             verify_stations: stations,
             verify_dc,
             verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
-            on_grid_edge: edge(c.thickness_in, &ts) || edge(c.density_pcf, &rhos) || edge(c.depth_in, &ds),
+            // Thickness at the buildable floor is a real constraint, not a range problem.
+            on_grid_edge: (edge(c.thickness_in, &ts) && (c.thickness_in - floor).abs() > 1e-9)
+                || edge(c.density_pcf, &rhos)
+                || edge(c.depth_in, &ds),
         }
     });
 

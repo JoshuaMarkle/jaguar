@@ -101,14 +101,9 @@ pub fn solve(grid: &Grid, sec: &Sections, rho: f64, crew: &[CrewLoad], patch: f6
     }
     let th = brent(mres, -thmax, thmax, 1e-9)?;
     let d0 = draft_for(th)?;
-    let mut q: Vec<f64> = buoy(d0, th).iter().zip(&w_hull).map(|(b, w)| b - w).collect();
-    for c in crew {
-        for i in 0..n {
-            if (x[i] - c.x_in).abs() <= patch / 2.0 {
-                q[i] -= c.lb / patch;
-            }
-        }
-    }
+    // Distributed loads (buoyancy - self weight) integrate by trapezoid; crew
+    // patches are added in closed form so they are exact at any station spacing.
+    let q: Vec<f64> = buoy(d0, th).iter().zip(&w_hull).map(|(b, w)| b - w).collect();
     let mut v = vec![0.0; n];
     let mut m = vec![0.0; n];
     for i in 1..n {
@@ -116,8 +111,72 @@ pub fn solve(grid: &Grid, sec: &Sections, rho: f64, crew: &[CrewLoad], patch: f6
         v[i] = v[i - 1] + 0.5 * (q[i] + q[i - 1]) * dx;
         m[i] = m[i - 1] + 0.5 * (v[i] + v[i - 1]) * dx;
     }
+    for c in crew {
+        for i in 0..n {
+            let (fv, fm) = patch_vm(x[i], c.x_in, patch);
+            v[i] -= c.lb * fv;
+            m[i] -= c.lb * fm;
+        }
+    }
     if v[n - 1].abs() > 1e-3 * wtot || m[n - 1].abs() > 1e-3 * wtot * l {
         bail!("equilibrium broken: V_end={:.2} M_end={:.1}", v[n - 1], m[n - 1]);
     }
     Ok(Loads { hull_weight_lb: wh, draft_in: d0, trim_in: th, shear: v, moment: m })
+}
+
+/// Shear and moment at `x` from a unit load spread uniformly over
+/// `[xc - w/2, xc + w/2]`, integrated from the bow: returns (V, M) per lb.
+/// Closed form, so the crew load is exact at any station spacing or seat.
+/// (The prototype sampled the patch at nodes, which caught 2 or 3 nodes
+/// depending on seat position, losing up to a third of a paddler and breaking
+/// free-free closure for 3+ crew.)
+fn patch_vm(x: f64, xc: f64, w: f64) -> (f64, f64) {
+    let a = xc - w / 2.0;
+    if x <= a {
+        (0.0, 0.0)
+    } else if x >= a + w {
+        (1.0, x - xc)
+    } else {
+        let u = x - a;
+        (u / w, u * u / (2.0 * w))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hull::{Grid, Hull};
+    use crate::section;
+    use std::path::Path;
+
+    #[test]
+    fn patch_vm_is_continuous_and_exact() {
+        let (xc, w) = (50.0, 3.0);
+        assert_eq!(patch_vm(48.0, xc, w), (0.0, 0.0));
+        let (v, m) = patch_vm(60.0, xc, w);
+        assert!((v - 1.0).abs() < 1e-12 && (m - 10.0).abs() < 1e-12);
+        let (v, m) = patch_vm(51.5, xc, w);
+        assert!((v - 1.0).abs() < 1e-12 && (m - 1.5).abs() < 1e-12, "{v} {m}");
+    }
+
+    /// Regression: 3 and 4 paddlers evenly spaced used to fail with
+    /// "equilibrium broken" at every candidate.
+    #[test]
+    fn any_crew_size_closes() {
+        let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        for stations in [81, 161, 321] {
+            let g = Grid::build(&hull, 14.0, stations);
+            let s = section::sections(&g, 0.375);
+            for n in 1..=5 {
+                let crew: Vec<CrewLoad> = (0..n)
+                    .map(|i| CrewLoad {
+                        x_in: hull.length * (i + 1) as f64 / (n + 1) as f64,
+                        lb: 160.0 * 1.2,
+                    })
+                    .collect();
+                solve(&g, &s, 66.0, &crew, 3.0)
+                    .unwrap_or_else(|e| panic!("{n} crew at {stations} stations: {e}"));
+            }
+        }
+    }
 }
