@@ -2,7 +2,7 @@
   "format": "jaguar-hull/1",
   "units": "in",
   "name": "off1",
-  "source": "old/off1.mlt + old/out.mlt",
+  "source": "tests/golden/michlet/off1.mlt + out.mlt",
   "length": 240.11811023622047,
   "draft_design": 5.909448818897639,
   "x": [

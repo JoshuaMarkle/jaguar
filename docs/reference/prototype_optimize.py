@@ -9,7 +9,7 @@ hull that does not crack under the crew, in longitudinal bending.
 
 Units: inches, pounds, psi, pcf.  Needs numpy + scipy.
 
-DELIBERATELY NOT HERE (see old/): biaxial Kupfer-Gerstle check, multizone mixes,
+DELIBERATELY NOT HERE: biaxial Kupfer-Gerstle check, multizone mixes,
 5 race categories, seating search, torsion, stability/GM_T, freeboard gate, PDF.
 Strength constants below are PLACEHOLDERS from the old Mix Lab fit (4 points, not
 a real fit): weights are relative comparisons only.
@@ -133,8 +133,8 @@ def evaluate(L, T, y0, depth, n, t, rho, crew, seats, dyn):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--off1", default="old/off1.mlt")
-    ap.add_argument("--out", default="old/out.mlt")
+    ap.add_argument("--off1", default="tests/golden/michlet/off1.mlt")
+    ap.add_argument("--out", default="tests/golden/michlet/out.mlt")
     ap.add_argument("--depth", type=float, default=14.0, help="mold depth, in")
     ap.add_argument("--crew", default="175,165", help="paddler weights, lb")
     ap.add_argument("--seats", help="seat x positions, in from bow (default: evenly spaced)")

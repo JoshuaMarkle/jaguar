@@ -2,7 +2,7 @@
  "format": "jaguar-hull/1",
  "units": "in",
  "name": "off1 (Godzilla/Michlet, 2026)",
- "source": "old/off1.mlt + old/out.mlt (LPP, T)",
+ "source": "tests/golden/michlet/off1.mlt + out.mlt (LPP, T)",
  "length": 240.11823990000002,
  "draft_design": 5.909452010000001,
  "x": [

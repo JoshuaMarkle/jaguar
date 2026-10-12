@@ -7,7 +7,3 @@ venv/
 .DS_Store
 Thumbs.db
 .claude/settings.local.json
-
-# legacy runtime artifacts (were ignored by the old .gitignore)
-/old/godzilla_run/
-/old/sweep_audit.log

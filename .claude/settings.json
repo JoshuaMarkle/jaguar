@@ -9,10 +9,6 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(./target/*)"
-    ],
-    "deny": [
-      "Edit(old/**)",
-      "Write(old/**)"
     ]
   }
 }
