@@ -394,6 +394,7 @@ mod tests {
             aft_rocker: 2.0,
             fore_len_frac: 0.4,
             aft_len_frac: 0.4,
+            metrics: None,
         });
         r.candidates[0].length_in = 220.0;
         let l = summary_lines(&r);

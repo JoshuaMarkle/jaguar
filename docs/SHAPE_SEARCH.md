@@ -25,6 +25,35 @@ stability logic lives in one place.
   the same gates. Weight still matters through draft and wetted surface.
 * `[shape_search]` bounds encode the ASCE rules and mold limits (e.g. length 18-22 ft).
 
+## Manufacturability (`[shape_search]`, all optional)
+
+| key | effect |
+|---|---|
+| `draft_step_in`, `length_step_in`, `beam_step_in` | sampled values snap to the nearest multiple inside the bounds (depth already steps by `search.depth_in`) |
+| `symmetric = true` | `aft_wp`, `aft_rocker`, `aft_len_frac` follow the fore values (3 fewer dimensions, aft bounds ignored) |
+| `rocker_in = [min, max]` | keel rise above the lowest keel point at 5% L from the bow and from the stern, in. Outside = **rejected** (not remapped) |
+| `min_entry_angle_deg` | design-waterline entry half-angle = atan(half-breadth / x) of the chord over the first 5% L. Finer = **rejected** |
+
+A rejected shape keeps its inner result in `candidates` with `passes = false` and
+`error = "shape rejected: ..."`, scores +inf, and can never be the winner. Every shape carries
+`shape.metrics` (`entry_angle_deg`, `rocker_bow_in`, `rocker_stern_in`, `lateral_moment_in4`,
+`rejected`). `flare_deg` stays a fixed `[hull]` value, not a searched variable (it changes the grid
+above the waterline, not the generator, so searching it would need a second outer axis).
+
+## Drag objective options (`[objective]`)
+
+* `displacements = [{ crew_lb, weight }, ...]`: drag = sum of weight x resistance at the level draft
+  where hull weight + crew_lb floats (bisection on displaced volume, no trim). Weights sum to 1.
+  Absent = heaviest load case at its solved draft (old behaviour). Presets in
+  `examples/shape_opt.toml`: Regionals 350/700 at 75/25, Nationals 350/525/700 at 60/20/20,
+  Total 67.5/10/22.5.
+* `straight_weight` (default 1.0): score = `sw * drag / drag_ref + (1 - sw) * turn / turn_ref`.
+  `turn` is a **proxy, not a turning model**: the second moment of the underwater lateral profile
+  about midships at design draft, integral of (draft - keel_z(x)) (x - L/2)^2 dx. More rocker
+  lifts the keel ends and shrinks it, so rocker is credited automatically. Refs are the drag and
+  moment of the fixed midpoint-of-bounds shape (deterministic, independent of sampling).
+  Lower = easier to turn by this proxy only; do not read it as a race prediction.
+
 ## Algorithm (deterministic)
 
 1. **Latin hypercube** of `samples` shapes inside the bounds (seeded SplitMix64). Parameters with

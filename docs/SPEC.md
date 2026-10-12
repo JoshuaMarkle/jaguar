@@ -67,12 +67,18 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    never tried.
 7. **Objective** (`objective.kind`): `weight` = lightest passing; `drag` = lowest Michell wave +
    ITTC-57 friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
-   race prediction).
+   race prediction). Drag is taken at the heaviest load case's loaded draft, or, with
+   `objective.displacements = [{crew_lb, weight}, ...]` (weights sum to 1), as the weighted sum of
+   resistance at the level draft each (hull weight + crew_lb) floats at. `objective.straight_weight`
+   (default 1, needs drag + `[shape_search]`) blends in a turning proxy, see docs/SHAPE_SEARCH.md.
 8. **Verify**: the winner is re-run at 2n-1 stations. It is VERIFIED iff D/C there <= `dc_verify`
    (D/C drifts up 1-2% per station doubling, hence dc_search < dc_verify).
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern
    search over Michlet Series 7 shape factors within bounds. Each shape runs the wall search above,
-   and the best objective wins.
+   and the best objective wins. Optional manufacturability rules: `draft_step_in`, `length_step_in`,
+   `beam_step_in` (snap), `rocker_in = [min, max]` and `min_entry_angle_deg` (reject, with the reason
+   in the candidate), `symmetric` (aft factors = fore). Each shape's `shape.metrics` (entry angle,
+   rocker in, lateral moment, rejection reason) is in result.json.
 
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points), winner_hull (shape runs) | null, candidates: [...],

@@ -61,3 +61,95 @@ fn fixed_parameters_stay_fixed() {
         assert_eq!((s.beam_in, s.section), (24.0, 0.5));
     }
 }
+
+fn shapes(r: &jaguar::optimize::RunResult) -> Vec<&jaguar::hullgen::ShapeParams> {
+    r.candidates.iter().map(|c| c.shape.as_ref().unwrap()).collect()
+}
+
+#[test]
+fn symmetric_shapes_have_identical_ends() {
+    let mut p = small(false);
+    p.shape_search.as_mut().unwrap().symmetric = true;
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    for s in shapes(&r) {
+        assert_eq!((s.aft_wp, s.aft_rocker, s.aft_len_frac), (s.fore_wp, s.fore_rocker, s.fore_len_frac));
+        let m = s.metrics.as_ref().unwrap();
+        assert!((m.rocker_bow_in - m.rocker_stern_in).abs() < 1e-12);
+    }
+    let h = r.winner_hull.as_ref().unwrap();
+    let n = h.x.len();
+    for i in 0..n {
+        for (a, b) in h.half_breadth[i].iter().zip(&h.half_breadth[n - 1 - i]) {
+            assert!((a - b).abs() < 1e-9);
+        }
+    }
+}
+
+#[test]
+fn steps_snap_draft_length_beam() {
+    let mut p = small(false);
+    let ss = p.shape_search.as_mut().unwrap();
+    ss.draft_step_in = Some(0.5);
+    ss.length_step_in = Some(12.0);
+    ss.beam_step_in = Some(1.0);
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    let on = |v: f64, st: f64| ((v / st).round() * st - v).abs() < 1e-9;
+    for s in shapes(&r) {
+        assert!(on(s.draft_in, 0.5) && on(s.length_in, 12.0) && on(s.beam_in, 1.0), "{s:?}");
+        assert!((216.0..=264.0).contains(&s.length_in) && (4.0..=8.0).contains(&s.draft_in));
+    }
+}
+
+#[test]
+fn entry_angle_and_rocker_reject_shapes() {
+    let mut p = small(false);
+    p.shape_search.as_mut().unwrap().min_entry_angle_deg = Some(12.0);
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    let mut rejected = 0;
+    for c in &r.candidates {
+        let m = c.shape.as_ref().unwrap().metrics.as_ref().unwrap();
+        if m.entry_angle_deg < 12.0 {
+            rejected += 1;
+            assert!(!c.passes && c.error.as_ref().unwrap().contains("entry half-angle"));
+        }
+    }
+    assert!(rejected > 0, "bound should reject some shapes");
+    if let Some(w) = &r.winner {
+        assert!(w.candidate.shape.as_ref().unwrap().metrics.as_ref().unwrap().entry_angle_deg >= 12.0);
+    }
+    // An impossible rocker band rejects everything: no winner, never a rejected one.
+    let mut p = small(false);
+    p.shape_search.as_mut().unwrap().rocker_in = Some([50.0, 60.0]);
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    assert!(r.winner.is_none());
+    assert!(r.candidates.iter().all(|c| c.error.as_ref().unwrap().contains("rocker")));
+}
+
+#[test]
+fn turning_weight_moves_toward_lower_lateral_moment() {
+    let mut p = small(false);
+    p.objective.kind = jaguar::params::ObjectiveKind::Drag;
+    p.objective.straight_weight = 0.0;
+    let b = jaguar::run(&p, &|_| {}).unwrap();
+    let mom = |r: &jaguar::optimize::RunResult| {
+        r.winner
+            .as_ref()
+            .unwrap()
+            .candidate
+            .shape
+            .as_ref()
+            .unwrap()
+            .metrics
+            .as_ref()
+            .unwrap()
+            .lateral_moment_in4
+    };
+    // Pure turning: winner has the least lateral moment of all passing shapes.
+    let least = b
+        .candidates
+        .iter()
+        .filter(|c| c.passes)
+        .map(|c| c.shape.as_ref().unwrap().metrics.as_ref().unwrap().lateral_moment_in4)
+        .fold(f64::INFINITY, f64::min);
+    assert!(mom(&b) <= least + 1e-9, "{} vs {least}", mom(&b));
+}
