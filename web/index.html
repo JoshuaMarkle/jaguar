@@ -8,8 +8,12 @@
   #left { grid-row: 1 / 3; padding: 8px; overflow: auto; border-right: 1px solid #ccc; }
   #toml { width: 100%; height: 40vh; font: 12px monospace; }
   #view { position: relative; }
-  #plotwrap { border-top: 1px solid #ccc; }
-  #plot { width: 100%; height: 100%; display: block; }
+  #plotwrap { border-top: 1px solid #ccc; display: flex; flex-direction: column; min-height: 0; }
+  #plotctl { font-size: 12px; padding: 2px 6px; min-height: 20px; }
+  #plot { width: 100%; flex: 1; min-height: 0; display: block; }
+  #tabs { display: flex; border-top: 1px solid #ccc; background: #eee; }
+  #tabs button { border: 0; border-right: 1px solid #ccc; background: none; padding: 4px 10px; cursor: pointer; font: 12px sans-serif; }
+  #tabs button.on { background: #fff; font-weight: bold; box-shadow: inset 0 2px #36c; }
   progress { width: 100%; }
   .ok { color: #080; font-weight: bold; } .bad { color: #c00; font-weight: bold; } .warn { color: #b60; }
   #err { color: #c00; white-space: pre-wrap; }
@@ -45,7 +49,7 @@
   <div id="winner">no result yet</div>
 </div>
 <div id="view"><div id="viewlabel"></div></div>
-<div id="plotwrap"><canvas id="plot"></canvas></div>
+<div id="plotwrap"><div id="plotctl"></div><canvas id="plot"></canvas><div id="tabs"></div></div>
 <script>
 const $ = id => document.getElementById(id);
 let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'weight', hullLabel = '';
@@ -69,7 +73,8 @@ function parseTomlBits(text) {
 // ---------- form ----------
 // [section, key, label, unit, tooltip, step, min]
 const FIELDS = {
-  hull: [['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11]],
+  hull: [['flare_deg', 'Side flare', 'deg', 'How much the hull sides lean outward above the design waterline, in degrees from vertical. 0 = straight up. Typical canoes use 5-15. More flare = wider gunwale (more stable, more freeboard) but more concrete.', 'any', 0],
+    ['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11]],
   material: [
     ['flex_over_split', 'Flex / split ratio', '-', 'Bending (flexural) strength divided by the split-cylinder tensile strength the lab measured. 1.0 is the safe choice; textbook relations give about 1.12.', 'any', 0],
     ['density_extrapolation_pcf', 'Density extrapolation', 'pcf', 'How far beyond the lightest and heaviest tested mixes the search may go. The strength line is fitted through only a few lab points, so far outside them it is a guess.', 'any', 0],
@@ -109,7 +114,12 @@ const SHAPE_INT = [
   ['refine_rounds', 'Refine rounds', 'Rounds of local tweaking around the best shapes found.', 6],
   ['seed', 'Seed', 'Random seed. Same seed = same shapes = same result.', 1],
 ];
-const SECTIONS = { hull: 'Hull', crew: 'Crew (load cases: the design must pass all of them)', material: 'Material', search: 'Search ranges (min / max / step)', gates: 'Gates', stability: 'Stability', objective: 'Objective', shape: 'Shape search (min / max; equal = fixed)' };
+const PUNCH = [
+  ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
+  ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
+  ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
+  ['d_over_t', 'Mesh depth / wall', '-', 'How deep the reinforcing mesh sits, as a fraction of wall thickness (aci_22_6 only). 0.5 = mesh in the middle of the wall.', 'any', 0]];
+const SECTIONS = { punching: 'Punching (knee through the bottom)', hull: 'Hull', crew: 'Crew (load cases: the design must pass all of them)', material: 'Material', search: 'Search ranges (min / max / step)', gates: 'Gates', stability: 'Stability', objective: 'Objective', shape: 'Shape search (min / max; equal = fixed)' };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const tip = t => `<span class="q" title="${t}">(?)</span>`;
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
@@ -139,6 +149,9 @@ function buildForm() {
   const st = 'Let JAGUAR design the hull shape too (length, beam, bow/stern shape...) within the bounds below, instead of using a fixed hull file.';
   const mt = 'Lab test results (CSV, path relative to the canoe.toml). Strength vs density is fitted from these breaks; every strength the checks use comes from that fit.';
   const ot = 'What best means among designs that pass every check: weight = lightest hull, drag = least water resistance at the race speed (only matters with shape search).';
+  const smt = 'fit: strength from a straight line through all your lab breaks, so the search may pick any density in the trusted range. tested_mixes: only the mixes you actually tested can be picked, each with its own measured strength.';
+  const pmt = 'Which ACI rule checks a knee punching through the hull bottom. aci_22_6 = reinforced slab (mesh in the wall). plain_14_5 = plain (unreinforced) concrete, more conservative.';
+  const pkt = 'How many knees carry one paddler\'s weight. 1 = all on one knee (safe). 2 = kneeling on both knees (realistic), split by the knee split below.';
   const pair = ([k, label, unit, t]) => {
     const i = n => `<input type="number" id="shape.${k}.${n}" title="${t} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
     return `<div class="row tri"><label title="${t}">${label} ${tip(t)}</label>${i(0)}${i(1)}<span class="unit">${unit}</span><span class="hint" id="shape.${k}.hint"></span></div>`;
@@ -153,7 +166,12 @@ function buildForm() {
     <fieldset><legend>${SECTIONS.crew}</legend><div id="cases"></div><button type="button" id="addcase">Add load case</button></fieldset>
     <fieldset><legend>${SECTIONS.material}</legend>
       <div class="row"><label title="${mt}" for="material.mix_data">Mix data file ${tip(mt)}</label><input id="material.mix_data" title="${mt}" style="flex:1"></div>
+      <div class="row"><label title="${smt}" for="material.strength_model">Strength model ${tip(smt)}</label><select id="material.strength_model" title="${smt}"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select></div>
       ${FIELDS.material.map(f => numRow('material', f)).join('')}</fieldset>
+    <fieldset><legend>${SECTIONS.punching}</legend>
+      <div class="row"><label title="${pmt}" for="punching.method">Method ${tip(pmt)}</label><select id="punching.method" title="${pmt}"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select></div>
+      <div class="row"><label title="${pkt}" for="punching.knees">Knees per paddler ${tip(pkt)}</label><select id="punching.knees" title="${pkt}"><option value="1">1 (all weight on one knee)</option><option value="2">2 (weight shared)</option></select></div>
+      ${PUNCH.map(f => numRow('punching', f)).join('')}</fieldset>
     <fieldset><legend>${SECTIONS.search}</legend>${FIELDS.search.map(triRow).join('')}</fieldset>
     <fieldset><legend>${SECTIONS.gates}</legend>${FIELDS.gates.map(f => numRow('gates', f)).join('')}</fieldset>
     <fieldset><legend>${SECTIONS.stability}</legend>${FIELDS.stability.map(f => numRow('stability', f)).join('')}</fieldset>
@@ -183,6 +201,11 @@ function fillForm(p, hulls) {
   if (p.hull.file) sel.value = p.hull.file;
   $('material.mix_data').value = p.material.mix_data;
   $('objective.kind').value = p.objective.kind;
+  $('material.strength_model').value = p.material.strength_model || 'fit';
+  const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0, d_over_t: 0.5 };
+  $('punching.method').value = pu.method; $('punching.knees').value = String(pu.knees);
+  for (const [k] of PUNCH) $(`punching.${k}`).value = pu[k];
+  if (p.hull.flare_deg === undefined) p.hull.flare_deg = 0;
   const ss = p.shape_search;
   for (const [k, , , , d] of SHAPE) for (const n of [0, 1]) $(`shape.${k}.${n}`).value = ss ? ss[k][n] : d[n];
   for (const [k, , , d] of SHAPE_INT) $(`shape.${k}`).value = ss ? ss[k] : d;
@@ -201,7 +224,7 @@ function formToml() {
   const int = id => { const n = Number(g(id)); if (g(id) === '' || !Number.isInteger(n) || n < 0) throw new Error(id + ': not a whole number: "' + g(id) + '"'); return String(n); };
   const out = ['# generated by the JAGUAR web UI', '[hull]'];
   if (!shape) out.push(`file = ${tstr(g('hull.file'))}`);
-  out.push(`stations = ${int('hull.stations')}`, '');
+  out.push(`stations = ${int('hull.stations')}`, `flare_deg = ${fl(g('hull.flare_deg'))}`, '');
   for (const d of $('cases').children) {
     out.push('[[load_case]]', `name = ${tstr(d.querySelector('.lcname').value)}`, `weights_lb = [${list(d.querySelector('.lcw').value).map(fl).join(', ')}]`);
     const seats = list(d.querySelector('.lcs').value);
@@ -210,11 +233,15 @@ function formToml() {
   }
   for (const sec of ['material', 'search', 'gates', 'stability', 'objective']) {
     out.push(`[${sec}]`);
+    if (sec === 'material') out.push(`strength_model = ${tstr(g('material.strength_model'))}`);
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
     out.push('');
   }
+  out.push('[punching]', `method = ${tstr(g('punching.method'))}`, `knees = ${int('punching.knees')}`);
+  for (const [k] of PUNCH) out.push(`${k} = ${fl(g('punching.' + k))}`);
+  out.push('');
   if (shape) {
     out.push('[shape_search]');
     for (const [k] of SHAPE) out.push(`${k} = [${[0, 1].map(n => fl(g(`shape.${k}.${n}`))).join(', ')}]`);
@@ -268,7 +295,7 @@ function buildCanoe() {
   const nTop = 4;
   for (let k = 1; k <= nTop; k++) zs.push(hull.draft_design + (depth - hull.draft_design) * k / nTop);
   const nz = zs.length, nx = hull.x.length;
-  const hb = (i, k) => k < hull.z.length ? hull.half_breadth[i][k] : hull.half_breadth[i][hull.z.length - 1];
+  const hb = (i, k) => halfBreadth(hull, i, zs[k], flareDeg());
   const pos = [], idx = [];
   // two sides: s = +1, -1. three.js: x along length, y up, z = half breadth.
   for (const s of [1, -1]) {
@@ -286,8 +313,9 @@ function buildCanoe() {
   canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xb08850, side: THREE.DoubleSide })));
   canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x5a4020, transparent: true, opacity: 0.25 })));
   scene.add(canoe);
-  // Waterline plane only if the result carries a draft (Candidate does not; skip otherwise).
-  const draft = w && w.draft_in;
+  // Waterline plane at the loaded midship waterline (from the winner's diagrams).
+  const dg = result && result.winner && result.winner.diagrams;
+  const draft = dg && dg.waterline_in && dg.waterline_in.length ? interp(dg.x_in, dg.waterline_in, hull.length / 2) : null;
   if (typeof draft === 'number') {
     const maxB = Math.max(...hull.half_breadth.flat());
     water = new THREE.Mesh(new THREE.PlaneGeometry(hull.length * 1.3, maxB * 5),
@@ -298,38 +326,219 @@ function buildCanoe() {
   radius = hull.length * 1.1; placeCam();
 }
 
-// ---------- scatter ----------
+// ---------- plot tabs ----------
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
+let tab = 'cands';
+const AXES = {
+  weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
+  thickness: ['thickness', 'in', k => k.thickness_in], density: ['density', 'pcf', k => k.density_pcf], depth: ['depth', 'in', k => k.depth_in],
+  freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'N', k => k.drag_n],
+  length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in]};
+const axSel = { x: null, y: 'dc' };
+function buildTabs() {
+  $('tabs').innerHTML = TABS.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === tab ? 'on' : ''}">${l}</button>`).join('');
+  for (const b of $('tabs').children) b.onclick = () => { tab = b.dataset.tab; buildTabs(); drawPlot(); };
+  const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l} (${u})</option>`).join('');
+  const xa = axSel.x || (objKind === 'drag' ? 'drag' : 'weight');
+  $('plotctl').innerHTML = tab === 'cands' ? `x: <select id="axx">${opts(xa)}</select> y: <select id="axy">${opts(axSel.y)}</select>
+    <span class="hint">green = passes, grey = fails, red = analysis error, blue ring = winner</span>` : '';
+  if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
+}
+const flareDeg = () => { const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
+function interp(xs, ys, x) {
+  if (x <= xs[0]) return ys[0]; if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
+  let i = 1; while (xs[i] < x) i++;
+  const t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]); return ys[i - 1] + t * (ys[i] - ys[i - 1]);
+}
+// Half-breadth of station i at height z, with flared topsides above draft_design (same rule as hull.rs build_flared).
+function halfBreadth(h, i, z, flare) {
+  const row = h.half_breadth[i], nz = h.z.length;
+  if (z <= h.z[nz - 1]) return interp(h.z, row, z);
+  const top = row[nz - 1];
+  return top > 0 ? top + (z - h.draft_design) * Math.tan(flare * Math.PI / 180) : top;
+}
+const niceTicks = (a, b, n = 5) => {
+  const span = b - a || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 5, 10].map(m => m * mag).find(s => s >= step0);
+  const out = []; for (let v = Math.ceil(a / step) * step; v <= b + 1e-9 * span; v += step) out.push(+v.toPrecision(10)); return out;
+};
+const fmt = v => Math.abs(v) >= 1e5 || (Math.abs(v) < 1e-2 && v !== 0) ? v.toExponential(1) : String(+v.toPrecision(4));
+// Axes frame in rectangle r = {l,t,w,h}; returns {px, py}.
+function axes(ctx, r, xr, yr, xl, yl) {
+  const px = x => r.l + (x - xr[0]) / (xr[1] - xr[0] || 1) * r.w, py = y => r.t + r.h - (y - yr[0]) / (yr[1] - yr[0] || 1) * r.h;
+  ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(r.l, r.t, r.w, r.h);
+  ctx.fillStyle = '#000'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+  for (const v of niceTicks(xr[0], xr[1])) { ctx.fillText(fmt(v), px(v), r.t + r.h + 12); ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(px(v), r.t); ctx.lineTo(px(v), r.t + r.h); ctx.stroke(); }
+  ctx.fillText(xl, r.l + r.w / 2, r.t + r.h + 25);
+  ctx.textAlign = 'right';
+  if (yl) for (const v of niceTicks(yr[0], yr[1], 4)) { ctx.fillText(fmt(v), r.l - 4, py(v) + 4); ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(r.l, py(v)); ctx.lineTo(r.l + r.w, py(v)); ctx.stroke(); }
+  ctx.save(); ctx.translate(r.l - 44, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText(yl, 0, 0); ctx.restore();
+  ctx.textAlign = 'left'; ctx.strokeStyle = '#000'; ctx.strokeRect(r.l, r.t, r.w, r.h);
+  return { px, py };
+}
+const range2 = (vs, pad = 0.05) => { let a = Math.min(...vs), b = Math.max(...vs); if (a === b) { a -= 1; b += 1; } const d = (b - a) * pad; return [a - d, b + d]; };
+function legend(ctx, x, y, items) {
+  ctx.font = '11px sans-serif';
+  for (const [col, label, dash] of items) {
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 18, y - 4); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#000'; ctx.fillText(label, x + 22, y); x += 30 + ctx.measureText(label).width;
+  }
+  ctx.lineWidth = 1;
+}
+function line(ctx, a, xs, ys, col, dash) {
+  ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash || []); ctx.beginPath();
+  xs.forEach((x, i) => i ? ctx.lineTo(a.px(x), a.py(ys[i])) : ctx.moveTo(a.px(x), a.py(ys[i]))); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
+}
+function msg(ctx, W, H, t) { ctx.fillStyle = '#666'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(t, W / 2, H / 2); ctx.textAlign = 'left'; }
+const winC = () => result && result.winner && result.winner.candidate;
+const diag = () => { const d = result && result.winner && result.winner.diagrams; return d && d.x_in && d.x_in.length ? d : null; };
+function knees(ctx, a, r) {
+  const c = winC(), p = result && result.params; if (!c || !p) return;
+  const lc = (p.load_case || []).find(l => l.name === c.governing_case) || (p.load_case || [])[0]; if (!lc) return;
+  const L = c.length_in, k = lc.weights_lb.length;
+  lc.weights_lb.forEach((w, i) => {
+    const x = lc.seats_in ? lc.seats_in[i] : L * (i + 1) / (k + 1);
+    ctx.strokeStyle = '#a0a'; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#a0a'; ctx.fillText(`knee ${w} lb`, a.px(x) + 3, r.t + 11);
+  });
+}
+
 function drawPlot() {
   const c = $('plot'), ctx = c.getContext('2d'), W = c.width, H = c.height;
-  ctx.clearRect(0, 0, W, H);
-  const L = 50, R = 10, T = 15, B = 30;
-  const ok = cands.filter(k => k.verdict);
-  if (!cands.length) { ctx.fillText('no candidates yet: press Run', L, H / 2); return; }
-  const useDrag = objKind === 'drag';
-  const xv = k => useDrag ? k.drag_n : k.hull_weight_lb;
-  const shapeRun = cands.some(k => k.shape);
-  const ws = cands.map(xv).filter(v => typeof v === 'number');
-  if (!ws.length) { ctx.fillText('no ' + (useDrag ? 'drag' : 'weight') + ' values yet', L, H / 2); return; }
-  let x0 = Math.min(...ws), x1 = Math.max(...ws); if (x1 === x0) x1 = x0 + 1;
-  let y1 = Math.max(dcGate * 2, ...ok.map(k => Math.min(k.verdict.dc, dcGate * 4))) * 1.05;
-  const px = w => L + (w - x0) / (x1 - x0) * (W - L - R);
-  const py = d => T + 8 + (1 - Math.min(d, y1) / y1) * (H - T - B - 8);
-  ctx.strokeStyle = '#000'; ctx.strokeRect(L, T, W - L - R, H - T - B);
-  ctx.fillStyle = '#000';
-  ctx.fillText((useDrag ? 'drag, N' : 'hull weight, lb') + (shapeRun ? '   (each dot = one shape x wall candidate)' : ''), W / 2 - 60, H - 5); ctx.fillText(x0.toFixed(0), L, H - 18); ctx.fillText(x1.toFixed(0), W - R - 30, H - 18);
-  ctx.save(); ctx.translate(12, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('D/C', 0, 0); ctx.restore();
-  for (const v of [0, dcGate, y1]) ctx.fillText(v.toFixed(2), 18, py(v) + 4);
-  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(L, py(dcGate)); ctx.lineTo(W - R, py(dcGate)); ctx.stroke(); ctx.setLineDash([]);
-  for (const k of cands) {
-    if (typeof xv(k) !== 'number') continue;
-    let y, col;
-    if (!k.verdict) { y = T + 4; col = '#d00'; } else { y = py(k.verdict.dc); col = k.passes ? '#1a1' : '#999'; }
-    ctx.fillStyle = col; ctx.fillRect(px(xv(k)) - 2, y - 2, 4, 4);
+  ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
+}
+function plotCands(ctx, W, H) {
+  if (!cands.length) return msg(ctx, W, H, 'run an optimization first');
+  const xk = axSel.x || (objKind === 'drag' ? 'drag' : 'weight'), yk = axSel.y;
+  const [xl, xu, xf] = AXES[xk], [yl, yu, yf] = AXES[yk];
+  const pts = cands.map(k => [xf(k), yf(k), k]).filter(p => typeof p[0] === 'number' && typeof p[1] === 'number' && isFinite(p[0]) && isFinite(p[1]));
+  if (!pts.length) return msg(ctx, W, H, `no candidates have both ${xl} and ${yl}`);
+  let ys = pts.map(p => p[1]);
+  if (yk === 'dc') ys = ys.map(v => Math.min(v, dcGate * 4)).concat([0, dcGate]);
+  const r = { l: 60, t: 18, w: W - 75, h: H - 50 };
+  const a = axes(ctx, r, range2(pts.map(p => p[0])), range2(ys), `${xl}, ${xu}`, `${yl}, ${yu}`);
+  const cy = v => yk === 'dc' ? Math.min(v, dcGate * 4) : v;
+  if (yk === 'dc') { ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(r.l, a.py(dcGate)); ctx.lineTo(r.l + r.w, a.py(dcGate)); ctx.stroke(); ctx.setLineDash([]); }
+  for (const [x, y, k] of pts) { ctx.fillStyle = !k.verdict ? '#d00' : k.passes ? '#1a1' : '#999'; ctx.fillRect(a.px(x) - 2, a.py(cy(y)) - 2, 4, 4); }
+  const w = winC();
+  if (w && typeof xf(w) === 'number' && typeof yf(w) === 'number') { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a.px(xf(w)), a.py(cy(yf(w))), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
+  if (yk === 'dc') legend(ctx, r.l + 8, r.t + 14, [['#c00', `D/C gate ${dcGate}`, [6, 4]]]);
+}
+function plotHull(ctx, W, H) {
+  const d = diag(); if (!d) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const h2 = (H - 30) / 2 - 20;
+  const r1 = { l: 70, t: 14, w: W - 85, h: h2 }, r2 = { l: 70, t: 14 + h2 + 30, w: W - 85, h: h2 };
+  const xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
+  const a1 = axes(ctx, r1, xr, range2(d.shear_lb.concat([0])), '', 'shear, lb');
+  line(ctx, a1, d.x_in, d.shear_lb, '#06c'); knees(ctx, a1, r1);
+  const a2 = axes(ctx, r2, xr, range2(d.moment_lbin.concat([0])), 'x from bow, in', 'moment, lb*in');
+  line(ctx, a2, d.x_in, d.moment_lbin, '#c60'); knees(ctx, a2, r2);
+  legend(ctx, r1.l + r1.w - 330, r1.t + r1.h - 6, [['#06c', 'shear V(x)'], ['#c60', 'moment M(x) (+ = sagging)'], ['#a0a', 'knee', [2, 3]]]);
+}
+function plotStress(ctx, W, H) {
+  const d = diag(); if (!d) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const h2 = (H - 30) / 2 - 20, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
+  const r1 = { l: 70, t: 14, w: W - 85, h: h2 }, r2 = { l: 70, t: 14 + h2 + 30, w: W - 85, h: h2 };
+  const a1 = axes(ctx, r1, xr, [0, Math.max(d.tension_allow_psi, ...d.tension_psi) * 1.1], '', 'tension stress, psi');
+  line(ctx, a1, d.x_in, d.tension_psi, '#c00');
+  line(ctx, a1, xr, [d.tension_allow_psi, d.tension_allow_psi], '#080', [6, 4]); knees(ctx, a1, r1);
+  legend(ctx, r1.l + 8, r1.t + 26, [['#c00', 'bending tension |M|c/I'], ['#080', `allowable ${d.tension_allow_psi.toFixed(0)} psi`, [6, 4]]]);
+  const c = winC();
+  const a2 = axes(ctx, r2, xr, [0, (c ? c.depth_in : Math.max(...d.waterline_in)) * 1.05], 'x from bow, in', 'height above keel, in');
+  line(ctx, a2, d.x_in, d.waterline_in, '#36f');
+  if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], '#963');
+  const tr = d.waterline_in[d.waterline_in.length - 1] - d.waterline_in[0];
+  legend(ctx, r2.l + 8, r2.t + 14, [['#36f', `loaded waterline (stern - bow = ${tr.toFixed(2)} in trim)`], ['#963', 'gunwale (mold depth)']]);
+}
+function plotChecks(ctx, W, H) {
+  const c = winC(), v = c && c.verdict;
+  if (!v || !Array.isArray(v.checks) || !v.checks.length) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const ks = v.checks, n = ks.length, max = Math.max(1.0, dcGate, ...ks.map(k => isFinite(k.dc) ? k.dc : 0)) * 1.1;
+  const r = { l: 140, t: 14, w: W - 160, h: H - 50 };
+  const a = axes(ctx, r, [0, max], [0, n], 'D/C (demand / capacity)', '');
+  const bh = r.h / n;
+  ks.forEach((k, i) => {
+    const y = r.t + i * bh + bh * 0.2, dc = isFinite(k.dc) ? k.dc : max;
+    const m = dcGate - dc; ctx.fillStyle = m < 0 ? '#c33' : m < 0.15 * dcGate ? '#e90' : '#4a4';
+    ctx.fillRect(r.l, y, a.px(dc) - r.l, bh * 0.6);
+    ctx.fillStyle = '#000'; ctx.textAlign = 'right'; ctx.fillText(k.name + (k.name === v.governing_check ? ' *' : ''), r.l - 6, y + bh * 0.35); ctx.textAlign = 'left';
+    ctx.fillText(`${isFinite(k.dc) ? k.dc.toFixed(3) : 'inf'}  (${k.demand.toFixed(0)} / ${k.capacity.toFixed(0)} psi)`, a.px(dc) + 4, y + bh * 0.35);
+  });
+  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(a.px(dcGate), r.t); ctx.lineTo(a.px(dcGate), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
+  legend(ctx, r.l + 8, r.t + r.h - 6, [['#c00', `gate dc_search ${dcGate}`, [6, 4]], ['#4a4', 'margin'], ['#e90', 'within 15% of gate'], ['#c33', 'over gate']]);
+}
+function plotMap(ctx, W, H) {
+  const w = winC(); if (!w) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const sel = cands.filter(k => Math.abs(k.depth_in - w.depth_in) < 1e-9 && !k.shape === !w.shape && Math.abs(k.length_in - w.length_in) < 1e-6);
+  const ts = [...new Set(sel.map(k => k.thickness_in))].sort((a, b) => a - b), rs = [...new Set(sel.map(k => k.density_pcf))].sort((a, b) => a - b);
+  if (!ts.length || !rs.length) return msg(ctx, W, H, 'no grid candidates at the winner depth');
+  const r = { l: 70, t: 20, w: W - 240, h: H - 55 }, cw = r.w / rs.length, ch = r.h / ts.length;
+  const wts = sel.filter(k => k.passes).map(k => k.hull_weight_lb), w0 = Math.min(...wts), w1 = Math.max(...wts);
+  for (const k of sel) {
+    const i = rs.indexOf(k.density_pcf), j = ts.indexOf(k.thickness_in), x = r.l + i * cw, y = r.t + r.h - (j + 1) * ch;
+    let col;
+    if (k.passes) { const f = w1 > w0 ? (k.hull_weight_lb - w0) / (w1 - w0) : 0; col = `hsl(${120 - 70 * f},60%,${40 + 25 * f}%)`; }
+    else if (!k.verdict) col = '#d00';
+    else { const g = Math.max(0, 230 - 40 * Math.min(k.verdict.dc / dcGate - 1, 3)); col = `rgb(${g},${g},${g})`; }
+    ctx.fillStyle = col; ctx.fillRect(x, y, cw + 0.5, ch + 0.5);
+    if (cw > 34 && ch > 12) { ctx.fillStyle = k.passes ? '#fff' : '#000'; ctx.font = '10px sans-serif'; ctx.fillText(k.passes ? k.hull_weight_lb.toFixed(0) : k.verdict ? k.verdict.dc.toFixed(2) : 'err', x + 2, y + ch / 2 + 4); }
+    if (k.thickness_in === w.thickness_in && k.density_pcf === w.density_pcf) { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2); ctx.lineWidth = 1; }
   }
-  const w = result && result.winner && result.winner.candidate;
-  if (w && w.verdict && typeof xv(w) === 'number') {
-    ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(px(xv(w)), py(w.verdict.dc), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
-  }
+  ctx.strokeStyle = '#000'; ctx.strokeRect(r.l, r.t, r.w, r.h); ctx.fillStyle = '#000'; ctx.font = '11px sans-serif';
+  const every = n => Math.max(1, Math.ceil(n / 12));
+  ctx.textAlign = 'center'; rs.forEach((v, i) => { if (i % every(rs.length) === 0) ctx.fillText(v.toFixed(0), r.l + (i + 0.5) * cw, r.t + r.h + 12); });
+  ctx.fillText('density, pcf', r.l + r.w / 2, r.t + r.h + 26); ctx.textAlign = 'right';
+  ts.forEach((v, j) => { if (j % every(ts.length) === 0) ctx.fillText(v.toFixed(3), r.l - 4, r.t + r.h - (j + 0.5) * ch + 4); });
+  ctx.save(); ctx.translate(14, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('thickness, in', 0, 0); ctx.restore(); ctx.textAlign = 'left';
+  ctx.fillText(`depth ${w.depth_in} in. Cell = hull weight lb (passes) or D/C (fails).`, r.l, 12);
+  const lx = r.l + r.w + 12;
+  [['hsl(120,60%,40%)', `passes, lightest${wts.length ? ' ' + w0.toFixed(0) + ' lb' : ''}`], ['hsl(50,60%,65%)', `passes, heaviest${wts.length ? ' ' + w1.toFixed(0) + ' lb' : ''}`], ['rgb(230,230,230)', 'fails, D/C near gate'], ['rgb(110,110,110)', 'fails, D/C far over'], ['#d00', 'analysis error']]
+    .forEach(([c, l], i) => { ctx.fillStyle = c; ctx.fillRect(lx, r.t + i * 18, 12, 12); ctx.fillStyle = '#000'; ctx.fillText(l, lx + 16, r.t + i * 18 + 10); });
+  ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.strokeRect(lx, r.t + 5 * 18, 12, 12); ctx.lineWidth = 1; ctx.fillText('winner', lx + 16, r.t + 5 * 18 + 10);
+}
+function plotXsec(ctx, W, H) {
+  const w = winC(), h = result && result.winner_hull;
+  if (!w || !h) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const d = diag(), fl = flareDeg(), depth = w.depth_in, n = 5;
+  const zs = h.z.slice(); if (depth > h.draft_design) for (let k = 1; k <= 8; k++) zs.push(h.draft_design + (depth - h.draft_design) * k / 8);
+  const sts = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => f * h.length);
+  const prof = sts.map(x => {
+    let i = 1; while (i < h.x.length - 1 && h.x[i] < x) i++;
+    const t = (x - h.x[i - 1]) / (h.x[i] - h.x[i - 1]);
+    return zs.map(z => (1 - t) * halfBreadth(h, i - 1, z, fl) + t * halfBreadth(h, i, z, fl));
+  });
+  const ymax = Math.max(...prof.flat()) * 1.1, pw = (W - 20) / n;
+  const sc = Math.min((pw - 30) / (2 * ymax), (H - 70) / (depth * 1.1));
+  ctx.fillStyle = '#000'; ctx.fillText(`Winner hull sections, bow to stern, flare ${fl} deg, depth ${depth} in, wall ${w.thickness_in} in (same scale; x = station from bow)`, 10, 12);
+  prof.forEach((yb, s) => {
+    const cx = 10 + pw * (s + 0.5), base = Math.min(H - 35, (H + depth * sc) / 2 + 10), X = y => cx + y * sc, Y = z => base - z * sc;
+    ctx.strokeStyle = '#ddd'; ctx.beginPath(); ctx.moveTo(cx, Y(0) + 4); ctx.lineTo(cx, Y(depth) - 4); ctx.stroke();
+    if (d) { const wl = interp(d.x_in, d.waterline_in, sts[s]); ctx.strokeStyle = '#36f'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(-ymax), Y(wl)); ctx.lineTo(X(ymax), Y(wl)); ctx.stroke(); }
+    ctx.strokeStyle = '#963'; ctx.lineWidth = Math.max(1.5, w.thickness_in * sc); ctx.beginPath();
+    for (let k = zs.length - 1; k >= 0; k--) ctx.lineTo(X(-yb[k]), Y(zs[k]));
+    for (let k = 0; k < zs.length; k++) ctx.lineTo(X(yb[k]), Y(zs[k]));
+    ctx.stroke(); ctx.lineWidth = 1;
+    ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.fillText(`x = ${sts[s].toFixed(0)} in`, cx, H - 18);
+    ctx.fillText(`gunwale ${(2 * yb[yb.length - 1]).toFixed(1)} in`, cx, H - 5); ctx.textAlign = 'left';
+  });
+  legend(ctx, W - 300, 28, [['#963', 'hull wall'], ['#36f', 'loaded waterline']]);
+}
+function plotShape(ctx, W, H) {
+  const sh = cands.filter(k => k.shape);
+  if (!sh.length) return msg(ctx, W, H, 'run a shape search first (Hull: Optimize hull shape)');
+  const score = k => objKind === 'drag' ? k.drag_n : k.hull_weight_lb;
+  let best = Infinity; const bx = [], by = [];
+  sh.forEach((k, i) => { if (k.passes && typeof score(k) === 'number' && score(k) < best) best = score(k); if (isFinite(best)) { bx.push(i + 1); by.push(best); } });
+  const hw = (W - 40) / 2, r1 = { l: 70, t: 14, w: hw - 70, h: H - 50 }, r2 = { l: hw + 90, t: 14, w: hw - 70, h: H - 50 };
+  const ul = objKind === 'drag' ? 'best drag, N' : 'best hull weight, lb';
+  if (bx.length) { const a = axes(ctx, r1, [1, Math.max(2, sh.length)], range2(by), 'shape evaluation #', ul); line(ctx, a, bx, by, '#06c'); legend(ctx, r1.l + 8, r1.t + 14, [['#06c', 'best passing so far']]); }
+  else { ctx.strokeRect(r1.l, r1.t, r1.w, r1.h); ctx.fillText('no passing shape yet', r1.l + 10, r1.t + 20); }
+  const a2 = axes(ctx, r2, range2(sh.map(k => k.length_in)), range2(sh.map(k => k.beam_in)), 'length, in', 'beam, in');
+  for (const k of sh) { ctx.fillStyle = !k.verdict ? '#d00' : k.passes ? '#1a1' : '#999'; ctx.beginPath(); ctx.arc(a2.px(k.length_in), a2.py(k.beam_in), 3, 0, 7); ctx.fill(); }
+  const w = winC(); if (w) { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a2.px(w.length_in), a2.py(w.beam_in), 8, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
+  ctx.fillStyle = '#000'; ctx.fillText('green = passes, grey = fails, red = error, ring = winner', r2.l + 6, r2.t + 14);
 }
 
 // ---------- winner box ----------
@@ -359,6 +568,8 @@ function showWinner() {
     ${typeof c.drag_n === 'number' ? `<tr><td>drag</td><td>${f(c.drag_n, 1)} N</td></tr>` : ''}
     <tr><td>thickness</td><td>${f(c.thickness_in, 3)} in</td></tr>
     <tr><td>density</td><td>${f(c.density_pcf, 1)} pcf</td></tr>
+    ${c.mix ? `<tr><td>mix</td><td>${esc(c.mix)}</td></tr>` : ''}
+    <tr><td>side flare</td><td>${f(flareDeg(), 1)} deg</td></tr>
     <tr><td>depth</td><td>${f(c.depth_in, 2)} in</td></tr>
     <tr><td>hull weight</td><td>${f(c.hull_weight_lb, 1)} lb</td></tr>
     <tr><td>D/C (search)</td><td>${f(v.dc, 3)} (${c.governing_case || ''})</td></tr>
@@ -402,7 +613,7 @@ async function loadResult() {
       setHull(result.winner_hull, 'winner hull: ' + (result.winner_hull.name || '') + (wc ? ` at ${wc.depth_in.toFixed(1)} in depth` : ''));
     }
   }
-  showWinner(); buildCanoe(); drawPlot();
+  showWinner(); buildCanoe(); buildTabs(); drawPlot();
 }
 async function poll() {
   const r = await fetch('/api/status?since=' + cands.length);
@@ -437,7 +648,7 @@ $('run').onclick = async () => {
   buildForm();
   const hulls = await (await fetch('/api/hulls')).json();
   fillForm(p.params, hulls);
-  resize();
+  buildTabs(); resize();
   loadMix();
   await loadHull();
   await loadResult();
