@@ -22,7 +22,7 @@ graph LR
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |
 | 2 | **T3** equilibrium | `equilibrium.rs` | `golden_weight_and_draft` un-ignored and passing; Err on a sinking hull (test) |
 | 3 | **T4** checks | `check.rs` | `golden_bending_dc` un-ignored and passing; capacity <= 0 gives fail (test) |
-| 4 | **T5** optimizer | `optimize.rs` | `jaguar run examples/canoe.toml` finds a verified winner (expected, from the prototype physics: t=0.25 in, 70 pcf, depth 12 in, ~84.8 lb, D/C ~0.786, verify ~0.783, min freeboard ~6.42 in); two runs give identical result.json (test) |
+| 4 | **T5** optimizer | `optimize.rs` | `jaguar run examples/canoe.toml` finds a verified winner (expected after T9 strength checks: t=0.375 in, 68 pcf, depth 12 in, ~123.5 lb, D/C ~0.907 governed by punching, verify ~0.907, min freeboard ~6.14 in); two runs give identical result.json (test) |
 | 5 | **T6** report | `report.rs` | summary <= 40 lines, shows winner, VERIFIED flag, grid-edge warning |
 | 5 | **T7b** serve | `serve.rs` | API per `serve.rs` docs; Run from browser streams live candidates. DONE (verified in headless Chromium) |
 | 5 | **T8** performance | `section.rs` `equilibrium.rs` (perf only) | default example < 1 s release; golden still passes; add `benches/` or a timed test |

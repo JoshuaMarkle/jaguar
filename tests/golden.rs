@@ -64,8 +64,9 @@ fn golden_bending_dc() {
             fc_intercept_psi: -9566.0,
             lambda_lightweight: 0.75,
         };
-        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat);
-        assert_rel("dc", v.dc, f(o, "dc"), tol);
+        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, 175.0 * 1.2);
+        let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();
+        assert_rel("dc", bt.dc, f(o, "dc"), tol);
     }
 }
 

@@ -121,6 +121,15 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 fmt_opt(v.map(|v| v.freeboard_in), 2),
                 c.governing_case.as_deref().unwrap_or("-")
             ));
+            if let Some(v) = v {
+                for k in &v.checks {
+                    let mark = if k.name == v.governing_check { "  <- governs" } else { "" };
+                    out.push(format!(
+                        "        {:<20} demand {:>8.1} psi  capacity {:>8.1} psi  D/C {:.3}{mark}",
+                        k.name, k.demand, k.capacity, k.dc
+                    ));
+                }
+            }
             if w.verified {
                 out.push(format!(
                     "        VERIFIED at {} stations (D/C {:.3})",

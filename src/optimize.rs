@@ -171,6 +171,8 @@ fn evaluate(params: &Params, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> C
     let length = grid.x[grid.x.len() - 1] - grid.x[0];
     let mut worst: Option<(Verdict, String)> = None;
     for case in &params.load_cases {
+        let max_paddler =
+            case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
         let k = case.weights_lb.len();
         let crew: Vec<CrewLoad> = case
             .weights_lb
@@ -185,13 +187,14 @@ fn evaluate(params: &Params, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> C
             })
             .collect();
         let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in) {
-            Ok(loads) => check(grid, sec, &loads, rho, mat),
+            Ok(loads) => check(grid, sec, &loads, rho, mat, max_paddler),
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));
                 return c;
             }
         };
-        if !v.dc.is_finite() || !v.freeboard_in.is_finite() {
+        // +inf D/C is a legitimate FAIL (a check had no capacity); NaN is a bug.
+        if v.dc.is_nan() || !v.freeboard_in.is_finite() {
             c.error = Some(format!("{}: non-finite check result", case.name));
             return c;
         }
