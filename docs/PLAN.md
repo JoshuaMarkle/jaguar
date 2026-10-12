@@ -16,7 +16,7 @@ graph LR
 
 | Wave | Task | Owns | Acceptance |
 |---|---|---|---|
-| - | **Status** | | T1-T15 DONE. Shape optimization (docs/SHAPE_PLAN.md) shipped: GM gate + Michell/ITTC drag (T12), outer shape search (T13), web shape mode (T14), report/`jaguar mix`/docs (T15); strength from lab CSV (src/mix.rs). Open: knee punching uses the full paddler on one knee (governs nearly every design); crew_cg_in and gm_min_in are assumptions; only 3 lab points. |
+| - | **Status** | | T1-T18 DONE. Latest: punching per ACI 318-19 22.6.5.2 with two-knee model (T16, docs/PUNCHING.md), tested-mix strength mode (T17), web plot tabs (T18), wall flare. Open: knee load test, more lab mixes, measured crew CG, ASCE length bounds, drag reference. |
 | 0 | **T1** params + hull format + Michlet import | `params.rs` `hull.rs` | DONE (unit tests) |
 | 1 | **T2** section properties | `section.rs` | unit tests: rectangle-ish box section vs hand calc; positive A, I everywhere off the tips |
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |

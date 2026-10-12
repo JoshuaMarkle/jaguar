@@ -51,8 +51,8 @@ Topsides above `draft_design` are extruded vertically to the mold depth, which i
    Integrate q -> V -> M (trapezoid). Free-free closure: |V(L)| <= 1e-3 W, |M(L)| <= 1e-3 W L.
 4. **Checks** (all must pass; governing D/C = max; details in `src/check.rs`):
    bending tension (below), bending compression vs 0.85 f'c/FS, shell shear VQ/(I*2t) vs
-   2 lambda sqrt(f'c)/FS, and knee punching shear (ACI 318-19 22.6.5.2, min of three v_c)
-   for the heaviest paddler.
+   2 lambda sqrt(f'c)/FS, and knee punching shear for the heaviest paddler, ACI 318-19 Table 22.6.5.2
+   (demand on b0*d, round knee, one or two knees) or plain Table 14.5.5.1; see docs/PUNCHING.md.
    **Material** (`src/mix.rs`, `docs/MIX_DATA.md`): least-squares fit of FINAL split tensile
    strength vs density from `material.mix_data` (lab rows scaled by 1/fraction_of_final).
    Flexural = flex_over_split * f_sp; f'c = (f_sp/6.7)^2 (ACI f_sp = 6.7 sqrt f'c). Densities are
