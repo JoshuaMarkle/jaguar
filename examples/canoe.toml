@@ -25,6 +25,7 @@ strength_model = "fit"          # "fit" = any density on the lab line; "tested_m
 mix_data = "../data/mix_tests.csv"
 flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
 density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
+method = "asd"            # "asd": capacity / factor_of_safety. "lrfd": 1.2D+1.6L & 0.9D+1.6L, phi 0.60 (0.75 aci_22_6 punching). lrfd -> 129.3 lb here
 factor_of_safety = 1.5
 dynamic_load_factor = 1.2
 knee_patch_in = 3.0       # never 0: a point load does not converge

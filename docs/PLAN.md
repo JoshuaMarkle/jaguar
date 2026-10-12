@@ -38,7 +38,7 @@ against the code on 2026-10-12. Comparison with the legacy report: `data/review_
 | Race cases 4/3/2 entered separately | **engine done** (`[[load_case]]`), examples use 2M only (A2) |
 | Graphs: M and V all cases with toggles | done (A3): all cases, toggles |
 | Graph: utilization along length | done (A3): D/C(x) per case |
-| LRFD 1.2 / 1.6 | open (B1) |
+| LRFD 1.2 / 1.6 | done (T46, B1) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | done (T45, B3) |
 | Air pockets / swamped flotation | done (T43, gate + result; STEP export of pockets open) |
@@ -82,8 +82,8 @@ user's approval and a SPEC update before starting.
 
 ### B. Physics additions (need approval)
 
-- **B1. LRFD option.** `material.method = "asd"|"lrfd"`: envelope 1.2D+1.6L and 0.9D+1.6L, phi on
-  capacity instead of FS (never both). Expect heavier designs (crew factor ~2.6 vs 1.8 now).
+- **B1. LRFD option.** DONE (T46): `material.method = "asd"|"lrfd"`. Example 105.3 -> 129.3 lb
+  under lrfd (punching, phi 0.75).
 - **B2. Auto seat solver.** Default: per case, seats that minimize the wall that passes, then the
   check enveloped over +/- `seat_variance_in`. Manual `seats_in` overrides. Can move hogging ~40%.
 - **B3. Kupfer-Gerstle biaxial check.** DONE (T45): `biaxial` check, bending fibre + peak shear.

@@ -58,6 +58,7 @@ fn golden_bending_dc() {
             mix_data: "unused".into(),
             flex_over_split: 1.0,
             density_extrapolation_pcf: 0.0,
+            method: jaguar::params::DesignMethod::Asd,
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),

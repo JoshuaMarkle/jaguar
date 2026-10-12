@@ -58,8 +58,11 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
    vs density from the lab CSV. Flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
    Densities are searched only within `density_extrapolation_pcf` of the tested range, or only at
-   tested mixes with `strength_model = "tested_mixes"`. Every capacity is divided by
-   `factor_of_safety`.
+   tested mixes with `strength_model = "tested_mixes"`. `material.method = "asd"` (default): service
+   loads, every capacity divided by `factor_of_safety`. `"lrfd"`: each load case is re-solved for
+   1.2D+1.6L and 0.9D+1.6L (D = self weight, L = crew x dynamic factor, buoyancy balancing the
+   factored weight) and the worse combination governs; capacities x phi (0.60 plain concrete, 0.75
+   for `aci_22_6` punching), never both. Freeboard, GM and drag always use service loads.
 5. **Checks** (`src/check.rs`; governing D/C = max):
    * bending tension: |M| c / I at the tension fibre (bottom, c = zbar, when sagging M > 0; top,
      c = D - zbar, when hogging), vs flexural strength

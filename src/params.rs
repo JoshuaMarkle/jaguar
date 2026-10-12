@@ -91,12 +91,37 @@ pub struct Material {
     /// data it is a guess, so densities outside
     /// [min tested - this, max tested + this] are not searched.
     pub density_extrapolation_pcf: f64,
+    /// "asd" (default): service loads, every capacity / `factor_of_safety`.
+    /// "lrfd": strength envelope 1.2D+1.6L and 0.9D+1.6L (L = crew x
+    /// dynamic factor), capacity x phi (ACI 318-19 21.2.1: 0.60 plain
+    /// concrete, 0.75 for `aci_22_6` punching); `factor_of_safety` unused.
+    /// Freeboard, GM and drag always use service loads.
+    #[serde(default)]
+    pub method: DesignMethod,
     pub factor_of_safety: f64,
     /// Multiplier on crew weight for paddling impact.
     pub dynamic_load_factor: f64,
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging.
     pub knee_patch_in: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignMethod {
+    #[default]
+    Asd,
+    Lrfd,
+}
+
+impl DesignMethod {
+    /// (dead, live) load factors of every strength combination.
+    pub fn combos(self) -> &'static [(f64, f64)] {
+        match self {
+            DesignMethod::Asd => &[(1.0, 1.0)],
+            DesignMethod::Lrfd => &[(1.2, 1.6), (0.9, 1.6)],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]

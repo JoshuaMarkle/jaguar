@@ -306,6 +306,7 @@ function buildForm() {
     + section('material',
       row('material.mix_data', 'Mix data file', mt, '<input id="material.mix_data">')
       + row('material.strength_model', 'Strength model', smt, '<select id="material.strength_model"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select>')
+      + row('material.method', 'Design method', 'asd: strength divided by the factor of safety. lrfd: crew x 1.6, self weight x 1.2 or 0.9, strength x phi (0.60, punching 0.75). LRFD gives a heavier wall.', '<select id="material.method"><option value="asd">asd (factor of safety)</option><option value="lrfd">lrfd (load + resistance factors)</option></select>')
       + FIELDS.material.map(f => numRow('material', f)).join(''))
     + section('punching',
       row('punching.method', 'Method', pmt, '<select id="punching.method"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select>')
@@ -346,6 +347,7 @@ function fillForm(p, hulls) {
   $('material.mix_data').value = p.material.mix_data;
   $('objective.kind').value = p.objective.kind || 'drag';
   $('material.strength_model').value = p.material.strength_model || 'fit';
+  $('material.method').value = p.material.method || 'asd';
   const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0, d_over_t: 0.5 };
   $('punching.method').value = pu.method; $('punching.knees').value = String(pu.knees);
   for (const [k] of PUNCH) $(`punching.${k}`).value = pu[k];
@@ -378,6 +380,7 @@ function formToml() {
   for (const sec of ['material', 'search', 'gates', 'stability', 'objective']) {
     out.push(`[${sec}]`);
     if (sec === 'material') out.push(`strength_model = ${tstr(g('material.strength_model'))}`);
+    if (sec === 'material') out.push(`method = ${tstr(g('material.method'))}`);
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);

@@ -222,3 +222,33 @@ fn winner_has_diagrams_for_every_load_case() {
     let gk = w.cases.iter().find(|k| k.name == g).unwrap();
     assert_eq!(gk.diagrams.moment_lbin, w.diagrams.moment_lbin);
 }
+
+/// B1: LRFD factors the loads (1.2D+1.6L, 0.9D+1.6L) and uses phi on capacity.
+/// Punching (local, no equilibrium) scales exactly: demand x 1.6 and capacity
+/// x 0.75 instead of / 1.5, so the D/C of the same wall is x 1.6 / (0.75 * 1.5).
+#[test]
+fn lrfd_punching_scales_and_is_heavier() {
+    let (mut p, h) = example();
+    let asd = optimize::run(&p, &h).unwrap().winner.unwrap();
+    p.material.method = jaguar::params::DesignMethod::Lrfd;
+    let grid = jaguar::hull::Grid::build(&h, asd.candidate.depth_in, p.hull.stations);
+    let sec = jaguar::section::sections(&grid, asd.candidate.thickness_in);
+    let fit = jaguar::mix::StrengthFit::load(&p.material.mix_data, p.material.flex_over_split).unwrap();
+    let rho = asd.candidate.density_pcf;
+    let pdc = |v: &jaguar::check::Verdict| v.checks.iter().find(|c| c.name == "punching").unwrap().dc;
+    let asd_v = asd.candidate.verdict.as_ref().unwrap();
+    for lc in &p.load_cases {
+        let seats = optimize::resolved_seats(lc, &grid);
+        let e = optimize::eval_case(&p, &fit, &grid, &sec, rho, lc, &seats).unwrap();
+        // Service draft is unchanged by the method; freeboard uses service loads.
+        assert!(e.service.draft_in > 0.0 && e.verdict.freeboard_in.is_finite());
+        if Some(&lc.name) == asd.candidate.governing_case.as_ref() {
+            let want = 1.6 / (0.75 * 1.5);
+            assert!((pdc(&e.verdict) / pdc(asd_v) - want).abs() < 1e-9, "{}", pdc(&e.verdict));
+        }
+    }
+    let lrfd = optimize::run(&p, &h).unwrap().winner;
+    if let Some(w) = lrfd {
+        assert!(w.candidate.hull_weight_lb > asd.candidate.hull_weight_lb);
+    }
+}

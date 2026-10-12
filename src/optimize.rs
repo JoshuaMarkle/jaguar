@@ -12,12 +12,12 @@
 //!
 //! Must stay deterministic: same canoe.toml => byte-identical result.json.
 
-use crate::check::{Verdict, check, first_moment_below};
-use crate::equilibrium::{CrewLoad, solve};
+use crate::check::{Verdict, check, first_moment_below, freeboard};
+use crate::equilibrium::{CrewLoad, Loads, solve};
 use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
 use crate::mix::StrengthFit;
-use crate::params::{ObjectiveKind, Params, StrengthModel, range};
+use crate::params::{LoadCase, ObjectiveKind, Params, StrengthModel, range};
 use crate::resistance::{resistance, weighted_resistance};
 use crate::section::{Sections, sections};
 use anyhow::Result;
@@ -326,12 +326,6 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     })
 }
 
-/// Allowable bending tension (flexural capacity / FS) at density `rho`.
-/// Isolated so strength-API changes touch one place.
-fn tension_allow(params: &Params, fit: &StrengthFit, rho: f64) -> f64 {
-    fit.flexural_psi(rho) / params.material.factor_of_safety
-}
-
 /// Resolved knee x per paddler for `case`: `seats_in`, or evenly spaced.
 pub fn resolved_seats(case: &crate::params::LoadCase, grid: &Grid) -> Vec<f64> {
     let n = grid.nx();
@@ -368,6 +362,58 @@ pub fn all_case_diagrams(
         .collect()
 }
 
+/// One load case at fixed seats: service equilibrium (draft, trim, GM,
+/// freeboard) and the governing strength combination (`material.method`).
+pub struct CaseEval {
+    pub service: Loads,
+    /// Loads of the combination with the highest D/C (= service for asd).
+    pub strength: Loads,
+    /// Verdict of that combination; freeboard from the service loads.
+    pub verdict: Verdict,
+}
+
+/// Evaluate `case` with paddlers at `seats`. LRFD: each combination
+/// (dead, live) re-solves equilibrium with self weight x dead and crew
+/// (incl. dynamic factor) x live; buoyancy balances the factored weight.
+pub fn eval_case(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    case: &LoadCase,
+    seats: &[f64],
+) -> Result<CaseEval> {
+    let mat = &params.material;
+    let crew = |lf: f64| -> Vec<CrewLoad> {
+        seats
+            .iter()
+            .zip(&case.weights_lb)
+            .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor * lf })
+            .collect()
+    };
+    let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
+    let service = solve(grid, sec, rho, &crew(1.0), patch, cg)?;
+    let fb = freeboard(grid, &service);
+    let max_paddler =
+        case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
+    let mut best: Option<(Loads, Verdict)> = None;
+    for &(dead, live) in mat.method.combos() {
+        let loads = if (dead, live) == (1.0, 1.0) {
+            service.clone()
+        } else {
+            solve(grid, sec, rho * dead, &crew(live), patch, cg)?
+        };
+        let mut v = check(grid, sec, &loads, rho, mat, fit, max_paddler * live, &params.punching);
+        v.freeboard_in = fb;
+        if best.as_ref().is_none_or(|(_, b)| v.dc.is_nan() || v.dc > b.dc) {
+            best = Some((loads, v));
+        }
+    }
+    let (strength, verdict) = best.ok_or_else(|| anyhow::anyhow!("no load combinations"))?;
+    Ok(CaseEval { service, strength, verdict })
+}
+
 /// Full per-case diagrams and per-station D/C (same masks and formulas as check.rs).
 pub fn case_diagrams(
     params: &Params,
@@ -383,18 +429,10 @@ pub fn case_diagrams(
         .iter()
         .find(|c| c.name == case_name)
         .ok_or_else(|| anyhow::anyhow!("unknown load case {case_name}"))?;
-    let mat = &params.material;
     let n = grid.nx();
     let seats = resolved_seats(case, grid);
-    let crew: Vec<CrewLoad> = seats
-        .iter()
-        .zip(&case.weights_lb)
-        .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor })
-        .collect();
-    let loads = solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in)?;
-    let max_paddler =
-        case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
-    let verdict = check(grid, sec, &loads, rho, mat, fit, max_paddler, &params.punching);
+    let CaseEval { service, strength: loads, verdict } =
+        eval_case(params, fit, grid, sec, rho, case, &seats)?;
     let cap = |name: &str| verdict.checks.iter().find(|c| c.name == name).map_or(f64::NAN, |c| c.capacity);
     let (ft_cap, fc_cap, v_cap) = (cap("bending_tension"), cap("bending_compression"), cap("shear"));
     let dc = |s: f64, c: f64| if c.is_finite() && c > 0.0 { s / c } else { f64::INFINITY };
@@ -403,9 +441,9 @@ pub fn case_diagrams(
         name: case.name.clone(),
         seats_in: seats,
         weights_lb: case.weights_lb.clone(),
-        draft_in: Some(loads.draft_in),
-        trim_in: Some(loads.trim_in),
-        gm_in: Some(loads.gm_in),
+        draft_in: Some(service.draft_in),
+        trim_in: Some(service.trim_in),
+        gm_in: Some(service.gm_in),
         freeboard_in: Some(verdict.freeboard_in),
         compression_allow_psi: Some(fc_cap),
         shear_allow_psi: Some(v_cap),
@@ -441,14 +479,14 @@ pub fn case_diagrams(
     let waterline_in = grid
         .x
         .iter()
-        .map(|&x| (loads.draft_in + loads.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
+        .map(|&x| (service.draft_in + service.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
         .collect();
     out.diagrams = Diagrams {
         x_in: grid.x.clone(),
         shear_lb: loads.shear,
         moment_lbin: loads.moment,
         tension_psi,
-        tension_allow_psi: tension_allow(params, fit, rho),
+        tension_allow_psi: ft_cap,
         area_in2: sec.area.clone(),
         inertia_in4: sec.inertia.clone(),
         waterline_in,
@@ -508,36 +546,20 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         error: None,
         passes: false,
     };
-    let mat = &params.material;
-    let length = grid.x[grid.x.len() - 1] - grid.x[0];
     let mut worst: Option<(Verdict, String)> = None;
     let mut gm = f64::INFINITY;
     // (crew lb, midship draft) of the heaviest load case, for drag
     let mut heaviest: Option<(f64, f64)> = None;
     for case in &params.load_cases {
-        let max_paddler =
-            case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
-        let k = case.weights_lb.len();
-        let crew: Vec<CrewLoad> = case
-            .weights_lb
-            .iter()
-            .enumerate()
-            .map(|(i, &w)| CrewLoad {
-                x_in: match &case.seats_in {
-                    Some(s) => s[i],
-                    None => grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64,
-                },
-                lb: w * mat.dynamic_load_factor,
-            })
-            .collect();
-        let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in) {
-            Ok(loads) => {
+        let seats = resolved_seats(case, grid);
+        let v = match eval_case(params, fit, grid, sec, rho, case, &seats) {
+            Ok(CaseEval { service: loads, verdict, .. }) => {
                 gm = gm.min(loads.gm_in);
                 let lb: f64 = case.weights_lb.iter().sum();
                 if heaviest.is_none_or(|(h, _)| lb > h) {
                     heaviest = Some((lb, loads.draft_in));
                 }
-                check(grid, sec, &loads, rho, mat, fit, max_paddler, &params.punching)
+                verdict
             }
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));

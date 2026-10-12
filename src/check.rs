@@ -33,6 +33,9 @@
 //!
 //! f'c <= 0 or capacity <= 0 makes that check dc = +inf; optimize treats a
 //! +inf verdict as a FAILED candidate (verdict kept), NaN as an error.
+//! Capacities above are written for `method = "asd"` (/ FS). With "lrfd"
+//! every capacity is x phi instead (0.60, or 0.75 for `aci_22_6` punching)
+//! and the caller passes factored loads.
 //! Order of `checks`: bending_tension, bending_compression, shear, punching, biaxial.
 //! A check that cannot be computed FAILS. Never
 //! default, never skip.
@@ -40,7 +43,7 @@
 use crate::equilibrium::Loads;
 use crate::hull::Grid;
 use crate::mix::StrengthFit;
-use crate::params::{Material, Punching, PunchingMethod};
+use crate::params::{DesignMethod, Material, Punching, PunchingMethod};
 use crate::section::Sections;
 use serde::Serialize;
 
@@ -202,6 +205,15 @@ pub fn kupfer_dc(st: f64, sc: f64, tau: f64, ft: f64, fc: f64) -> f64 {
     one(st).max(one(-sc))
 }
 
+/// Minimum freeboard over the stations, in: depth - local draft.
+pub fn freeboard(grid: &Grid, loads: &Loads) -> f64 {
+    let l = grid.x[grid.nx() - 1];
+    grid.x
+        .iter()
+        .map(|xi| grid.depth - (loads.draft_in + loads.trim_in * (xi - l / 2.0) / l))
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> CheckResult {
     let dc = if capacity.is_nan() || capacity <= 0.0 || !capacity.is_finite() || !demand.is_finite() {
         f64::INFINITY
@@ -223,6 +235,12 @@ pub fn check(
     pu: &Punching,
 ) -> Verdict {
     let fs = mat.factor_of_safety;
+    // Capacity multiplier: 1/FS (asd) or phi (lrfd, ACI 318-19 21.2.1:
+    // 0.60 plain concrete, 0.75 two-way shear of a reinforced slab).
+    let (k, k_punch) = match mat.method {
+        DesignMethod::Asd => (1.0 / fs, 1.0 / fs),
+        DesignMethod::Lrfd => (0.60, if pu.method == PunchingMethod::Aci22_6 { 0.75 } else { 0.60 }),
+    };
     let fc = fit.fc_psi(rho);
     // f'c comes from the team's own lightweight-mix breaks via f_ct = 6.7 sqrt(f'c),
     // so the lightweight reduction is already in the data: lambda = 1 here.
@@ -232,8 +250,8 @@ pub fn check(
     let (mut st, mut xt) = (f64::NEG_INFINITY, f64::NAN);
     let (mut sc, mut xc) = (f64::NEG_INFINITY, f64::NAN);
     let (mut tau, mut xs) = (f64::NEG_INFINITY, f64::NAN);
-    let ft_cap = fit.flexural_psi(rho) / fs;
-    let fc_kupfer = if fc > 0.0 { fc / fs } else { f64::NAN };
+    let ft_cap = fit.flexural_psi(rho) * k;
+    let fc_kupfer = if fc > 0.0 { fc * k } else { f64::NAN };
     let (mut kz, mut xk) = (f64::NEG_INFINITY, f64::NAN);
     for i in 0..grid.nx() {
         let ii = sec.inertia[i];
@@ -262,9 +280,9 @@ pub fn check(
         }
     }
     let (fc_cap, v_cap) =
-        if fc > 0.0 { (0.85 * fc / fs, 2.0 * lambda * fc.sqrt() / fs) } else { (f64::NAN, f64::NAN) };
+        if fc > 0.0 { (0.85 * fc * k, 2.0 * lambda * fc.sqrt() * k) } else { (f64::NAN, f64::NAN) };
     let pc = punching_calc(max_paddler_lb, t, fc, lambda, mat.knee_patch_in, pu);
-    let (vu, p_cap) = (pc.v_u, pc.v_nominal / fs);
+    let (vu, p_cap) = (pc.v_u, pc.v_nominal * k_punch);
     let checks = vec![
         result("bending_tension", st, ft_cap, Some(xt)),
         result("bending_compression", sc, fc_cap, Some(xc)),
@@ -274,12 +292,7 @@ pub fn check(
         result("biaxial", kz, 1.0, Some(xk)),
     ];
     let gov = checks.iter().fold(&checks[0], |g, c| if c.dc > g.dc { c } else { g });
-    let l = grid.x[grid.nx() - 1];
-    let fb = grid
-        .x
-        .iter()
-        .map(|xi| grid.depth - (loads.draft_in + loads.trim_in * (xi - l / 2.0) / l))
-        .fold(f64::INFINITY, f64::min);
+    let fb = freeboard(grid, loads);
     Verdict {
         dc: gov.dc,
         governing_check: gov.name,
@@ -307,6 +320,7 @@ mod tests {
             mix_data: "unused".into(),
             flex_over_split: 1.0,
             density_extrapolation_pcf: 0.0,
+            method: DesignMethod::Asd,
             factor_of_safety: 2.0,
             dynamic_load_factor: 1.2,
             knee_patch_in: 3.0,
