@@ -81,7 +81,7 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { params, out } => {
             let p = Params::load(&params)?;
-            let result = optimize::run_params(&p, &|_| {})?;
+            let result = jaguar::run(&p, &|_| {})?;
             report::print_summary(&result);
             report::write_json(&result, &out)?;
             // Exit 2 = ran fine but no verified design: scripts can tell.

@@ -1,5 +1,4 @@
-//! Parametric hull generator: a port of `old/hull_generator.py::generate_hull`
-//! (Michlet Series 7 "kayak" shape function). Produces a `jaguar-hull/1`
+//! Parametric hull generator (Michlet Series 7 "kayak" shape function). Produces a `jaguar-hull/1`
 //! [`Hull`] in inches, bow at x = 0, keel at z = 0, half-breadths.
 //!
 //! Station shape: in the fore and aft taper zones a longitudinal factor

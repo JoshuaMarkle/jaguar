@@ -1,4 +1,4 @@
-//! The search. PLAN task T5.
+//! The search.
 //!
 //! 1. Expand `search.{thickness,density,depth}` into a grid of candidates.
 //! 2. Evaluate every candidate against every load case in parallel (rayon).
@@ -36,7 +36,7 @@ pub struct Candidate {
     pub shape: Option<ShapeParams>,
     pub thickness_in: f64,
     /// Mix density. With strength_model = "tested_mixes" this is the tested
-    /// mix's density and `mix` names it (T17).
+    /// mix's density and `mix` names it.
     pub density_pcf: f64,
     /// Name of the tested mix used (strength_model = "tested_mixes"), else None.
     pub mix: Option<String>,
@@ -53,10 +53,10 @@ pub struct Candidate {
     pub error: Option<String>,
     pub passes: bool,
     /// Loaded transverse metacentric height GM_T, in, worst load case.
-    /// None until computed (T12) or if analysis failed. Gate: gm >= stability.gm_min_in.
+    /// None until computed or if analysis failed. Gate: gm >= stability.gm_min_in.
     pub gm_in: Option<f64>,
     /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
-    /// (heaviest) load case. None unless objective.kind = drag (T12).
+    /// (heaviest) load case. None unless objective.kind = drag.
     pub drag_n: Option<f64>,
 }
 
@@ -72,7 +72,7 @@ pub struct Winner {
     /// search-range problem: the team needs lab data for lighter/heavier mixes.
     pub at_mix_data_edge: bool,
     /// Along-hull diagrams for the winner at verification resolution, governing
-    /// load case, for plotting (T18 fills these; empty until then).
+    /// load case, for plotting.
     pub diagrams: Diagrams,
 }
 
@@ -122,7 +122,7 @@ pub enum Progress {
     /// Search started with `total` candidates (for a shape search: total over
     /// all shapes known so far; may grow as refinement rounds are added).
     Started { total: usize },
-    /// Shape search: shape `index` of `shapes` is being evaluated (T13).
+    /// Shape search: shape `index` of `shapes` is being evaluated.
     Shape { index: usize, shapes: usize, shape: ShapeParams },
     /// One candidate finished (any order, from any thread). `done` counts up to `total`.
     Candidate { done: usize, total: usize, candidate: Candidate },
@@ -133,16 +133,6 @@ pub enum Progress {
 /// CLI entry: no progress reporting.
 pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
     run_with_progress(params, hull, &|_| {})
-}
-
-/// Entry point for callers holding only Params: loads `hull.file`, or runs the
-/// shape search when `[shape_search]` is present (T13: `crate::shapeopt::run`).
-pub fn run_params(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
-    match (&params.hull.file, &params.shape_search) {
-        (Some(f), _) => run_with_progress(params, &Hull::load(f)?, on_progress),
-        (None, Some(_)) => crate::shapeopt::run(params, on_progress),
-        (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
-    }
 }
 
 /// Load and fit the mix data, and the density range the fit may be used on.

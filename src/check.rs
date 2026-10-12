@@ -1,4 +1,4 @@
-//! Pass/fail checks on one analysed design. Owner: strength agent (T9).
+//! Pass/fail checks on one analysed design.
 //!
 //! Every check produces a [`CheckResult`] with demand, capacity and D/C in the
 //! same units, so the report and the web UI can list them uniformly. The

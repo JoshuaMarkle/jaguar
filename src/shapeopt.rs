@@ -1,4 +1,4 @@
-//! Hull-shape optimization (outer loop). Owner: T13. Plan: docs/SHAPE_PLAN.md.
+//! Hull-shape optimization (outer loop).
 //!
 //! For each candidate shape (a `hullgen::ShapeParams` inside the
 //! `[shape_search]` bounds), generate the hull (41 stations x 21 waterlines,

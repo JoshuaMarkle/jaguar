@@ -1,4 +1,3 @@
-use jaguar::optimize;
 use jaguar::params::Params;
 use std::path::Path;
 
@@ -21,8 +20,8 @@ fn small(fix_beam: bool) -> Params {
 #[test]
 fn small_shape_search_is_deterministic_and_bounded() {
     let p = small(false);
-    let a = optimize::run_params(&p, &|_| {}).unwrap();
-    let b = optimize::run_params(&p, &|_| {}).unwrap();
+    let a = jaguar::run(&p, &|_| {}).unwrap();
+    let b = jaguar::run(&p, &|_| {}).unwrap();
     assert_eq!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&b).unwrap());
 
     let w = a.winner.as_ref().expect("winner");
@@ -56,7 +55,7 @@ fn small_shape_search_is_deterministic_and_bounded() {
 
 #[test]
 fn fixed_parameters_stay_fixed() {
-    let r = optimize::run_params(&small(true), &|_| {}).unwrap();
+    let r = jaguar::run(&small(true), &|_| {}).unwrap();
     for c in &r.candidates {
         let s = c.shape.as_ref().unwrap();
         assert_eq!((s.beam_in, s.section), (24.0, 0.5));

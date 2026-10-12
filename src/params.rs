@@ -23,7 +23,7 @@ pub struct Params {
     pub gates: Gates,
     pub stability: Stability,
     pub objective: Objective,
-    /// Knee punching-shear model (see docs/PUNCHING.md, T16).
+    /// Knee punching-shear model (see docs/PUNCHING.md).
     pub punching: Punching,
     /// Present = optimize the hull SHAPE too (hull.file must then be absent).
     /// See docs/SHAPE_PLAN.md.
@@ -65,7 +65,6 @@ pub struct Material {
     /// density in the trusted range can be chosen. "tested_mixes": only the
     /// mixes actually tested can be chosen, each with its own measured
     /// strength (rows grouped by `mix` name, mean final strength and density).
-    /// T17 implements tested_mixes.
     pub strength_model: StrengthModel,
     /// Lab data CSV (see `src/mix.rs` and `data/mix_tests.csv`), relative to the
     /// canoe.toml. Final split tensile strength vs density is fitted from it and
@@ -83,7 +82,7 @@ pub struct Material {
     /// Multiplier on crew weight for paddling impact.
     pub dynamic_load_factor: f64,
     /// Knee contact patch length, in. NEVER zero: a point load is a
-    /// singularity and D/C stops converging (see old/CLAUDE.md).
+    /// singularity and D/C stops converging.
     pub knee_patch_in: f64,
 }
 
@@ -94,7 +93,7 @@ pub enum StrengthModel {
     TestedMixes,
 }
 
-/// How a kneeling paddler loads the hull bottom (punching shear). T16.
+/// How a kneeling paddler loads the hull bottom (punching shear).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Punching {

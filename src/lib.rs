@@ -3,17 +3,18 @@
 //! Pipeline (one direction only, each stage a pure function of the previous):
 //!
 //! ```text
-//! canoe.toml --params--> Params
-//! hull.json  --hull----> Hull --(resample, extrude to depth)--> Grid
-//! Grid + thickness  --section--> Sections (A, zbar, I per station)
-//! Sections + density + crew --equilibrium--> Loads (draft, trim, V(x), M(x))
-//! Loads + Sections + material --check--> Verdict (D/C bending, freeboard)
-//! search over (thickness, density, depth) --optimize--> RunResult
-//! RunResult --report--> terminal table + result.json --serve--> localhost viz
+//! canoe.toml --params--> Params            lab CSV --mix--> StrengthFit
+//! hull.json  --hull----> Hull  (or hullgen: shape factors -> Hull)
+//! Hull --(resample, extrude to depth)--> Grid --section--> Sections (A, zbar, I)
+//! Sections + density + crew --equilibrium--> Loads (draft, trim, GM, V(x), M(x))
+//! Loads + Sections + StrengthFit --check--> Verdict (bending, shear, punching, freeboard)
+//! grid over (thickness, density, depth) --optimize--> RunResult   (+ resistance for drag)
+//! optional outer loop over hull shapes --shapeopt--> RunResult
+//! RunResult --report--> terminal + result.json       --serve--> localhost web UI
 //! ```
 //!
-//! Units everywhere inside the crate: inches, pounds, psi, pcf. Convert at the
-//! edges (hull import) and nowhere else. See `docs/SPEC.md`.
+//! [`run`] is the entry point for the CLI and the web UI.
+//! Units everywhere inside the crate: inches, pounds, psi, pcf (see [`units`]).
 
 pub mod check;
 pub mod equilibrium;
@@ -28,3 +29,17 @@ pub mod section;
 pub mod serve;
 pub mod shapeopt;
 pub mod units;
+
+use anyhow::Result;
+use optimize::{Progress, RunResult};
+use params::Params;
+
+/// Run one canoe.toml: the wall search on `hull.file`, or the hull-shape
+/// search when `[shape_search]` is present instead.
+pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
+    match (&params.hull.file, &params.shape_search) {
+        (Some(f), _) => optimize::run_with_progress(params, &hull::Hull::load(f)?, on_progress),
+        (None, Some(_)) => shapeopt::run(params, on_progress),
+        (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
+    }
+}

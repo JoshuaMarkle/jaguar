@@ -223,7 +223,11 @@ mod tests {
 
     #[test]
     fn michlet_import_matches_golden_hull() {
-        let imported = Hull::from_michlet(Path::new("old/off1.mlt"), Path::new("old/out.mlt")).unwrap();
+        let imported = Hull::from_michlet(
+            Path::new("tests/golden/michlet/off1.mlt"),
+            Path::new("tests/golden/michlet/out.mlt"),
+        )
+        .unwrap();
         let golden = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
         assert!((imported.length - golden.length).abs() < 1e-3);
         assert!((imported.draft_design - golden.draft_design).abs() < 1e-4);

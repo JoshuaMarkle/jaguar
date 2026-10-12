@@ -1,10 +1,10 @@
-//! Water resistance of a floating hull. Owner: T12 (physics agent).
+//! Water resistance of a floating hull.
 //!
 //! Used only for the `drag` objective (pick the fastest hull that is strong
 //! enough). Pure function, no I/O. Units at this boundary: hull geometry in
 //! inches, speed in m/s, result in newtons (convert inside, see `units`).
 //!
-//! Model (port intent from old/wave_resistance.py; do not port its numba code):
+//! Model:
 //! * wave resistance: Michell thin-ship integral over the SUBMERGED part of the
 //!   hull at the loaded draft (half-breadths clipped at `draft_in`), fresh water
 //!   998 kg/m^3, g = 9.80665, ntheta = 128 (or fewer if a test shows <1%

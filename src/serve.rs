@@ -1,4 +1,4 @@
-//! Optional localhost web UI. PLAN task T7. Owner: web agent.
+//! Optional localhost web UI.
 //!
 //! `jaguar serve [canoe.toml] [-p 8000]` starts tiny_http on 127.0.0.1:<port>.
 //! The page shows the canoe in 3D, lets the user edit canoe.toml text and
@@ -284,7 +284,7 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
                 Progress::Verifying { .. } => {}
             }
         };
-        let result = optimize::run_params(&params, &on_progress)?;
+        let result = crate::run(&params, &on_progress)?;
         report::write_json(&result, &out)?;
         Ok(serde_json::to_string_pretty(&result)?)
     }));

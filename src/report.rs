@@ -1,4 +1,4 @@
-//! Terminal output and result.json. PLAN task T6.
+//! Terminal output and result.json.
 //!
 //! * `print_summary`: one line per load case header, a compact table of the
 //!   passing frontier (lightest passing design per thickness), then the
