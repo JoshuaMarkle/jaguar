@@ -21,13 +21,21 @@ pub struct Params {
     pub material: Material,
     pub search: Search,
     pub gates: Gates,
+    pub stability: Stability,
+    pub objective: Objective,
+    /// Present = optimize the hull SHAPE too (hull.file must then be absent).
+    /// See docs/SHAPE_PLAN.md.
+    #[serde(default)]
+    pub shape_search: Option<ShapeSearch>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct HullParams {
     /// Path to a `jaguar-hull/1` JSON file, relative to the canoe.toml.
-    pub file: PathBuf,
+    /// Required unless `[shape_search]` is given (then the shape is generated).
+    #[serde(default)]
+    pub file: Option<PathBuf>,
     /// Longitudinal stations used for the search. The verify pass uses 2n-1.
     pub stations: usize,
 }
@@ -46,21 +54,95 @@ pub struct LoadCase {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Material {
-    /// Tensile strength fit: f_t [psi] = slope * density [pcf] + intercept.
-    pub ft_slope_psi_per_pcf: f64,
-    pub ft_intercept_psi: f64,
+    /// Lab data CSV (see `src/mix.rs` and `data/mix_tests.csv`), relative to the
+    /// canoe.toml. Final split tensile strength vs density is fitted from it and
+    /// every strength (flexural, compressive) is derived from that fit.
+    pub mix_data: PathBuf,
+    /// Modulus of rupture / split tensile strength. 1.0 is conservative
+    /// (ACI relations give ~1.12).
+    pub flex_over_split: f64,
+    /// How far (pcf) the search may go beyond the densities actually tested.
+    /// The strength fit is a straight line through few points; far outside the
+    /// data it is a guess, so densities outside
+    /// [min tested - this, max tested + this] are not searched.
+    pub density_extrapolation_pcf: f64,
     pub factor_of_safety: f64,
     /// Multiplier on crew weight for paddling impact.
     pub dynamic_load_factor: f64,
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging (see old/CLAUDE.md).
     pub knee_patch_in: f64,
-    /// Compressive strength fit: f'c [psi] = slope * density [pcf] + intercept.
-    /// Used by the compression, shear and punching checks (strength agent, T9).
-    pub fc_slope_psi_per_pcf: f64,
-    pub fc_intercept_psi: f64,
-    /// Lightweight-concrete factor lambda (ACI 318: 0.75 all-lightweight).
-    pub lambda_lightweight: f64,
+}
+
+/// Transverse stability of the loaded canoe.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stability {
+    /// Height of the crew's centre of gravity above the keel, in (kneeling
+    /// paddlers ~12 in; an assumption, not a measurement).
+    pub crew_cg_in: f64,
+    /// Minimum metacentric height GM_T, in. GM > 0 = upright is stable.
+    /// Without this gate a shape search makes the hull as narrow as possible.
+    pub gm_min_in: f64,
+}
+
+/// What "best" means.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectiveKind {
+    /// Lightest hull (wall weight) that passes every gate.
+    Weight,
+    /// Lowest total water resistance (wave + friction) at `speed_mps`, loaded,
+    /// among designs that pass every gate. Needs `[shape_search]` to matter.
+    Drag,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Objective {
+    pub kind: ObjectiveKind,
+    /// Race speed for the drag objective, m/s (2-person sprint ~2.5).
+    pub speed_mps: f64,
+}
+
+/// Bounds for hull-shape optimization. Every field is `[min, max]`; set
+/// min == max to hold a parameter fixed. Meanings: `hullgen::ShapeParams`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShapeSearch {
+    pub length_in: [f64; 2],
+    pub beam_in: [f64; 2],
+    pub draft_in: [f64; 2],
+    pub fore_wp: [f64; 2],
+    pub section: [f64; 2],
+    pub fore_rocker: [f64; 2],
+    pub aft_wp: [f64; 2],
+    pub aft_rocker: [f64; 2],
+    pub fore_len_frac: [f64; 2],
+    pub aft_len_frac: [f64; 2],
+    /// Initial space-filling samples (deterministic, seeded).
+    pub samples: usize,
+    /// Pattern-search refinement rounds around the best shapes.
+    pub refine_rounds: usize,
+    pub seed: u64,
+}
+
+impl ShapeSearch {
+    /// (name, [min, max]) for every shape parameter, in `ShapeParams` order.
+    pub fn bounds(&self) -> [(&'static str, [f64; 2]); 10] {
+        [
+            ("length_in", self.length_in),
+            ("beam_in", self.beam_in),
+            ("draft_in", self.draft_in),
+            ("fore_wp", self.fore_wp),
+            ("section", self.section),
+            ("fore_rocker", self.fore_rocker),
+            ("aft_wp", self.aft_wp),
+            ("aft_rocker", self.aft_rocker),
+            ("fore_len_frac", self.fore_len_frac),
+            ("aft_len_frac", self.aft_len_frac),
+        ]
+    }
 }
 
 /// Search axes. Each is an inclusive `[min, max, step]` range.
@@ -100,8 +182,13 @@ impl Params {
     /// A relative `hull.file` is resolved against `base_dir`.
     pub fn parse(text: &str, base_dir: &Path) -> Result<Self> {
         let mut p: Params = toml::from_str(text).map_err(|e| anyhow::anyhow!("parsing: {e}"))?;
-        if p.hull.file.is_relative() {
-            p.hull.file = base_dir.join(&p.hull.file);
+        if let Some(f) = &p.hull.file
+            && f.is_relative()
+        {
+            p.hull.file = Some(base_dir.join(f));
+        }
+        if p.material.mix_data.is_relative() {
+            p.material.mix_data = base_dir.join(&p.material.mix_data);
         }
         p.validate()?;
         Ok(p)
@@ -143,8 +230,43 @@ impl Params {
         if self.gates.thickness_min_buildable_in > self.search.thickness_in[1] {
             bail!("gates.thickness_min_buildable_in is above search.thickness_in max");
         }
-        if self.material.lambda_lightweight <= 0.0 || self.material.lambda_lightweight > 1.0 {
-            bail!("material.lambda_lightweight must be in (0, 1]");
+        match (&self.hull.file, &self.shape_search) {
+            (None, None) => bail!("give either hull.file or a [shape_search] section"),
+            (Some(_), Some(_)) => bail!("hull.file and [shape_search] are exclusive: remove one"),
+            _ => {}
+        }
+        if let Some(ss) = &self.shape_search {
+            for (name, [lo, hi]) in ss.bounds() {
+                if !(lo.is_finite() && hi.is_finite() && lo >= 0.0 && hi >= lo) {
+                    bail!("shape_search.{name} must be [min >= 0, max >= min], got [{lo}, {hi}]");
+                }
+            }
+            for (name, [lo, _]) in [
+                ("length_in", ss.length_in),
+                ("beam_in", ss.beam_in),
+                ("draft_in", ss.draft_in),
+                ("section", ss.section),
+            ] {
+                if lo <= 0.0 {
+                    bail!("shape_search.{name} min must be > 0");
+                }
+            }
+            if ss.samples < 1 {
+                bail!("shape_search.samples must be >= 1");
+            }
+        }
+        if self.material.flex_over_split.is_nan()
+            || self.material.flex_over_split <= 0.0
+            || self.material.density_extrapolation_pcf.is_nan()
+            || self.material.density_extrapolation_pcf < 0.0
+        {
+            bail!("material: need flex_over_split > 0 and density_extrapolation_pcf >= 0");
+        }
+        if self.objective.speed_mps.is_nan() || self.objective.speed_mps <= 0.0 {
+            bail!("objective.speed_mps must be > 0");
+        }
+        if self.stability.crew_cg_in.is_nan() || self.stability.crew_cg_in < 0.0 {
+            bail!("stability.crew_cg_in must be >= 0");
         }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");

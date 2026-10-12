@@ -36,7 +36,11 @@ fn fmt_opt(v: Option<f64>, prec: usize) -> String {
 pub fn summary_lines(r: &RunResult) -> Vec<String> {
     let p = &r.params;
     let mut out = Vec::new();
-    out.push(format!("JAGUAR  hull {}  ({} stations)", p.hull.file.display(), p.hull.stations));
+    out.push(format!(
+        "JAGUAR  hull {}  ({} stations)",
+        p.hull.file.as_ref().map_or("(shape search)".to_string(), |f| f.display().to_string()),
+        p.hull.stations
+    ));
     for lc in p.load_cases.iter().take(MAX_CASES) {
         let w: Vec<String> = lc.weights_lb.iter().map(|w| format!("{w:.0}")).collect();
         let total: f64 = lc.weights_lb.iter().sum();
@@ -195,6 +199,11 @@ mod tests {
 
     fn cand(t: f64, rho: f64, wt: f64, dc: f64, fb: f64, gates_ok: bool) -> Candidate {
         Candidate {
+            length_in: 240.0,
+            beam_in: 20.7,
+            shape: None,
+            gm_in: None,
+            drag_n: None,
             thickness_in: t,
             density_pcf: rho,
             depth_in: 12.0,
@@ -226,7 +235,8 @@ mod tests {
         e.error = Some("hull sinks: displacement exceeded".into());
         candidates.push(e.clone());
         candidates.push(e);
-        RunResult { format: RESULT_FORMAT, params, candidates, winner }
+        let strength = crate::optimize::strength(&params).unwrap();
+        RunResult { format: RESULT_FORMAT, params, strength, winner_hull: None, candidates, winner }
     }
 
     fn winner(verified: bool, edge: bool) -> Winner {
@@ -236,6 +246,7 @@ mod tests {
             verify_dc: if verified { 0.783 } else { 1.02 },
             verified,
             on_grid_edge: edge,
+            at_mix_data_edge: false,
         }
     }
 

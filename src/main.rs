@@ -59,8 +59,7 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { params, out } => {
             let p = Params::load(&params)?;
-            let hull = Hull::load(&p.hull.file)?;
-            let result = optimize::run(&p, &hull)?;
+            let result = optimize::run_params(&p, &|_| {})?;
             report::print_summary(&result);
             report::write_json(&result, &out)?;
             // Exit 2 = ran fine but no verified design: scripts can tell.
@@ -70,14 +69,33 @@ fn main() -> Result<()> {
         }
         Cmd::Check { params } => {
             let p = Params::load(&params)?;
-            let hull = Hull::load(&p.hull.file)?;
+            let fit = optimize::strength(&p)?;
+            let rhos = optimize::densities(&p, &fit)?;
+            match &p.hull.file {
+                Some(f) => {
+                    let hull = Hull::load(f)?;
+                    println!(
+                        "ok: hull '{}' L={:.1} in, {} stations x {} waterlines; {} load case(s)",
+                        hull.name,
+                        hull.length,
+                        hull.x.len(),
+                        hull.z.len(),
+                        p.load_cases.len()
+                    );
+                }
+                None => println!("ok: shape search; {} load case(s)", p.load_cases.len()),
+            }
             println!(
-                "ok: hull '{}' L={:.1} in, {} stations x {} waterlines; {} load case(s)",
-                hull.name,
-                hull.length,
-                hull.x.len(),
-                hull.z.len(),
-                p.load_cases.len()
+                "mix fit: final split tensile = {:.2} * rho {:+.1} psi from {} tests ({:.1}-{:.1} pcf, rms {:.1} psi); searching {} densities {:.0}-{:.0} pcf",
+                fit.split_slope_psi_per_pcf,
+                fit.split_intercept_psi,
+                fit.points.len(),
+                fit.density_min_pcf,
+                fit.density_max_pcf,
+                fit.rms_residual_psi,
+                rhos.len(),
+                rhos[0],
+                rhos[rhos.len() - 1]
             );
         }
         Cmd::ImportMichlet { off1, out_mlt, out } => {

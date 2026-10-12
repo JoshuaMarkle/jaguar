@@ -12,7 +12,7 @@
 //!   the signed fibre misses it by ~40%, so the conservative max stays.
 //! * `bending_compression`: sigma at the actual compression fibre (M > 0
 //!   sagging: c = D - zbar; hogging: c = zbar) vs 0.85 f'c / FS,
-//!   f'c = fc_slope*rho + fc_intercept.
+//!   f'c from the lab fit (`mix::StrengthFit::fc_psi`).
 //! * `shear`: tau = |V| Q / (I b) for the thin shell, b = 2t (two walls), Q =
 //!   first moment of the shell below zbar (section.rs segment model), same
 //!   station mask as bending, vs 2 lambda sqrt(f'c) / FS (ACI one-way).
@@ -30,6 +30,7 @@
 
 use crate::equilibrium::Loads;
 use crate::hull::Grid;
+use crate::mix::StrengthFit;
 use crate::params::Material;
 use crate::section::Sections;
 use serde::Serialize;
@@ -112,10 +113,14 @@ pub fn check(
     loads: &Loads,
     rho: f64,
     mat: &Material,
+    fit: &StrengthFit,
     max_paddler_lb: f64,
 ) -> Verdict {
     let fs = mat.factor_of_safety;
-    let fc = mat.fc_slope_psi_per_pcf * rho + mat.fc_intercept_psi;
+    let fc = fit.fc_psi(rho);
+    // f'c comes from the team's own lightweight-mix breaks via f_ct = 6.7 sqrt(f'c),
+    // so the lightweight reduction is already in the data: lambda = 1 here.
+    let lambda = 1.0;
     let t = thickness(grid, sec).unwrap_or(f64::NAN);
     let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
     let (mut st, mut xt) = (f64::NEG_INFINITY, f64::NAN);
@@ -146,14 +151,14 @@ pub fn check(
             (tau, xs) = (s, grid.x[i]);
         }
     }
-    let ft_cap = (mat.ft_slope_psi_per_pcf * rho + mat.ft_intercept_psi) / fs;
+    let ft_cap = fit.flexural_psi(rho) / fs;
     let (fc_cap, v_cap, p_cap, vu) = if fc > 0.0 {
         let d = t / 2.0;
         let b0 = 4.0 * (mat.knee_patch_in + d);
         (
             0.85 * fc / fs,
-            2.0 * mat.lambda_lightweight * fc.sqrt() / fs,
-            punching_vc(fc, mat.lambda_lightweight, d, b0) / fs,
+            2.0 * lambda * fc.sqrt() / fs,
+            punching_vc(fc, lambda, d, b0) / fs,
             max_paddler_lb / (b0 * t),
         )
     } else {
@@ -195,14 +200,26 @@ mod tests {
 
     fn mat() -> Material {
         Material {
-            ft_slope_psi_per_pcf: 10.0,
-            ft_intercept_psi: 0.0,
+            mix_data: "unused".into(),
+            flex_over_split: 1.0,
+            density_extrapolation_pcf: 0.0,
             factor_of_safety: 2.0,
             dynamic_load_factor: 1.2,
             knee_patch_in: 3.0,
-            fc_slope_psi_per_pcf: 100.0,
-            fc_intercept_psi: 0.0,
-            lambda_lightweight: 0.75,
+        }
+    }
+
+    /// Linear split fit chosen so f'c = 6000 psi at 60 pcf:
+    /// f_sp = 6.7 sqrt(6000) at 60 pcf, through the origin.
+    fn fit() -> StrengthFit {
+        StrengthFit {
+            points: vec![],
+            split_slope_psi_per_pcf: 6.7 * 6000f64.sqrt() / 60.0,
+            split_intercept_psi: 0.0,
+            rms_residual_psi: 0.0,
+            density_min_pcf: 50.0,
+            density_max_pcf: 70.0,
+            flex_over_split: 1.0,
         }
     }
 
@@ -219,12 +236,12 @@ mod tests {
         let g = box_grid(3);
         let t = 0.5;
         let sec = crate::section::sections(&g, t);
-        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), 210.0);
+        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0);
         let p = get(&v, "punching");
         // fc = 6000, d = .25, b0 = 13, (c): 2 + 40*.25/13 = 2.769 < 4.
         let b0 = 13.0;
         assert!((p.demand - 210.0 / (b0 * t)).abs() < 1e-9);
-        let cap = (2.0 + 10.0 / 13.0) * 0.75 * 6000f64.sqrt() / 2.0;
+        let cap = (2.0 + 10.0 / 13.0) * 6000f64.sqrt() / 2.0;
         assert!((p.capacity - cap).abs() < 1e-9);
     }
 
@@ -237,10 +254,10 @@ mod tests {
         // Keel 12*t at z=0 plus two walls; Q below zbar by hand.
         let q = 12.0 * t * zb + 2.0 * t * zb * zb / 2.0;
         assert!((first_moment_below(g.row(1), &g.z, t, zb) - q).abs() < 1e-9);
-        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), 0.0);
+        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), &fit(), 0.0);
         let s = get(&v, "shear");
         assert!((s.demand - 100.0 * q / (sec.inertia[1] * 2.0 * t)).abs() < 1e-9);
-        assert!((s.capacity - 2.0 * 0.75 * 6000f64.sqrt() / 2.0).abs() < 1e-9);
+        assert!((s.capacity - 2.0 * 6000f64.sqrt() / 2.0).abs() < 1e-9);
     }
 
     #[test]
@@ -248,9 +265,9 @@ mod tests {
         let g = box_grid(3);
         let sec = crate::section::sections(&g, 0.5);
         let (zb, i) = (sec.zbar[1], sec.inertia[1]);
-        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), 0.0);
+        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), &fit(), 0.0);
         assert!((get(&sag, "bending_compression").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
-        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), 0.0);
+        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0);
         assert!((get(&hog, "bending_compression").demand - 1000.0 * zb / i).abs() < 1e-9);
         let names: Vec<_> = sag.checks.iter().map(|c| c.name).collect();
         assert_eq!(names, ["bending_tension", "bending_compression", "shear", "punching"]);
@@ -260,12 +277,12 @@ mod tests {
     fn nonpositive_fc_fails() {
         let g = box_grid(3);
         let sec = crate::section::sections(&g, 0.5);
-        let mut m = mat();
-        m.fc_intercept_psi = -1e6;
-        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &m, 100.0);
+        let mut f = fit();
+        f.split_intercept_psi = -1e6;
+        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &mat(), &f, 100.0);
         assert!(v.dc.is_infinite());
         assert!(get(&v, "punching").dc.is_infinite());
         assert!(get(&v, "shear").dc.is_infinite());
-        assert!(get(&v, "bending_tension").dc.is_finite());
+        assert!(get(&v, "bending_tension").dc.is_infinite());
     }
 }

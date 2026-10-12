@@ -5,7 +5,7 @@ use std::path::Path;
 
 fn winner_weight(toml: &str) -> f64 {
     let p = Params::load(Path::new(toml)).unwrap();
-    let hull = Hull::load(&p.hull.file).unwrap();
+    let hull = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
     let r = optimize::run(&p, &hull).unwrap();
     // All four example hulls carry the 2M crew with margin, so a missing
     // winner is a regression, not physics.

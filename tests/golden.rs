@@ -6,7 +6,7 @@
 
 use jaguar::equilibrium::{self, CrewLoad};
 use jaguar::hull::{Grid, Hull};
-use jaguar::{check, params::Material, section};
+use jaguar::{check, mix::StrengthFit, params::Material, section};
 use serde_json::Value;
 use std::path::Path;
 
@@ -55,16 +55,25 @@ fn golden_bending_dc() {
         let loads =
             equilibrium::solve(&grid, &sec, f(i, "density"), &crew(i), f(i, "knee_patch_in")).unwrap();
         let mat = Material {
-            ft_slope_psi_per_pcf: f(i, "ft_slope"),
-            ft_intercept_psi: f(i, "ft_icpt"),
+            mix_data: "unused".into(),
+            flex_over_split: 1.0,
+            density_extrapolation_pcf: 0.0,
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),
-            fc_slope_psi_per_pcf: 161.29,
-            fc_intercept_psi: -9566.0,
-            lambda_lightweight: 0.75,
         };
-        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, 175.0 * 1.2);
+        // The prototype's tensile line f_t = slope*rho + icpt, expressed as a
+        // StrengthFit with flex/split = 1 so bending capacity is identical.
+        let fit = StrengthFit {
+            points: vec![],
+            split_slope_psi_per_pcf: f(i, "ft_slope"),
+            split_intercept_psi: f(i, "ft_icpt"),
+            rms_residual_psi: 0.0,
+            density_min_pcf: 0.0,
+            density_max_pcf: 0.0,
+            flex_over_split: 1.0,
+        };
+        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2);
         let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();
         assert_rel("dc", bt.dc, f(o, "dc"), tol);
     }

@@ -80,12 +80,21 @@ impl App {
         let params = Params::load(params_path)?;
         let base_dir = params_path.parent().unwrap_or(Path::new("")).to_path_buf();
         let mut rel = params.clone();
-        if let Ok(r) = rel.hull.file.strip_prefix(&base_dir) {
-            rel.hull.file = r.to_path_buf();
+        if let Some(f) = &rel.hull.file
+            && let Ok(r) = f.strip_prefix(&base_dir)
+        {
+            rel.hull.file = Some(r.to_path_buf());
+        }
+        if let Ok(r) = rel.material.mix_data.strip_prefix(&base_dir) {
+            rel.material.mix_data = r.to_path_buf();
         }
         let params_json = serde_json::to_value(&rel)?;
         let result_path = base_dir.join("result.json");
-        let shared = Shared { state: "idle", hull_file: params.hull.file.clone(), ..Default::default() };
+        let shared = Shared {
+            state: "idle",
+            hull_file: params.hull.file.clone().unwrap_or_default(),
+            ..Default::default()
+        };
         Ok(App { toml_text, params_json, base_dir, result_path, shared: Arc::new(Mutex::new(shared)) })
     }
 
@@ -196,7 +205,7 @@ impl App {
             let result = s.result.take();
             *s = Shared {
                 state: "running",
-                hull_file: params.hull.file.clone(),
+                hull_file: params.hull.file.clone().unwrap_or_default(),
                 result,
                 ..Default::default()
             };
@@ -235,7 +244,6 @@ fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
 fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
     let sh = Arc::clone(&shared);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
-        let hull = Hull::load(&params.hull.file)?;
         let on_progress = |p: Progress| {
             let mut s = lock(&sh);
             match p {
@@ -245,10 +253,10 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
                     s.total = total;
                     s.candidates.push(candidate);
                 }
-                Progress::Verifying { .. } => {}
+                Progress::Verifying { .. } | Progress::Shape { .. } => {}
             }
         };
-        let result = optimize::run_with_progress(&params, &hull, &on_progress)?;
+        let result = optimize::run_params(&params, &on_progress)?;
         report::write_json(&result, &out)?;
         Ok(serde_json::to_string_pretty(&result)?)
     }));
@@ -359,6 +367,11 @@ mod tests {
             let mut s = a.lock();
             for i in 0..3 {
                 s.candidates.push(Candidate {
+                    length_in: 240.0,
+                    beam_in: 20.7,
+                    shape: None,
+                    gm_in: None,
+                    drag_n: None,
                     thickness_in: 0.5,
                     density_pcf: 60.0,
                     depth_in: 12.0 + i as f64,

@@ -15,6 +15,8 @@
 use crate::check::{Verdict, check};
 use crate::equilibrium::{CrewLoad, solve};
 use crate::hull::{Grid, Hull};
+use crate::hullgen::ShapeParams;
+use crate::mix::StrengthFit;
 use crate::params::{Params, range};
 use crate::section::{Sections, sections};
 use anyhow::Result;
@@ -24,6 +26,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Candidate {
+    /// Hull length overall, in (from the hull table).
+    pub length_in: f64,
+    /// Maximum beam (2 x max half-breadth), in.
+    pub beam_in: f64,
+    /// Generator parameters when the hull was produced by the shape search;
+    /// None for a hull loaded from file.
+    pub shape: Option<ShapeParams>,
     pub thickness_in: f64,
     pub density_pcf: f64,
     pub depth_in: f64,
@@ -38,6 +47,12 @@ pub struct Candidate {
     /// Why the analysis failed, if it did.
     pub error: Option<String>,
     pub passes: bool,
+    /// Loaded transverse metacentric height GM_T, in, worst load case.
+    /// None until computed (T12) or if analysis failed. Gate: gm >= stability.gm_min_in.
+    pub gm_in: Option<f64>,
+    /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
+    /// (heaviest) load case. None unless objective.kind = drag (T12).
+    pub drag_n: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,12 +62,20 @@ pub struct Winner {
     pub verify_dc: f64,
     pub verified: bool,
     pub on_grid_edge: bool,
+    /// Winner density is at the edge of the range the mix data supports
+    /// (lowest/highest tested density -/+ density_extrapolation_pcf). Not a
+    /// search-range problem: the team needs lab data for lighter/heavier mixes.
+    pub at_mix_data_edge: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RunResult {
     pub format: &'static str,
     pub params: Params,
+    /// The strength fit actually used (from material.mix_data).
+    pub strength: StrengthFit,
+    /// Winning hull geometry (jaguar-hull/1), so viewers need not regenerate it.
+    pub winner_hull: Option<Hull>,
     pub candidates: Vec<Candidate>,
     /// None = no design passed. Never a fallback "best failing" design.
     pub winner: Option<Winner>,
@@ -64,9 +87,13 @@ pub const RESULT_FORMAT: &str = "jaguar-result/1";
 /// browser; the CLI ignores them. Must be cheap and thread-safe to call.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // short-lived, passed by value to a callback
 pub enum Progress {
-    /// Search started with `total` candidates.
+    /// Search started with `total` candidates (for a shape search: total over
+    /// all shapes known so far; may grow as refinement rounds are added).
     Started { total: usize },
+    /// Shape search: shape `index` of `shapes` is being evaluated (T13).
+    Shape { index: usize, shapes: usize, shape: ShapeParams },
     /// One candidate finished (any order, from any thread). `done` counts up to `total`.
     Candidate { done: usize, total: usize, candidate: Candidate },
     /// Winner is being re-checked at `stations`.
@@ -76,6 +103,38 @@ pub enum Progress {
 /// CLI entry: no progress reporting.
 pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
     run_with_progress(params, hull, &|_| {})
+}
+
+/// Entry point for callers holding only Params: loads `hull.file`, or runs the
+/// shape search when `[shape_search]` is present (T13: `crate::shapeopt::run`).
+pub fn run_params(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
+    match (&params.hull.file, &params.shape_search) {
+        (Some(f), _) => run_with_progress(params, &Hull::load(f)?, on_progress),
+        (None, Some(_)) => anyhow::bail!("shape search not implemented yet (T13)"),
+        (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
+    }
+}
+
+/// Load and fit the mix data, and the density range the fit may be used on.
+pub fn strength(params: &Params) -> Result<StrengthFit> {
+    StrengthFit::load(&params.material.mix_data, params.material.flex_over_split)
+}
+
+/// Densities from search.density_pcf clipped to the trusted fit range
+/// [min tested - extrapolation, max tested + extrapolation]. Err if empty.
+pub fn densities(params: &Params, fit: &StrengthFit) -> Result<Vec<f64>> {
+    let e = params.material.density_extrapolation_pcf;
+    let (lo, hi) = (fit.density_min_pcf - e, fit.density_max_pcf + e);
+    let v: Vec<f64> =
+        range(params.search.density_pcf).into_iter().filter(|&r| r >= lo - 1e-9 && r <= hi + 1e-9).collect();
+    anyhow::ensure!(
+        !v.is_empty(),
+        "no searched density lies within the mix data range {lo:.1}..{hi:.1} pcf (tested {:.1}..{:.1} \
+         +/- density_extrapolation_pcf {e}); widen search.density_pcf or add lab data",
+        fit.density_min_pcf,
+        fit.density_max_pcf
+    );
+    Ok(v)
 }
 
 /// Same result as [`run`] (byte-identical JSON), plus progress events.
@@ -90,7 +149,8 @@ pub fn run_with_progress(
 ) -> Result<RunResult> {
     let floor = params.gates.thickness_min_buildable_in;
     let ts: Vec<f64> = range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect();
-    let rhos = range(params.search.density_pcf);
+    let fit = strength(params)?;
+    let rhos = densities(params, &fit)?;
     let ds = range(params.search.depth_in);
     let total = ts.len() * rhos.len() * ds.len();
     on_progress(Progress::Started { total });
@@ -110,7 +170,7 @@ pub fn run_with_progress(
             rhos.iter()
                 .enumerate()
                 .map(|(ri, &rho)| {
-                    let c = evaluate(params, grid, &sec, t, rho);
+                    let c = evaluate(params, &fit, grid, &sec, t, rho);
                     let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                     on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
                     (ti, ri, gi, c)
@@ -131,9 +191,16 @@ pub fn run_with_progress(
         on_progress(Progress::Verifying { stations });
         let grid = Grid::build(hull, c.depth_in, stations);
         let sec = sections(&grid, c.thickness_in);
-        let v = evaluate(params, &grid, &sec, c.thickness_in, c.density_pcf);
+        let v = evaluate(params, &fit, &grid, &sec, c.thickness_in, c.density_pcf);
         let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
         let edge = |x: f64, r: &[f64]| r.len() > 1 && (x == r[0] || x == r[r.len() - 1]);
+        // Density at the end of the trusted fit range, where the full search range
+        // extended further: the lab data, not the search range, is the limit.
+        let full = range(params.search.density_pcf);
+        let mix_edge = |x: f64| {
+            (x == rhos[0] && full[0] < rhos[0] - 1e-9)
+                || (x == rhos[rhos.len() - 1] && full[full.len() - 1] > rhos[rhos.len() - 1] + 1e-9)
+        };
         Winner {
             candidate: c.clone(),
             verify_stations: stations,
@@ -141,12 +208,21 @@ pub fn run_with_progress(
             verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
             // Thickness at the buildable floor is a real constraint, not a range problem.
             on_grid_edge: (edge(c.thickness_in, &ts) && (c.thickness_in - floor).abs() > 1e-9)
-                || edge(c.density_pcf, &rhos)
+                || (edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
                 || edge(c.depth_in, &ds),
+            at_mix_data_edge: mix_edge(c.density_pcf),
         }
     });
 
-    Ok(RunResult { format: RESULT_FORMAT, params: params.clone(), candidates, winner })
+    let winner_hull = winner.as_ref().map(|_| hull.clone());
+    Ok(RunResult {
+        format: RESULT_FORMAT,
+        params: params.clone(),
+        strength: fit,
+        winner_hull,
+        candidates,
+        winner,
+    })
 }
 
 /// Self weight in lb: trapezoid of A*rho/1728 over x.
@@ -156,8 +232,14 @@ fn hull_weight(grid: &Grid, sec: &Sections, rho: f64) -> f64 {
     w * rho / 1728.0
 }
 
-fn evaluate(params: &Params, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> Candidate {
+fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> Candidate {
+    let beam = 2.0 * grid.y.iter().cloned().fold(0.0, f64::max);
     let mut c = Candidate {
+        length_in: grid.x[grid.x.len() - 1] - grid.x[0],
+        beam_in: beam,
+        shape: None,
+        gm_in: None,
+        drag_n: None,
         thickness_in: t,
         density_pcf: rho,
         depth_in: grid.depth,
@@ -187,7 +269,7 @@ fn evaluate(params: &Params, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> C
             })
             .collect();
         let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in) {
-            Ok(loads) => check(grid, sec, &loads, rho, mat, max_paddler),
+            Ok(loads) => check(grid, sec, &loads, rho, mat, fit, max_paddler),
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));
                 return c;

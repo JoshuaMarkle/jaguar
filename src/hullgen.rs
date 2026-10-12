@@ -11,9 +11,9 @@
 
 use crate::hull::{FORMAT, Hull, linspace};
 use anyhow::{Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ShapeParams {
     /// Overall length, in.
