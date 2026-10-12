@@ -56,14 +56,17 @@ The winner line reads e.g. `mix M2 (55.6 pcf)`. `jaguar mix` prints the per-mix 
 "final target" row (60 pcf, 300 psi, final) has no replicate token so it is its own mix; it is the
 team's target mix, kept under the name the raw sheet implies.
 
-## Extrapolation limit (why winners stop at 51 pcf)
+## Extrapolation limit
 
 A straight line through a few points is only trustworthy near those points. The search only tries
-densities within `density_extrapolation_pcf` (default 4) of the tested range. The lightest tested
-mix today is about 55 pcf, so nothing lighter than 51 pcf is searched. Lighter mixes are lighter
-canoes, so the optimizer runs straight to that limit and the summary prints
-`NOTE density 51 pcf is the lightest the lab data supports`. That is not a physics result: it means
-**test lighter mixes** and the optimizer can go lower.
+densities within `density_extrapolation_pcf` (default 4) of the tested range: today 51-64 pcf.
+If the winner sits at the low end, the summary prints
+`NOTE density 51 pcf is the lightest the lab data supports`; that means **test lighter mixes**.
+
+Since the punching fix (docs/PUNCHING.md) the example winners are at about 58 pcf instead: knee
+punching needs f'c of about 1640 psi, so the optimizer now picks the lightest mix that is STRONG
+enough, not the lightest the data allows. What would lower weight now is a light mix with higher
+strength (more data points around 55-60 pcf and above), or a knee pad.
 
 ## Adding rows
 
