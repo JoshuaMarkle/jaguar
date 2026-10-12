@@ -153,6 +153,30 @@ pub struct Objective {
     pub kind: ObjectiveKind,
     /// Race speed for the drag objective, m/s (2-person sprint ~2.5).
     pub speed_mps: f64,
+    /// Drag objective only: displacement weighting. Absent = drag of the
+    /// heaviest load case at its loaded draft. Present = sum of weight x
+    /// resistance at the level draft each (hull weight + crew_lb) floats at.
+    /// Weights must sum to 1.
+    #[serde(default)]
+    pub displacements: Option<Vec<Displacement>>,
+    /// Drag objective with `[shape_search]`: share of straight-line drag in
+    /// the shape score; the rest goes to the turning proxy
+    /// (docs/SHAPE_SEARCH.md). Default 1.0 = drag only.
+    #[serde(default = "one")]
+    pub straight_weight: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Displacement {
+    /// Crew (plus gear) weight for this race condition, lb.
+    pub crew_lb: f64,
+    /// Share of the race distance raced at this displacement (0..1).
+    pub weight: f64,
 }
 
 /// Bounds for hull-shape optimization. Every field is `[min, max]`; set
@@ -170,6 +194,28 @@ pub struct ShapeSearch {
     pub aft_rocker: [f64; 2],
     pub fore_len_frac: [f64; 2],
     pub aft_len_frac: [f64; 2],
+    /// Snap sampled draft / length / beam to multiples of this, in (molds,
+    /// strongbacks). Absent = continuous. Search depth already steps by
+    /// `search.depth_in`.
+    #[serde(default)]
+    pub draft_step_in: Option<f64>,
+    #[serde(default)]
+    pub length_step_in: Option<f64>,
+    #[serde(default)]
+    pub beam_step_in: Option<f64>,
+    /// Allowed keel rise [min, max], in, at 5% of length from the bow and from
+    /// the stern, relative to the lowest keel point. Shapes outside are
+    /// rejected (with a reason), not remapped.
+    #[serde(default)]
+    pub rocker_in: Option<[f64; 2]>,
+    /// Minimum design-waterline entry half-angle, deg (chord over the first
+    /// 5% of length). Finer shapes are rejected as unbuildable.
+    #[serde(default)]
+    pub min_entry_angle_deg: Option<f64>,
+    /// true = fore and aft ends identical: aft_wp, aft_rocker, aft_len_frac
+    /// follow the fore values (their bounds are ignored).
+    #[serde(default)]
+    pub symmetric: bool,
     /// Initial space-filling samples (deterministic, seeded).
     pub samples: usize,
     /// Pattern-search refinement rounds around the best shapes.
@@ -319,6 +365,30 @@ impl Params {
             if ss.samples < 1 {
                 bail!("shape_search.samples must be >= 1");
             }
+            for (name, step, [lo, hi]) in [
+                ("draft_step_in", ss.draft_step_in, ss.draft_in),
+                ("length_step_in", ss.length_step_in, ss.length_in),
+                ("beam_step_in", ss.beam_step_in, ss.beam_in),
+            ] {
+                if let Some(st) = step {
+                    if !(st.is_finite() && st > 0.0) {
+                        bail!("shape_search.{name} must be > 0");
+                    }
+                    if (lo / st - 1e-9).ceil() > (hi / st + 1e-9).floor() {
+                        bail!("shape_search.{name}: no multiple of {st} inside [{lo}, {hi}]");
+                    }
+                }
+            }
+            if let Some([lo, hi]) = ss.rocker_in
+                && !(lo.is_finite() && hi.is_finite() && lo >= 0.0 && hi >= lo)
+            {
+                bail!("shape_search.rocker_in must be [min >= 0, max >= min]");
+            }
+            if let Some(a) = ss.min_entry_angle_deg
+                && !(a.is_finite() && (0.0..90.0).contains(&a))
+            {
+                bail!("shape_search.min_entry_angle_deg must be in [0, 90)");
+            }
         }
         if self.material.flex_over_split.is_nan()
             || self.material.flex_over_split <= 0.0
@@ -329,6 +399,27 @@ impl Params {
         }
         if self.objective.speed_mps.is_nan() || self.objective.speed_mps <= 0.0 {
             bail!("objective.speed_mps must be > 0");
+        }
+        if let Some(ds) = &self.objective.displacements {
+            if ds.is_empty() {
+                bail!("objective.displacements is empty: remove it or add entries");
+            }
+            for d in ds {
+                if !(d.crew_lb.is_finite() && d.crew_lb >= 0.0 && d.weight.is_finite() && d.weight >= 0.0) {
+                    bail!("objective.displacements: need crew_lb >= 0 and weight >= 0");
+                }
+            }
+            let sum: f64 = ds.iter().map(|d| d.weight).sum();
+            if (sum - 1.0).abs() > 1e-6 {
+                bail!("objective.displacements weights must sum to 1, got {sum}");
+            }
+        }
+        let sw = self.objective.straight_weight;
+        if !(0.0..=1.0).contains(&sw) {
+            bail!("objective.straight_weight must be in [0, 1]");
+        }
+        if sw < 1.0 && (self.objective.kind != ObjectiveKind::Drag || self.shape_search.is_none()) {
+            bail!("objective.straight_weight < 1 needs kind = \"drag\" and a [shape_search]");
         }
         if self.stability.crew_cg_in.is_nan() || self.stability.crew_cg_in < 0.0 {
             bail!("stability.crew_cg_in must be >= 0");
@@ -361,6 +452,41 @@ mod tests {
     fn unknown_key_is_an_error() {
         let text = std::fs::read_to_string("examples/canoe.toml").unwrap() + "\nbogus = 1\n";
         assert!(toml::from_str::<Params>(&text).is_err());
+    }
+
+    #[test]
+    fn displacement_weights_must_sum_to_one() {
+        let mut p = Params::load(Path::new("examples/shape_opt.toml")).unwrap();
+        p.objective.kind = ObjectiveKind::Drag;
+        let d = |c, w| Displacement { crew_lb: c, weight: w };
+        p.objective.displacements = Some(vec![d(350.0, 0.675), d(525.0, 0.10), d(700.0, 0.225)]);
+        p.validate().unwrap();
+        p.objective.displacements = Some(vec![d(350.0, 0.75), d(700.0, 0.20)]);
+        assert!(p.validate().is_err());
+        p.objective.displacements = Some(vec![]);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn straight_weight_needs_drag_shape_search() {
+        let mut p = Params::load(Path::new("examples/shape_opt.toml")).unwrap();
+        p.objective.straight_weight = 0.8;
+        assert!(p.validate().is_err(), "weight objective");
+        p.objective.kind = ObjectiveKind::Drag;
+        p.validate().unwrap();
+        p.objective.straight_weight = 1.5;
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn step_without_multiple_in_bounds_is_rejected() {
+        let mut p = Params::load(Path::new("examples/shape_opt.toml")).unwrap();
+        let ss = p.shape_search.as_mut().unwrap();
+        ss.draft_in = [4.1, 4.9];
+        ss.draft_step_in = Some(1.0);
+        assert!(p.validate().is_err());
+        p.shape_search.as_mut().unwrap().draft_step_in = Some(0.5);
+        p.validate().unwrap();
     }
 
     #[test]
