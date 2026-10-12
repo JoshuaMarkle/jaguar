@@ -12,9 +12,8 @@ fn example() -> (Params, Hull) {
 }
 
 /// The example with the GM gate relaxed to 0 (upright stable). The real hull
-/// has loaded GM_T 0.29 in at the old winner and at most 0.81 in over the grid
-/// with crew CG 12 in, so examples/canoe.toml's gm_min_in = 2.0 rejects every
-/// candidate (T12 finding, reported to the coordinator; not changed here).
+/// has loaded GM_T 0.29 in at the winner and at most 0.81 in over the grid with
+/// crew CG 12 in; examples/canoe.toml uses gm_min_in = 0.25 so it still passes.
 fn example_gm0() -> (Params, Hull) {
     let (mut p, h) = example();
     p.stability.gm_min_in = 0.0;
@@ -23,11 +22,19 @@ fn example_gm0() -> (Params, Hull) {
 
 #[test]
 fn example_gm_gate_2in_rejects_all() {
-    let (p, h) = example();
+    let (mut p, h) = example();
+    p.stability.gm_min_in = 2.0;
     let r = optimize::run(&p, &h).unwrap();
     assert!(r.winner.is_none());
     let mx = r.candidates.iter().filter_map(|c| c.gm_in).fold(f64::MIN, f64::max);
     assert!(mx > 0.0 && mx < 2.0, "{mx}");
+}
+
+#[test]
+fn shipped_example_passes_its_own_gm_gate() {
+    let (p, h) = example();
+    let w = optimize::run(&p, &h).unwrap().winner.expect("examples/canoe.toml must have a winner");
+    assert!(w.verified && w.candidate.gm_in.unwrap() >= p.stability.gm_min_in);
 }
 
 #[test]

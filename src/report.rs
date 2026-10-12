@@ -170,7 +170,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             }
             let mut extra = vec![];
             if let Some(gm) = c.gm_in {
-                extra.push(format!("GM {gm:.1} in (min {:.1})", p.stability.gm_min_in));
+                extra.push(format!("GM {gm:.2} in (min {:.2})", p.stability.gm_min_in));
             }
             if let Some(d) = c.drag_n {
                 extra.push(format!("drag {d:.1} N at {:.1} m/s", p.objective.speed_mps));
@@ -374,7 +374,7 @@ mod tests {
         assert!(s.contains("strength: final split ="));
         assert!(s.contains("NOTE density 70 pcf"));
         assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in  draft 5.9 in"));
-        assert!(s.contains("GM 4.3 in (min"));
+        assert!(s.contains("GM 4.30 in (min"));
         assert!(s.contains("drag 23.1 N at"));
         assert!(s.contains("shape fore_wp"));
         assert!(s.contains("L in"));
@@ -391,9 +391,9 @@ mod tests {
         assert!(s.contains("hint: blocker is"));
         let mut r = base(None, true);
         for c in &mut r.candidates {
-            c.gm_in = Some(0.5);
+            c.gm_in = Some(0.1);
         }
-        assert!(summary_lines(&r).join("\n").contains("blocker is stability: best GM 0.50"));
+        assert!(summary_lines(&r).join("\n").contains("blocker is stability: best GM 0.10"));
         assert!(l.len() <= MAX_LINES);
     }
 
