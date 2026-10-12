@@ -44,10 +44,14 @@
 //!   `GET /api/mix` also returns "csv": the raw file text (feeds the editable table).
 //! * `GET  /api/result`    -> the last jaguar-result/1, 404 if none yet.
 //!   Also written to `result.json` next to the canoe.toml when a run finishes.
+//! * `GET  /api/export?format=step|stl` -> the last run's winner as a file download
+//!   (Content-Disposition attachment; STEP AP214 solid or binary STL, inches, see
+//!   `export.rs`). 404 if no result yet, 409 if that result has no winner, 400 bad format.
 //!
 //! Any panic or Err inside a run must land as state "error" with a message,
 //! never kill the server.
 
+use crate::export;
 use crate::hull::Hull;
 use crate::optimize::{self, Candidate, Progress};
 use crate::params::Params;
@@ -180,9 +184,39 @@ impl App {
             (
                 _,
                 "/" | "/index.html" | "/api/params" | "/api/prefs" | "/api/hulls" | "/api/hull"
-                | "/api/status" | "/api/mix" | "/api/result" | "/api/run",
+                | "/api/status" | "/api/mix" | "/api/result" | "/api/run" | "/api/export",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
+        }
+    }
+
+    /// `GET /api/export?format=step|stl`: (status, content type, file name, bytes). Errors come
+    /// back as JSON bodies with no file name.
+    fn export(&self, query: &str) -> (u16, &'static str, Option<String>, Vec<u8>) {
+        let fail = |(st, ct, body): Reply| (st, ct, None, body.into_bytes());
+        let fmt = query.split('&').find_map(|kv| kv.strip_prefix("format=")).unwrap_or("step");
+        let Some(result) = self.lock().result.clone() else {
+            return fail(err_reply(404, "no result yet: run first"));
+        };
+        let built = export::from_result(&result, 161, 41)
+            .and_then(|(hull, spec)| Ok((export::build_mesh(&hull, &spec)?, hull.name)));
+        let (mesh, name) = match built {
+            Ok(v) => v,
+            Err(e) => return fail(err_reply(409, format!("{e:#}"))),
+        };
+        let stem: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        match fmt {
+            "step" | "stp" => (
+                200,
+                "application/step",
+                Some(format!("{stem}.step")),
+                export::to_step(&mesh, &name).into_bytes(),
+            ),
+            "stl" => (200, "model/stl", Some(format!("{stem}.stl")), export::to_stl(&mesh, &name)),
+            f => fail(err_reply(400, format!("unknown export format '{f}' (step | stl)"))),
         }
     }
 
@@ -451,6 +485,21 @@ fn serve_on(server: tiny_http::Server, app: App) {
         if req.as_reader().read_to_string(&mut body).is_err() {
             body.clear();
         }
+        let url = req.url().to_string();
+        if req.method().as_str() == "GET" && url.split('?').next() == Some("/api/export") {
+            let (status, ctype, file, bytes) = app.export(url.split_once('?').map_or("", |q| q.1));
+            let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
+            );
+            if let Some(f) = file {
+                let cd = format!("attachment; filename=\"{f}\"");
+                if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
+                    resp = resp.with_header(h);
+                }
+            }
+            let _ = req.respond(resp);
+            continue;
+        }
         let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
         let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
             .expect("static header is valid");
@@ -690,6 +739,31 @@ mod tests {
         assert!(body.contains("error"));
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/run", &a.toml_text.clone()).0, 409);
+    }
+
+    #[test]
+    fn export_needs_a_winner_and_returns_files() {
+        let a = app();
+        assert_eq!(a.export("format=step").0, 404);
+        let params = Params::parse(&a.toml_text, &a.base_dir).unwrap();
+        let result = crate::run(&params, &|_| {}).unwrap();
+        a.lock().result = Some(serde_json::to_string(&result).unwrap());
+        let (st, ct, file, body) = a.export("format=step");
+        assert_eq!((st, ct), (200, "application/step"));
+        assert!(file.unwrap().ends_with(".step"));
+        assert!(
+            body.starts_with(b"ISO-10303-21;") && String::from_utf8_lossy(&body).contains("CLOSED_SHELL")
+        );
+        let (st, _, file, body) = a.export("format=stl");
+        assert_eq!(st, 200);
+        assert!(file.unwrap().ends_with(".stl"));
+        let n = u32::from_le_bytes(body[80..84].try_into().unwrap()) as usize;
+        assert_eq!(body.len(), 84 + 50 * n);
+        assert_eq!(a.export("format=obj").0, 400);
+        let mut no_winner: serde_json::Value = serde_json::to_value(&result).unwrap();
+        no_winner["winner"] = serde_json::Value::Null;
+        a.lock().result = Some(no_winner.to_string());
+        assert_eq!(a.export("format=step").0, 409);
     }
 
     #[test]

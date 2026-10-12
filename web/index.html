@@ -75,6 +75,7 @@
 
   .btn { height: var(--ctl-h); padding: 0 var(--s3); border-radius: var(--r-sm); border: 1px solid var(--hair); background: var(--canvas);
     cursor: pointer; font-weight: 500; white-space: nowrap; justify-self: start; }
+  a.btn { display: inline-flex; align-items: center; color: inherit; text-decoration: none; }
   .btn:hover { border-color: var(--faint); }
   .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--canvas); height: 30px; justify-self: stretch; }
   .btn.primary:hover { background: var(--ink-soft); }
@@ -755,6 +756,10 @@ function showWinner() {
   box.innerHTML = `<div style="display:flex;gap:var(--s2);align-items:center;margin-bottom:var(--s1)">
       <span class="badge ${win.verified ? 'success' : 'error'}">${win.verified ? 'Verified' : 'Not verified'}</span>
       <span class="muted">${f(c.hull_weight_lb, 1)} lb hull, D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations</span></div>
+    <div style="display:flex;gap:var(--s2);margin-bottom:var(--s2)">
+      <a class="btn soft" href="/api/export?format=step" download title="Winning canoe as a STEP solid (inches): hull, wall thickness and mold depth, for CAD and the mold shop.">Export STEP</a>
+      <a class="btn soft" href="/api/export?format=stl" download title="Same solid as a binary STL mesh (inches), for 3D printing or mesh tools.">Export STL</a>
+    </div>
     ${kv('Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`)}
     ${kv('Beam', `${f(c.beam_in, 1)} in`)}
     ${sh ? kv('Design draft', `${f(sh.draft_in, 2)} in`) : ''}
