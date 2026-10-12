@@ -11,6 +11,7 @@
 //! grid over (thickness, density, depth) --optimize--> RunResult   (+ resistance for drag)
 //! optional outer loop over hull shapes --shapeopt--> RunResult
 //! RunResult --report--> terminal + result.json       --serve--> localhost web UI
+//! winner hull + wall --export--> STEP / STL (CAD, mold shop)
 //! ```
 //!
 //! [`run`] is the entry point for the CLI and the web UI.
@@ -18,6 +19,7 @@
 
 pub mod check;
 pub mod equilibrium;
+pub mod export;
 pub mod hull;
 pub mod hullgen;
 pub mod mix;

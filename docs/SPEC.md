@@ -12,6 +12,7 @@ jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no v
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
+jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg]
 jaguar serve  [canoe.toml] [-p 8000]           web UI: 3D canoe, edit params, run + watch live
 ```
 
@@ -82,10 +83,25 @@ per-case verdict (every check's demand, capacity, D/C). Shape runs list one cand
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.
 
+## Export (`src/export.rs`)
+`jaguar export` writes the canoe for CAD and the mold shop, in inches. From a result.json it takes
+the winner's hull (generated or `hull.file`), wall thickness, mold depth and flare; from a hull.json
+the outer mold surface to `--depth` (add `--thickness` for the solid wall). Same surface as the
+analysis grid, both sides mirrored, each station's girth resampled to `--girth` points.
+* **STEP** (AP214): a closed `MANIFOLD_SOLID_BREP` of planar triangular faces for a wall, or an
+  `OPEN_SHELL` surface model for the mold surface. Verified: opens as one valid solid in
+  OpenCASCADE (gmsh 4.15, the kernel FreeCAD uses) with matching volume and bounding box.
+* **STL** (binary): the same triangles, watertight for a wall.
+* The inner face is the mold line offset inward by t. At the bow and stern, where that offset
+  closes, the ends are solid concrete closed by a bulkhead. The solid is about 8% lighter than the
+  analysis weight on off1: the analysis also counts the zero-breadth waterlines of the rockered ends
+  as wall (conservative).
+* `GET /api/export?format=step|stl` in the web UI exports the last run's winner.
+
 ## Performance
 `examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.1 s on a laptop (release).
 Keep it under 1 s. `examples/shape_opt.toml` must stay under 60 s.
 
 ## Out of scope (do not build)
 Race simulation, running Michlet/Godzilla, desktop GUI, mix database, PDF reports, multizone pours,
-torsion, STEP/STL export. Anything else new needs the user's approval first (ideas: docs/PLAN.md).
+torsion. Anything else new needs the user's approval first (ideas: docs/PLAN.md).

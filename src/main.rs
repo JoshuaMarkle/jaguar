@@ -54,6 +54,30 @@ enum Cmd {
         #[arg(long, default_value_t = 1.0)]
         flex_over_split: f64,
     },
+    /// Export the canoe as STEP or STL. Input: result.json (winner hull, wall, depth) or a
+    /// jaguar-hull/1 JSON (then give --depth, and --thickness for a solid wall).
+    Export {
+        input: PathBuf,
+        #[arg(short, long, default_value = "canoe.step")]
+        out: PathBuf,
+        /// step | stl (default: from the -o extension)
+        #[arg(long)]
+        format: Option<String>,
+        /// Wall thickness, in (overrides the result; omit on a hull for the mold surface only)
+        #[arg(long)]
+        thickness: Option<f64>,
+        /// Mold depth, in (overrides the result; default for a hull: its draft_design)
+        #[arg(long)]
+        depth: Option<f64>,
+        /// Topside flare, deg (overrides the result)
+        #[arg(long)]
+        flare: Option<f64>,
+        #[arg(long, default_value_t = 161)]
+        stations: usize,
+        /// Points around the girth, sheer to sheer (odd)
+        #[arg(long, default_value_t = 41)]
+        girth: usize,
+    },
     /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
         #[arg(default_value = "canoe.toml")]
@@ -182,6 +206,52 @@ fn main() -> Result<()> {
             if let Some(w) = weak_fit_warning(&fit) {
                 println!("{w}");
             }
+        }
+        Cmd::Export { input, out, format, thickness, depth, flare, stations, girth } => {
+            use jaguar::export;
+            let text = std::fs::read_to_string(&input)?;
+            let is_result = serde_json::from_str::<serde_json::Value>(&text)
+                .map(|v| v["format"] == optimize::RESULT_FORMAT)
+                .unwrap_or(false);
+            let (hull, mut spec) = if is_result {
+                export::from_result(&text, stations, girth)?
+            } else {
+                let hull = Hull::load(&input)?;
+                let d = hull.draft_design;
+                (
+                    hull,
+                    export::ExportSpec { depth_in: d, thickness_in: None, flare_deg: 0.0, stations, girth },
+                )
+            };
+            if let Some(t) = thickness {
+                spec.thickness_in = Some(t);
+            }
+            if let Some(d) = depth {
+                spec.depth_in = d;
+            }
+            if let Some(f) = flare {
+                spec.flare_deg = f;
+            }
+            let fmt = format
+                .or_else(|| out.extension().map(|e| e.to_string_lossy().to_lowercase()))
+                .unwrap_or_else(|| "step".into());
+            let mesh = export::build_mesh(&hull, &spec)?;
+            match fmt.as_str() {
+                "step" | "stp" => std::fs::write(&out, export::to_step(&mesh, &hull.name))?,
+                "stl" => std::fs::write(&out, export::to_stl(&mesh, &hull.name))?,
+                f => anyhow::bail!("unknown export format '{f}' (step | stl)"),
+            }
+            let (lo, hi) = mesh.bbox();
+            println!(
+                "wrote {} ({}, {} facets, {:.1} x {:.1} x {:.1} in{})",
+                out.display(),
+                if mesh.closed { "solid" } else { "mold surface" },
+                mesh.tris.len(),
+                hi[0] - lo[0],
+                hi[1] - lo[1],
+                hi[2] - lo[2],
+                if mesh.closed { format!(", wall volume {:.0} in^3", mesh.volume()) } else { String::new() }
+            );
         }
         Cmd::Serve { params, port } => serve::serve(&params, port)?,
     }

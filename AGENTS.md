@@ -25,8 +25,9 @@ src/optimize.rs     wall grid search, verify at 2n-1 stations, progress events
 src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt
 src/report.rs       terminal summary, result.json
+src/export.rs       STEP / STL of the winner (CAD, mold shop)
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step)
-src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | serve
+src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | export | serve
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
