@@ -77,3 +77,18 @@ fn crew(i: &Value) -> Vec<CrewLoad> {
         .map(|(w, s)| CrewLoad { x_in: s.as_f64().unwrap(), lb: w.as_f64().unwrap() * dyn_ })
         .collect()
 }
+
+/// T1 (done): Grid::build reproduces prototype build() at depth 14, 161 stations.
+#[test]
+fn golden_grid_matches_prototype() {
+    let g: Value =
+        serde_json::from_str(&std::fs::read_to_string("tests/golden/grid_v0.json").unwrap()).unwrap();
+    let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+    let grid = Grid::build(&hull, f(&g, "depth"), f(&g, "stations") as usize);
+    assert_eq!(grid.nz(), g["nz"].as_u64().unwrap() as usize);
+    assert_rel("sum", grid.y.iter().sum(), f(&g, "sum"), 1e-9);
+    assert_rel("sumsq", grid.y.iter().map(|v| v * v).sum(), f(&g, "sumsq"), 1e-9);
+    for (k, want) in g["row80"].as_array().unwrap().iter().enumerate() {
+        assert!((grid.y(80, k) - want.as_f64().unwrap()).abs() < 1e-9, "row80[{k}]");
+    }
+}

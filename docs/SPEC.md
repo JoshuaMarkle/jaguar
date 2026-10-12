@@ -58,8 +58,8 @@ on_grid_edge} | null}`. Schema = `src/optimize.rs`. Deterministic ordering (thic
 depth ascending). Terminal output is a short summary; the JSON is the record.
 
 ## Performance target
-Default example (4 t x 11 rho x 5 D = 220 candidates, 161 stations) in **< 1 s** release build on a
-laptop. The Python prototype took ~2.5 s for 44 candidates at fixed depth.
+Default example (9 t x 11 rho x 7 D = 693 candidates, 161 stations) in **< 1 s** release build on a
+laptop. The Python prototype takes ~30 s for the same 693 candidates.
 
 ## Out of scope for v1 (do not build)
 Race simulation, wave resistance, Godzilla/Fortran runs, GUI, mix database, PDF/LaTeX reports,

@@ -27,6 +27,7 @@ A module may only `use` modules to its left. `serve` and `report` never feed bac
 
 ## Commands
 ```
+make hooks     # once per clone: enables the pre-commit hook (runs make check, blocks old/ edits)
 make check     # fmt + clippy -D warnings + tests. MUST pass before every commit.
 make golden    # include #[ignore]d golden tests (shows what is left to port)
 make run       # cargo run --release -- run examples/canoe.toml
