@@ -2,14 +2,14 @@
 
 Mobbin is a reference library of real product interfaces, and its own interface is engineered to get out of the way. The system is strictly monochrome: near-black ink (`{colors.ink}` — #141414) on a pure white canvas (`{colors.canvas}`), with structure carried by a ladder of barely-perceptible neutral tints rather than by shadows or color. The thousands of app screenshots, icon tiles, and brand logos the site exists to show are the only saturated elements on any page — the chrome frames them the way a gallery wall frames paintings.
 
-The geometry does the brand work that color refuses to do. Every interactive element is a stadium pill (`{rounded.full}`): the floating navigation bar, every button, the segmented billing toggle, the overlay badges. Containers sit at a calm `{rounded.md}` (24px), media tiles at `{rounded.sm}` (16px), and app icons render as iOS-style squircles at 30% corner radius. Type is set in Saans at deliberately non-standard variable weights — a chunky 652 for every heading, a bookish 456 for text, an airy 300 for hero subtitles — which gives the monochrome pages a strong typographic voice without a single decorative flourish.
+The geometry is quiet and precise, closer to a CAD or design tool than a marketing page. Interactive elements use a small radius (`{rounded.sm}`, 6px): buttons, inputs, selects, tabs, badges. Containers sit at `{rounded.md}` (8px), and only true pills (toggle switches, progress tracks) use `{rounded.full}`. App icons render as iOS-style squircles at 30% corner radius. Type is set in Saans at deliberately non-standard variable weights — a chunky 652 for every heading, a bookish 456 for text, an airy 300 for hero subtitles — which gives the monochrome pages a strong typographic voice without a single decorative flourish.
 
-One color is allowed to interrupt: an electric blue accent (`{colors.accent}` — #0066ff), used exclusively for commercial signals — the "Popular" plan badge and the yearly-savings callout on pricing. Its scarcity is the point; when blue appears, it is asking for a decision.
+One color is allowed to interrupt as an accent: an electric blue (`{colors.accent}` — #0066ff), used for selection and the one thing that needs attention (in JAGUAR: the winner). Its scarcity is the point. State is the other exception: a small semantic palette (green success, yellow warning, red error, from IBM Carbon) marks pass, near-limit and fail. Semantic colors label state; they never decorate.
 
 **Key Characteristics:**
 
-- Gallery-white monochrome palette — `{colors.ink}` on `{colors.canvas}`, zero brand chroma outside the single `{colors.accent}` blue
-- Stadium-pill interaction language: nav bar, buttons, toggles, and badges all at `{rounded.full}`
+- Gallery-white monochrome palette — `{colors.ink}` on `{colors.canvas}`, chroma only from the `{colors.accent}` blue and the semantic state colors
+- Small-radius interaction language: buttons, inputs, tabs and badges at `{rounded.sm}` (6px), never stadium pills
 - Shadow-free elevation — hierarchy built from a neutral tint ladder (`{colors.canvas-soft}`, `{colors.field}`, `{colors.hairline}`) and 1px hairlines
 - Saans at signature variable weights: 652 headings with tight 1.0–1.13 line-height, 456 body, 300 light subtitles
 - iOS-style squircle icon tiles (30% radius) as a recurring visual motif across library counters and brand marquees
@@ -22,8 +22,8 @@ Source pages: home, pricing, awards, signup.
 
 ### Brand & Accent
 
-- **Ink Black** (`{colors.primary}` — #141414): The brand color. Fills every primary CTA pill, the footer band, and all display typography. Mobbin's identity is this near-black, softened just off pure black to sit comfortably next to photography.
-- **Electric Blue** (`{colors.accent}` — #0066ff): The only chromatic accent in the system. Reserved for commercial emphasis — the "Popular" pricing badge and savings callouts. Never used decoratively, never used for CTAs.
+- **Ink Black** (`{colors.primary}` — #141414): The brand color. Fills every primary button, the footer band, and all display typography. Mobbin's identity is this near-black, softened just off pure black to sit comfortably next to photography.
+- **Electric Blue** (`{colors.accent}` — #0066ff): The only non-semantic accent. Reserved for selection and the single highlighted item (the winner ring in plots). Never used decoratively, never used for primary buttons.
 
 ### Surface
 
@@ -31,7 +31,7 @@ Source pages: home, pricing, awards, signup.
 - **Soft Canvas** (`{colors.canvas-soft}` — #f3f3f3): The workhorse tint — a 6% ink wash over white. Fills the floating nav pill, the featured pricing card, FAQ accordion rows, soft utility pills, segmented-control tracks, and the highlighted comparison-table column.
 - **Field** (`{colors.field}` — #f0f0f0): An 8% ink wash used as the fill for form inputs, giving fields presence without borders.
 - **Soft Hairline** (`{colors.hairline-soft}` — #f0f0f0): 1px card outlines — the faintest possible edge, used on white-on-white cards (pricing, testimonials).
-- **Hairline** (`{colors.hairline}` — #e0e0e0): The stronger 16% control border, used on outlined pill buttons and interactive chrome.
+- **Hairline** (`{colors.hairline}` — #e0e0e0): The stronger 16% control border, used on outlined buttons and interactive chrome.
 
 ### Text
 
@@ -42,7 +42,11 @@ Source pages: home, pricing, awards, signup.
 
 ### Semantic
 
-- The system ships no dedicated success/warning/error palette on its marketing surfaces; state communication stays within the monochrome ladder, with `{colors.accent}` as the sole positive-emphasis signal.
+Taken from IBM Carbon. Used only to communicate state (pass, near a limit, fail, error), never as decoration or section color. Prefer small marks (a dot, a bar, a badge, a thin left edge) over large filled areas; text stays `{colors.ink}` except on solid semantic fills.
+
+- **Success Green** (`{colors.success}` — #24a148): Carbon green-50. Success states: verified badge, passing candidates, D/C with margin.
+- **Warning Yellow** (`{colors.warning}` — #f1c21b): Carbon yellow-30. Warning states: D/C within 15% of the gate, winner on a grid or data edge. Too light for text on white; use it as a fill or edge with `{colors.ink}` text.
+- **Error Red** (`{colors.error}` — #da1e28): Carbon red-60. Error states: failed checks, analysis errors, rejected runs, D/C over the gate; also the danger button fill.
 
 ## Typography
 
@@ -84,7 +88,7 @@ Saans is a commercial typeface. The closest widely-available substitutes are **I
 
 - **Base unit**: 8px, with 4px half-steps for fine rhythm
 - **Tokens**: `{spacing.xxs}` 4px · `{spacing.xs}` 8px · `{spacing.sm}` 12px · `{spacing.md}` 16px · `{spacing.lg}` 24px · `{spacing.xl}` 32px · `{spacing.xxl}` 48px · `{spacing.section}` 80px · `{spacing.section-lg}` 120px
-- Buttons are fixed-height pills padded horizontally at `{spacing.md}`; inputs pad `{spacing.sm} {spacing.md}`
+- Buttons are fixed-height `{rounded.sm}` rectangles padded horizontally at `{spacing.md}`; inputs pad `{spacing.sm} {spacing.md}`
 - Universal rhythm constants: 28px and 80px vertical steps recur on every page; 120px separates major homepage acts
 
 ### Grid & Container
@@ -112,8 +116,8 @@ Whitespace is the primary grouping device. Sections are separated by `{spacing.s
 
 #### Touch Targets
 
-- Pill buttons and nav CTAs are fixed-height stadium shapes comfortably above the 44px minimum; form inputs pad to a similar height via `{spacing.sm} {spacing.md}`.
-- The segmented billing toggle presents each option as a full pill target, not a small radio dot.
+- Buttons are fixed-height `{rounded.sm}` shapes; in dense tool layouts they may drop to 26-30px, form inputs match.
+- The segmented control presents each option as a full button target, not a small radio dot.
 
 #### Collapsing Strategy
 
@@ -151,10 +155,11 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 
 | Token | Value | Use |
 |---|---|---|
-| `{rounded.none}` | 0px | Full-bleed media strips and marquee images |
-| `{rounded.sm}` | 16px | Inputs, video tiles, testimonial cards, FAQ rows |
-| `{rounded.md}` | 24px | Content cards, device mockups, portrait tiles, footer top corners |
-| `{rounded.full}` | 9999px | Every pill: nav, buttons, badges, toggles |
+| `{rounded.none}` | 0px | Full-bleed media strips, viewports, plot frames |
+| `{rounded.xs}` | 4px | Badges, chips, segmented-control options, small swatches |
+| `{rounded.sm}` | 6px | Buttons, inputs, selects, segmented-control tracks |
+| `{rounded.md}` | 8px | Cards, grouped boxes, notices, textareas |
+| `{rounded.full}` | 9999px | Only true pills: toggle switches, progress tracks, avatars |
 
 ### Photography Geometry
 
@@ -169,18 +174,22 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 
 **`button-primary`** — "Join for free", "Get started", "Continue", "View winners"
 
-- Fill `{colors.primary}`, label `{colors.on-primary}` in `{typography.link}`, shape `{rounded.full}`, padding `0px {spacing.md}` on a fixed-height pill
+- Fill `{colors.primary}`, label `{colors.on-primary}` in `{typography.link}`, shape `{rounded.sm}`, padding `0px {spacing.md}` at a fixed height
 - The single CTA style everywhere: nav, pricing cards, auth form, awards hero
 
 **`button-outline`** — "Continue with Google", secondary "Get started"
 
-- Fill `{colors.canvas}`, label `{colors.ink}`, 1px `{colors.hairline}` border, shape `{rounded.full}`
-- The de-emphasized twin of the primary pill; used when two actions sit side by side or for third-party auth
+- Fill `{colors.canvas}`, label `{colors.ink}`, 1px `{colors.hairline}` border, shape `{rounded.sm}`
+- The de-emphasized twin of the primary button; used when two actions sit side by side or for third-party auth
 
 **`button-pill-soft`** — "Explore ↗", "Mobbin ↗", "Read more"
 
-- Fill `{colors.canvas-soft}`, label `{colors.ink}`, shape `{rounded.full}`
-- Tertiary utility pill for outbound and in-page links; no border, relies on its tint fill
+- Fill `{colors.canvas-soft}`, label `{colors.ink}`, shape `{rounded.sm}`
+- Tertiary utility button for outbound and in-page links; no border, relies on its tint fill
+
+**`button-danger`** — destructive actions
+
+- Fill `{colors.error}`, label `{colors.on-primary}`, shape `{rounded.sm}`; only for actions that delete or discard work
 
 ### Cards & Containers
 
@@ -215,6 +224,10 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 
 - `{colors.field}` fill, no border, `{colors.ink}` text with `{colors.text-faint}` placeholder, `{rounded.sm}` corners, padding `{spacing.sm} {spacing.md}`
 
+**`text-input-invalid`**
+
+- Same chrome plus a 1px inset `{colors.error}` ring
+
 **`text-input-focused`**
 
 - Same chrome plus a 2px `{colors.ink}` ring — focus is signaled in ink, consistent with the monochrome system
@@ -244,7 +257,11 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 
 **`badge-overlay`** — translucent gray pill (rgba(115, 115, 115, 0.56)) with `{colors.on-primary}` `{typography.label}` text, laid over photography and screenshots (category tags, portrait captions)
 
-**`segmented-control`** + **`segmented-control-active`** — billing-period toggle: a `{colors.canvas-soft}` stadium track holding two pill options; the active option is a `{colors.canvas}` white pill, the inactive label sits in `{colors.text-muted}`
+**`segmented-control`** + **`segmented-control-active`** — a `{colors.canvas-soft}` `{rounded.sm}` track holding `{rounded.xs}` options; the active option is a `{colors.canvas}` white segment, the inactive label sits in `{colors.text-muted}`
+
+**`status-badge`** — compact `{rounded.xs}` chip: solid `{colors.success}` or `{colors.error}` fill with `{colors.on-primary}` label; for warning, a `{colors.warning}` fill with `{colors.ink}` label
+
+**`notice`** — `{colors.canvas-soft}` box at `{rounded.md}` with a 3px left edge in the semantic color (warning or error) and `{colors.ink}` text
 
 **`award-lockup`** — centered winner presentation: laurel-flanked category eyebrow in `{colors.text-muted}`, winner name in `{typography.heading-3}`, description in `{colors.text-muted}` `{typography.body}`, vote share in `{typography.body-sm}`, closed by a `button-pill-soft` "Explore ↗"
 
@@ -301,9 +318,10 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 ### Do
 
 - Keep the canvas `{colors.canvas}` white and let imported content (screenshots, icons, logos) supply all saturation.
-- Use `{rounded.full}` for every interactive element — a rectangular button does not exist in this system.
+- Use `{rounded.sm}` (6px) for interactive elements and `{rounded.md}` (8px) for containers; keep corners small and consistent.
 - Build emphasis with the tint ladder: `{colors.canvas-soft}` fill for featured surfaces, `{colors.hairline-soft}` outlines for resting cards.
-- Reserve `{colors.accent}` for commercial signals (featured badges, savings callouts) — one or two blue elements per page at most.
+- Reserve `{colors.accent}` for selection and the single highlighted item — one or two blue elements per page at most.
+- Use `{colors.success}`, `{colors.warning}` and `{colors.error}` only to report state, as small marks.
 - Set every heading in Saans 652 with line-height 1.0–1.13 and end headline sentences with a period.
 - Pair heavy 652 headings with 300-weight `{typography.body-lg}` subtitles for hierarchy without color.
 - Render app icons as 30% squircles and portraits in grayscale to keep third-party imagery inside the system.
@@ -312,10 +330,11 @@ The system is essentially shadow-free: no drop shadows appear on any card, butto
 ### Don't
 
 - Don't add drop shadows — elevation is fills and hairlines only.
-- Don't use `{colors.accent}` for CTAs; primary actions are always `{colors.primary}` ink pills.
-- Don't introduce additional accent hues, gradients on UI chrome, or colored section bands.
+- Don't use `{colors.accent}` for primary buttons; primary actions are always `{colors.primary}` ink.
+- Don't introduce hues beyond the accent and the three semantic colors, gradients on UI chrome, or colored section bands.
+- Don't use semantic colors decoratively, or set body text in `{colors.warning}` (too light on white).
 - Don't outline the featured pricing tier — feature it with the `{colors.canvas-soft}` fill and `badge-popular` instead.
 - Don't apply letter-spacing or all-caps styling; the type system runs at natural tracking in sentence case.
 - Don't put borders on form fields at rest — inputs are `{colors.field}` tint fills; the border appears only as the 2px ink focus ring.
 - Don't let full-color photography of people into the curator/juror grids; portraits are strictly black-and-white.
-- Don't square off pill geometry at small sizes — badges, chips, and toggles stay stadium-shaped.
+- Don't use stadium pills for buttons, inputs, tabs or badges; `{rounded.full}` is only for switches, progress tracks and avatars.
