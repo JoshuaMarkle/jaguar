@@ -169,3 +169,56 @@ fn winner_carries_diagrams_matching_bending_check() {
     assert!((d.tension_allow_psi - bt.capacity).abs() < 1e-6 * bt.capacity);
     assert!(d.waterline_in.iter().all(|&z| z > 0.0 && z < w.candidate.depth_in));
 }
+
+#[test]
+fn winner_has_diagrams_for_every_load_case() {
+    let (mut p, h) = example();
+    let mut c2 = p.load_cases[0].clone();
+    c2.name = "seated".into();
+    c2.seats_in = Some(vec![90.0, 170.0]);
+    p.load_cases.push(c2);
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.unwrap();
+    assert_eq!(w.cases.len(), p.load_cases.len());
+    let len = w.cases[0].diagrams.x_in[w.verify_stations - 1] - w.cases[0].diagrams.x_in[0];
+    for (k, lc) in w.cases.iter().zip(&p.load_cases) {
+        assert_eq!(k.name, lc.name);
+        assert!(k.error.is_none());
+        let n = lc.weights_lb.len();
+        let want: Vec<f64> = match &lc.seats_in {
+            Some(s) => s.clone(),
+            None => (0..n).map(|i| k.diagrams.x_in[0] + len * (i + 1) as f64 / (n + 1) as f64).collect(),
+        };
+        assert_eq!(k.seats_in, want);
+        let d = &k.diagrams;
+        assert_eq!(d.x_in.len(), w.verify_stations);
+        for v in
+            [&k.compression_psi, &k.shear_psi, &k.dc_bending_tension, &k.dc_bending_compression, &k.dc_shear]
+        {
+            assert_eq!(v.len(), w.verify_stations);
+            assert!(v.iter().all(|x| x.is_finite() && *x >= 0.0));
+        }
+        // V and M close at both ends.
+        let vmax = d.shear_lb.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        let mmax = d.moment_lbin.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+        for e in [0, w.verify_stations - 1] {
+            assert!(d.shear_lb[e].abs() < 0.02 * vmax, "{} V end {}", k.name, d.shear_lb[e]);
+            assert!(d.moment_lbin[e].abs() < 0.02 * mmax, "{} M end {}", k.name, d.moment_lbin[e]);
+        }
+        // Per-station D/C max equals that case's verdict.
+        let v = k.verdict.as_ref().unwrap();
+        for (name, arr) in [
+            ("bending_tension", &k.dc_bending_tension),
+            ("bending_compression", &k.dc_bending_compression),
+            ("shear", &k.dc_shear),
+        ] {
+            let c = v.checks.iter().find(|c| c.name == name).unwrap();
+            let m = arr.iter().cloned().fold(0.0, f64::max);
+            assert!((m - c.dc).abs() < 1e-9 * c.dc.max(1.0), "{name}: {m} vs {}", c.dc);
+        }
+    }
+    // Governing-case diagrams kept and equal to that case's.
+    let g = w.candidate.governing_case.as_deref().unwrap();
+    let gk = w.cases.iter().find(|k| k.name == g).unwrap();
+    assert_eq!(gk.diagrams.moment_lbin, w.diagrams.moment_lbin);
+}

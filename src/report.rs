@@ -2,7 +2,7 @@
 //!
 //! * `print_summary`: one line per load case header, a compact table of the
 //!   passing frontier (lightest passing design per thickness), then the
-//!   winner block with VERIFIED / NOT VERIFIED and any grid-edge warning.
+//!   winner block (one seats/D-C line per load case) with VERIFIED / NOT VERIFIED and any grid-edge warning.
 //!   Plain text, no colours. Kept under 40 lines.
 //! * `write_json`: `jaguar-result/1`, pretty-printed, deterministic.
 
@@ -79,6 +79,17 @@ fn hull_line(c: &Candidate) -> String {
         s.push_str(&format!("  draft {:.1} in", sh.draft_in));
     }
     s
+}
+
+/// One winner line per load case: resolved seats (in from bow) and its D/C.
+fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
+    let seats: Vec<String> = k.seats_in.iter().map(|s| format!("{s:.0}")).collect();
+    let state = match (&k.error, &k.verdict) {
+        (Some(e), _) => format!("error: {}", e.chars().take(40).collect::<String>()),
+        (None, Some(v)) => format!("D/C {:.3}  fb {:.2} in", v.dc, v.freeboard_in),
+        (None, None) => "-".to_string(),
+    };
+    format!("        case {:<12} seats [{}] in  {state}", k.name, seats.join(", "))
 }
 
 /// Pure summary text, one entry per output line, never more than `MAX_LINES`.
@@ -201,6 +212,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             if let Some(d) = c.drag_n {
                 extra.push(format!("drag {d:.1} N at {:.1} m/s", p.objective.speed_mps));
             }
+            if let Some(l) = c.air_pocket_in {
+                extra.push(format!("swamped: air pocket {l:.1} in each end"));
+            }
             if !extra.is_empty() {
                 out.push(format!("        {}", extra.join("  ")));
             }
@@ -212,6 +226,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                         k.name, k.demand, k.capacity, k.dc
                     ));
                 }
+            }
+            for k in w.cases.iter().take(MAX_CASES) {
+                out.push(case_line(k));
             }
             if w.verified {
                 out.push(format!(
@@ -298,6 +315,7 @@ mod tests {
             shape: None,
             gm_in: None,
             drag_n: None,
+            air_pocket_in: None,
             thickness_in: t,
             density_pcf: rho,
             mix: None,
@@ -343,6 +361,12 @@ mod tests {
             on_grid_edge: edge,
             at_mix_data_edge: false,
             diagrams: Default::default(),
+            cases: vec![crate::optimize::CaseDiagrams {
+                name: "race".into(),
+                seats_in: vec![60.0, 180.0],
+                weights_lb: vec![160.0, 160.0],
+                ..Default::default()
+            }],
         }
     }
 
@@ -356,6 +380,7 @@ mod tests {
         show(&l);
         let s = l.join("\n");
         assert!(s.contains("VERIFIED at 81 stations (D/C 0.783)"));
+        assert!(s.contains("case race         seats [60, 180] in"), "{s}");
         assert!(!s.contains("NOT VERIFIED"));
         assert!(!s.contains("WARNING"));
         assert!(!s.contains("L in"));

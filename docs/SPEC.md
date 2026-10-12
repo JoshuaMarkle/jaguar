@@ -25,7 +25,7 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 ### `canoe.toml`
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
-`[stability]`, `[objective]`, optional `[shape_search]`. Paths are relative to the toml.
+`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`. Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
 ### `jaguar-hull/1` (hull geometry, JSON)
@@ -68,7 +68,10 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    * knee punching for the heaviest paddler, ACI 318-19 Table 22.6.5.2 or plain Table 14.5.5.1,
      one or two knees (docs/PUNCHING.md)
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
-   GM_T >= `gm_min_in` for every load case. Thicknesses below `thickness_min_buildable_in` are
+   GM_T >= `gm_min_in` for every load case, and, with `[flotation]`, the canoe floats swamped
+   (`src/flotation.rs`): wall volume + sealed bow and stern air pockets (equal length l from each
+   tip, full hull interior up to D) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
+   by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are
    never tried.
 7. **Objective** (`objective.kind`, default `drag` when omitted): `weight` = lightest passing; `drag` = lowest Michell wave +
    ITTC-57 friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
@@ -87,8 +90,13 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points), winner_hull (shape runs) | null, candidates: [...],
-winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge, diagrams}
-| null}`. Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
+winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge, diagrams,
+cases} | null}`. `diagrams` is the governing case at verification resolution. `cases` has one entry
+per `[[load_case]]` (input order): name, `seats_in` actually used (given or evenly spaced),
+weights, draft, trim, GM, freeboard, x, V, M, tension/compression/shear stress, waterline, and
+per-station D/C for bending tension, bending compression and shear (0 at masked tip stations, same
+formulas as the checks), plus that case's verdict. A case whose equilibrium fails carries `error`
+and no numbers. The terminal prints one seats + D/C line per case under the winner. Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.

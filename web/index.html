@@ -130,6 +130,8 @@
   #plotwrap { position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; }
   #plotctl { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
   #plotctl select { width: auto; height: 24px; }
+  #plotctl button.pill { height: 24px; padding: 0 var(--s3); border-radius: 999px; border: 1px solid var(--hair); background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+  #plotctl button.pill.on { color: var(--ink); border-color: var(--ink); }
   #plotctl .muted { margin-left: var(--s1); }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
   #tabs { display: flex; gap: 2px; margin: var(--s2) var(--s3); padding: 2px; background: var(--soft); border-radius: var(--r-sm); align-self: flex-start; }
@@ -490,7 +492,7 @@ function buildCanoe() {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
@@ -505,7 +507,9 @@ function buildTabs() {
   const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${axLabel(l, u)}</option>`).join('');
   const xa = axSel.x || (objKind === 'drag' ? 'drag' : 'weight');
   $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
-    <span class="hint" style="margin-left:auto">green = passes, grey = fails, red cross = analysis error, blue ring = winner</span>` : '';
+    <span class="hint" style="margin-left:auto">green = passes, grey = fails, red cross = analysis error, blue ring = winner</span>`
+    : CASE_TABS.includes(tab) ? casePills() : '';
+  if (CASE_TABS.includes(tab)) for (const b of $('plotctl').querySelectorAll('button[data-case]')) b.onclick = () => { const n = b.dataset.case; caseHidden.has(n) ? caseHidden.delete(n) : caseHidden.add(n); buildTabs(); drawPlot(); };
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
 const flareDeg = () => { const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
@@ -564,24 +568,32 @@ function marker(ctx, x, y, k, r = 2.5) {
 function ring(ctx, x, y, r = 8) { ctx.strokeStyle = C.accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
 function msg(ctx, W, H, t) { ctx.fillStyle = C.faint; ctx.font = font(12); ctx.textAlign = 'center'; ctx.fillText(t, W / 2, H / 2); ctx.textAlign = 'left'; }
 const winC = () => result && result.winner && result.winner.candidate;
-const diag = () => { const d = result && result.winner && result.winner.diagrams; return d && d.x_in && d.x_in.length ? d : null; };
-function knees(ctx, a, r) {
-  const c = winC(), p = result && result.params; if (!c || !p) return;
-  const lc = (p.load_case || []).find(l => l.name === c.governing_case) || (p.load_case || [])[0]; if (!lc) return;
-  const L = c.length_in, k = lc.weights_lb.length;
-  lc.weights_lb.forEach((w, i) => {
-    const x = lc.seats_in ? lc.seats_in[i] : L * (i + 1) / (k + 1);
-    ctx.strokeStyle = C.faint; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = C.muted; ctx.font = font(11); ctx.fillText(`knee ${w} lb`, a.px(x) + 4, r.t + 13);
-  });
+// Per-load-case winner diagrams (result.winner.cases), one grey shade + dash per case.
+const CASE_TABS = ['hull', 'stress', 'dcx'];
+const caseHidden = new Set();
+const CASE_STYLE = [['#141414', []], ['#5a5a5a', [6, 3]], ['#8a8a8a', [2, 3]], ['#3a3a3a', [8, 3, 2, 3]], ['#a8a8a8', []], ['#707070', [4, 4]]];
+const caseStyle = i => CASE_STYLE[i % CASE_STYLE.length];
+const allCases = () => { const w = result && result.winner; return w && Array.isArray(w.cases) ? w.cases.map((k, i) => ({ ...k, i })) : []; };
+const shownCases = () => allCases().filter(k => !k.error && k.x_in && k.x_in.length && !caseHidden.has(k.name));
+function casePills() {
+  const ks = allCases(); if (!ks.length) return '';
+  return '<span class="muted">cases</span>' + ks.map(k => { const [col, dash] = caseStyle(k.i);
+    const sw = `<svg width="18" height="6"><line x1="0" y1="3" x2="18" y2="3" stroke="${col}" stroke-width="1.5" stroke-dasharray="${dash.join(' ')}"/></svg>`;
+    return `<button type="button" class="pill${caseHidden.has(k.name) ? '' : ' on'}" data-case="${k.name}" title="${k.error || 'seats ' + k.seats_in.map(s => s.toFixed(0)).join(', ') + ' in'}">${sw} ${k.name}${k.error ? ' (error)' : ''}</button>`; }).join('');
 }
-
+function caseKnees(ctx, a, r, ks) {
+  ks.forEach((k, j) => { const [col] = caseStyle(k.i);
+    k.seats_in.forEach((x, n) => { ctx.strokeStyle = col; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(a.px(x), r.t + r.h - 2 - 6 * j); ctx.lineTo(a.px(x) - 3, r.t + r.h - 8 - 6 * j); ctx.lineTo(a.px(x) + 3, r.t + r.h - 8 - 6 * j); ctx.fill(); }); });
+}
+const caseLegend = ks => ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, k.name, dash]; });
+const diag = () => { const d = result && result.winner && result.winner.diagrams; return d && d.x_in && d.x_in.length ? d : null; };
 function drawPlot() {
   const c = $('plot'), ctx = c.getContext('2d'), dpr = window.devicePixelRatio || 1, W = c.width / dpr, H = c.height / dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
-  ({ cands: plotCands, hull: plotHull, stress: plotStress, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
   if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
@@ -603,31 +615,47 @@ function plotCands(ctx, W, H) {
 }
 function plotHull(ctx, W, H) {
   const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
+  const ks = shownCases(); if (!ks.length) return msg(ctx, W, H, 'All load cases hidden.');
   const h2 = (H - 30) / 2 - 20;
   const r1 = { l: 72, t: 12, w: W - 92, h: h2 }, r2 = { l: 72, t: 12 + h2 + 30, w: W - 92, h: h2 };
   const xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
-  const a1 = axes(ctx, r1, xr, range2(d.shear_lb.concat([0])), '', 'shear, lb');
+  const a1 = axes(ctx, r1, xr, range2(ks.flatMap(k => k.shear_lb).concat([0])), '', 'shear V(x), lb');
   hline(ctx, r1.l, r1.l + r1.w, a1.py(0), C.hair);
-  line(ctx, a1, d.x_in, d.shear_lb, C.ink); knees(ctx, a1, r1);
-  const a2 = axes(ctx, r2, xr, range2(d.moment_lbin.concat([0])), 'x from bow, in', 'moment, lb*in');
+  for (const k of ks) line(ctx, a1, k.x_in, k.shear_lb, ...caseStyle(k.i)); caseKnees(ctx, a1, r1, ks);
+  const a2 = axes(ctx, r2, xr, range2(ks.flatMap(k => k.moment_lbin).concat([0])), 'x from bow, in', 'moment M(x), lb*in, + = sagging');
   hline(ctx, r2.l, r2.l + r2.w, a2.py(0), C.hair);
-  line(ctx, a2, d.x_in, d.moment_lbin, C.ink, [6, 3]); knees(ctx, a2, r2);
-  legend(ctx, r1.l + r1.w - 360, r1.t + r1.h - 8, [[C.ink, 'shear V(x)'], [C.ink, 'moment M(x), + = sagging', [6, 3]], [C.faint, 'knee', [2, 3]]]);
+  for (const k of ks) line(ctx, a2, k.x_in, k.moment_lbin, ...caseStyle(k.i)); caseKnees(ctx, a2, r2, ks);
+  legend(ctx, r1.l + 10, r1.t + 16, caseLegend(ks).concat([[C.faint, 'knees (seats)', [2, 3]]]));
 }
 function plotStress(ctx, W, H) {
   const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
+  const ks = shownCases(); if (!ks.length) return msg(ctx, W, H, 'All load cases hidden.');
   const h2 = (H - 30) / 2 - 20, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
   const r1 = { l: 72, t: 12, w: W - 92, h: h2 }, r2 = { l: 72, t: 12 + h2 + 30, w: W - 92, h: h2 };
-  const a1 = axes(ctx, r1, xr, [0, Math.max(d.tension_allow_psi, ...d.tension_psi) * 1.1], '', 'tension stress, psi');
-  line(ctx, a1, d.x_in, d.tension_psi, C.ink);
-  line(ctx, a1, xr, [d.tension_allow_psi, d.tension_allow_psi], C.error, [5, 4]); knees(ctx, a1, r1);
-  legend(ctx, r1.l + 10, r1.t + 28, [[C.ink, 'bending tension |M|c/I'], [C.error, `allowable ${d.tension_allow_psi.toFixed(0)} psi`, [5, 4]]]);
+  const a1 = axes(ctx, r1, xr, [0, Math.max(d.tension_allow_psi, ...ks.flatMap(k => k.tension_psi)) * 1.1], '', 'tension stress, psi');
+  for (const k of ks) line(ctx, a1, k.x_in, k.tension_psi, ...caseStyle(k.i));
+  line(ctx, a1, xr, [d.tension_allow_psi, d.tension_allow_psi], C.error, [5, 4]); caseKnees(ctx, a1, r1, ks);
+  legend(ctx, r1.l + 10, r1.t + 28, caseLegend(ks).concat([[C.error, `allowable ${d.tension_allow_psi.toFixed(0)} psi`, [5, 4]]]));
   const c = winC();
   const a2 = axes(ctx, r2, xr, [0, (c ? c.depth_in : Math.max(...d.waterline_in)) * 1.05], 'x from bow, in', 'height above keel, in');
-  line(ctx, a2, d.x_in, d.waterline_in, C.muted, [5, 3]);
+  for (const k of ks) line(ctx, a2, k.x_in, k.waterline_in, ...caseStyle(k.i));
   if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], C.ink);
-  const tr = d.waterline_in[d.waterline_in.length - 1] - d.waterline_in[0];
-  legend(ctx, r2.l + 10, r2.t + 16, [[C.muted, `loaded waterline (stern - bow = ${tr.toFixed(2)} in trim)`, [5, 3]], [C.ink, 'gunwale (mold depth)']]);
+  legend(ctx, r2.l + 10, r2.t + 16, ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, `${k.name} waterline (trim ${k.trim_in.toFixed(2)} in, fb ${k.freeboard_in.toFixed(2)} in)`, dash]; }).concat([[C.ink, 'gunwale (mold depth)']]));
+}
+// Utilization along the hull: per case, max over bending tension/compression/shear D/C at each station.
+function plotDcx(ctx, W, H) {
+  const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
+  const ks = shownCases(); if (!ks.length) return msg(ctx, W, H, 'All load cases hidden.');
+  const util = k => k.x_in.map((_, i) => Math.max(k.dc_bending_tension[i], k.dc_bending_compression[i], k.dc_shear[i]));
+  const fin = v => isFinite(v) ? v : 0;
+  const ymax = Math.max(dcGate, ...ks.flatMap(k => util(k).map(fin))) * 1.1;
+  const r = { l: 72, t: 12, w: W - 92, h: H - 52 }, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
+  const a = axes(ctx, r, xr, [0, ymax], 'x from bow, in', 'D/C (max of bending tension, compression, shear)');
+  hline(ctx, r.l, r.l + r.w, a.py(dcGate), C.error, [5, 4]);
+  for (const k of ks) line(ctx, a, k.x_in, util(k).map(fin), ...caseStyle(k.i));
+  caseKnees(ctx, a, r, ks);
+  legend(ctx, r.l + 10, r.t + 16, ks.map(k => { const [col, dash] = caseStyle(k.i); const pu = k.verdict && k.verdict.checks.find(c => c.name === 'punching');
+    return [col, `${k.name}  D/C ${k.verdict ? k.verdict.dc.toFixed(3) : '-'}${pu ? `  (punching ${pu.dc.toFixed(3)}, local)` : ''}`, dash]; }).concat([[C.error, `gate dc_search ${dcGate}`, [5, 4]]]));
 }
 // D/C bars: green = margin, yellow = within 15% of the gate, red = over the gate.
 const dcShade = dc => { const m = dcGate - dc; return m < 0 ? C.error : m < 0.15 * dcGate ? C.warning : C.success; };

@@ -36,12 +36,12 @@ against the code on 2026-10-12. Comparison with the legacy report: `data/review_
 | Accurate punching shear | **mostly done** (T16: ACI b0*d, round knee, two knees, pad). d is a guessed `d_over_t` |
 | Mixes separate from construction layers | open (A1) |
 | Race cases 4/3/2 entered separately | **engine done** (`[[load_case]]`), examples use 2M only (A2) |
-| Graphs: M and V all cases with toggles | open, governing case only (A3) |
-| Graph: utilization along length | **partial**: tension stress only, not every check's D/C (A3) |
+| Graphs: M and V all cases with toggles | done (A3): all cases, toggles |
+| Graph: utilization along length | done (A3): D/C(x) per case |
 | LRFD 1.2 / 1.6 | open (B1) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | open (B3) |
-| Air pockets / swamped flotation | open (B4) |
+| Air pockets / swamped flotation | done (T43, gate + result; STEP export of pockets open) |
 | Multi-mix zones, I-beam middle, light ends | open, SPEC out of scope (C1) |
 | Graph: multi-pour side view | open, needs C1 |
 | Race simulator / ML path | open, SPEC out of scope (C3) |
@@ -88,7 +88,7 @@ user's approval and a SPEC update before starting.
   check enveloped over +/- `seat_variance_in`. Manual `seats_in` overrides. Can move hogging ~40%.
 - **B3. Kupfer-Gerstle biaxial check** (shear + bending, plus hoop stress from turning). Matters
   once bending governs.
-- **B4. Swamped flotation.** Bow/stern air pocket length (max `air_pocket_max_in`) sized so
+- **B4. Swamped flotation.** DONE (T43) except pockets in the STEP export. Bow/stern air pocket length (max `air_pocket_max_in`) sized so
   concrete volume + pockets displace >= `swamp_factor` x canoe weight. Gate, and pocket length in
   the result and the STEP export.
 - **B5. Sign-aware bending fibre** (tension fibre checked against tension only). Less conservative

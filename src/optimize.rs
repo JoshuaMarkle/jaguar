@@ -12,7 +12,7 @@
 //!
 //! Must stay deterministic: same canoe.toml => byte-identical result.json.
 
-use crate::check::{Verdict, check};
+use crate::check::{Verdict, check, first_moment_below};
 use crate::equilibrium::{CrewLoad, solve};
 use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
@@ -58,6 +58,9 @@ pub struct Candidate {
     /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
     /// (heaviest) load case. None unless objective.kind = drag.
     pub drag_n: Option<f64>,
+    /// Swamped-flotation air pocket length needed at EACH end, in. None when
+    /// `[flotation]` is absent or the pocket cannot be sized (then `error` says why).
+    pub air_pocket_in: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +77,37 @@ pub struct Winner {
     /// Along-hull diagrams for the winner at verification resolution, governing
     /// load case, for plotting.
     pub diagrams: Diagrams,
+    /// Every load case at verification resolution, in `load_cases` order.
+    pub cases: Vec<CaseDiagrams>,
+}
+
+/// One load case of the winner: resolved seats, equilibrium, stresses and
+/// per-station D/C (0 at masked tip stations; same formulas as check.rs).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CaseDiagrams {
+    pub name: String,
+    /// Knee x per paddler actually used, in from bow (seats_in or even spacing).
+    pub seats_in: Vec<f64>,
+    pub weights_lb: Vec<f64>,
+    /// Set when equilibrium failed for this case; all numbers below are then
+    /// absent/empty (never a sentinel). With an error, verdict is None.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub draft_in: Option<f64>,
+    pub trim_in: Option<f64>,
+    pub gm_in: Option<f64>,
+    pub freeboard_in: Option<f64>,
+    /// x, V, M, tension, waterline etc. (same shape as `Winner.diagrams`).
+    #[serde(flatten)]
+    pub diagrams: Diagrams,
+    pub compression_psi: Vec<f64>,
+    pub shear_psi: Vec<f64>,
+    pub compression_allow_psi: Option<f64>,
+    pub shear_allow_psi: Option<f64>,
+    pub dc_bending_tension: Vec<f64>,
+    pub dc_bending_compression: Vec<f64>,
+    pub dc_shear: Vec<f64>,
+    pub verdict: Option<Verdict>,
 }
 
 /// Per-station arrays (same length as `x_in`) for the web plot tabs.
@@ -251,6 +285,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         let sec = sections(&grid, c.thickness_in);
         let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
         let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
+        let cases = all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
         let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
         let edge = |x: f64, r: &[f64]| r.len() > 1 && (x == r[0] || x == r[r.len() - 1]);
         // Density at the end of the trusted fit range, where the full search range
@@ -271,11 +306,12 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                 || (!mixes_mode && edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
                 || edge(c.depth_in, &ds),
             at_mix_data_edge: mix_edge(c.density_pcf),
-            diagrams: v
-                .governing_case
-                .as_deref()
-                .and_then(|name| diagrams(params, &axis[ri].1, &grid, &sec, c.density_pcf, name))
+            diagrams: cases
+                .iter()
+                .find(|d| v.governing_case.as_deref() == Some(d.name.as_str()) && d.error.is_none())
+                .map(|d| d.diagrams.clone())
                 .unwrap_or_default(),
+            cases,
         }
     });
 
@@ -296,49 +332,118 @@ fn tension_allow(params: &Params, fit: &StrengthFit, rho: f64) -> f64 {
     fit.flexural_psi(rho) / params.material.factor_of_safety
 }
 
-/// Along-hull diagrams for one load case (the winner's governing case). None if
-/// the case is unknown or equilibrium fails (then the plots are simply empty).
-pub fn diagrams(
+/// Resolved knee x per paddler for `case`: `seats_in`, or evenly spaced.
+pub fn resolved_seats(case: &crate::params::LoadCase, grid: &Grid) -> Vec<f64> {
+    let n = grid.nx();
+    let length = grid.x[n - 1] - grid.x[0];
+    let k = case.weights_lb.len();
+    match &case.seats_in {
+        Some(s) => s.clone(),
+        None => (0..k).map(|i| grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64).collect(),
+    }
+}
+
+/// Every load case of the winner, in `params.load_cases` order.
+pub fn all_case_diagrams(
     params: &Params,
     fit: &StrengthFit,
     grid: &Grid,
     sec: &Sections,
+    t: f64,
+    rho: f64,
+) -> Vec<CaseDiagrams> {
+    params
+        .load_cases
+        .iter()
+        .map(|lc| match case_diagrams(params, fit, grid, sec, t, rho, &lc.name) {
+            Ok(c) => c,
+            Err(e) => CaseDiagrams {
+                name: lc.name.clone(),
+                seats_in: resolved_seats(lc, grid),
+                weights_lb: lc.weights_lb.clone(),
+                error: Some(format!("{e:#}")),
+                ..Default::default()
+            },
+        })
+        .collect()
+}
+
+/// Full per-case diagrams and per-station D/C (same masks and formulas as check.rs).
+pub fn case_diagrams(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    t: f64,
     rho: f64,
     case_name: &str,
-) -> Option<Diagrams> {
-    let case = params.load_cases.iter().find(|c| c.name == case_name)?;
+) -> Result<CaseDiagrams> {
+    let case = params
+        .load_cases
+        .iter()
+        .find(|c| c.name == case_name)
+        .ok_or_else(|| anyhow::anyhow!("unknown load case {case_name}"))?;
     let mat = &params.material;
     let n = grid.nx();
-    let length = grid.x[n - 1] - grid.x[0];
-    let k = case.weights_lb.len();
-    let crew: Vec<CrewLoad> = (0..k)
-        .map(|i| CrewLoad {
-            x_in: match &case.seats_in {
-                Some(s) => s[i],
-                None => grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64,
-            },
-            lb: case.weights_lb[i] * mat.dynamic_load_factor,
-        })
+    let seats = resolved_seats(case, grid);
+    let crew: Vec<CrewLoad> = seats
+        .iter()
+        .zip(&case.weights_lb)
+        .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor })
         .collect();
-    let loads = solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in).ok()?;
+    let loads = solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in)?;
+    let max_paddler =
+        case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
+    let verdict = check(grid, sec, &loads, rho, mat, fit, max_paddler, &params.punching);
+    let cap = |name: &str| verdict.checks.iter().find(|c| c.name == name).map_or(f64::NAN, |c| c.capacity);
+    let (ft_cap, fc_cap, v_cap) = (cap("bending_tension"), cap("bending_compression"), cap("shear"));
+    let dc = |s: f64, c: f64| if c.is_finite() && c > 0.0 { s / c } else { f64::INFINITY };
     let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
-    let tension_psi = (0..n)
-        .map(|i| {
-            let ii = sec.inertia[i];
-            if ii <= 1e-3 * imax {
-                return 0.0;
+    let mut out = CaseDiagrams {
+        name: case.name.clone(),
+        seats_in: seats,
+        weights_lb: case.weights_lb.clone(),
+        draft_in: Some(loads.draft_in),
+        trim_in: Some(loads.trim_in),
+        gm_in: Some(loads.gm_in),
+        freeboard_in: Some(verdict.freeboard_in),
+        compression_allow_psi: Some(fc_cap),
+        shear_allow_psi: Some(v_cap),
+        ..Default::default()
+    };
+    let mut tension_psi = Vec::with_capacity(n);
+    for i in 0..n {
+        let ii = sec.inertia[i];
+        if ii <= 1e-3 * imax {
+            for v in [&mut tension_psi, &mut out.compression_psi, &mut out.shear_psi] {
+                v.push(0.0);
             }
-            let c = sec.zbar[i].max(grid.depth - sec.zbar[i]);
-            loads.moment[i].abs() * c / ii
-        })
-        .collect();
+            for v in [&mut out.dc_bending_tension, &mut out.dc_bending_compression, &mut out.dc_shear] {
+                v.push(0.0);
+            }
+            continue;
+        }
+        let m = loads.moment[i];
+        let (c_top, c_bot) = (grid.depth - sec.zbar[i], sec.zbar[i]);
+        let cc = if m >= 0.0 { c_top } else { c_bot };
+        let st = m.abs() * c_top.max(c_bot) / ii;
+        let sc = m.abs() * cc / ii;
+        let q = first_moment_below(grid.row(i), &grid.z, t, sec.zbar[i]);
+        let tau = loads.shear[i].abs() * q / (ii * 2.0 * t);
+        tension_psi.push(st);
+        out.compression_psi.push(sc);
+        out.shear_psi.push(tau);
+        out.dc_bending_tension.push(dc(st, ft_cap));
+        out.dc_bending_compression.push(dc(sc, fc_cap));
+        out.dc_shear.push(dc(tau, v_cap));
+    }
     let l = grid.x[n - 1];
     let waterline_in = grid
         .x
         .iter()
         .map(|&x| (loads.draft_in + loads.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
         .collect();
-    Some(Diagrams {
+    out.diagrams = Diagrams {
         x_in: grid.x.clone(),
         shear_lb: loads.shear,
         moment_lbin: loads.moment,
@@ -347,7 +452,9 @@ pub fn diagrams(
         area_in2: sec.area.clone(),
         inertia_in4: sec.inertia.clone(),
         waterline_in,
-    })
+    };
+    out.verdict = Some(verdict);
+    Ok(out)
 }
 
 /// Is `b` a better winner than `a` (both passing) under the objective?
@@ -390,6 +497,7 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         shape: None,
         gm_in: None,
         drag_n: None,
+        air_pocket_in: None,
         thickness_in: t,
         density_pcf: rho,
         depth_in: grid.depth,
@@ -459,6 +567,17 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
                 Ok(r) => c.drag_n = Some(r),
                 Err(e) => {
                     c.error = Some(format!("drag: {e:#}"));
+                    c.verdict = Some(v);
+                    c.governing_case = Some(name);
+                    return c;
+                }
+            }
+        }
+        if let Some(fp) = &params.flotation {
+            match crate::flotation::flotation(grid, sec, t, rho, fp.swamp_factor, fp.air_pocket_max_in) {
+                Ok(f) => c.air_pocket_in = Some(f.pocket_len_in),
+                Err(e) => {
+                    c.error = Some(format!("{e:#}"));
                     c.verdict = Some(v);
                     c.governing_case = Some(name);
                     return c;
