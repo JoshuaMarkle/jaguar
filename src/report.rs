@@ -45,6 +45,28 @@ pub fn mix_fit_line(f: &crate::mix::StrengthFit) -> String {
     )
 }
 
+/// Strength-model header: the fit line, or (tested_mixes) up to 3 lines of mixes.
+pub fn strength_lines(r: &RunResult) -> Vec<String> {
+    if r.params.material.strength_model != crate::params::StrengthModel::TestedMixes {
+        return vec![format!("model fit  {}", mix_fit_line(&r.strength))];
+    }
+    let m = r.strength.tested_mixes();
+    let mut out = vec![format!("strength model tested_mixes: {} mixes, design = mean final split", m.len())];
+    let items: Vec<String> = m
+        .iter()
+        .map(|x| {
+            format!(
+                "{} n{} {:.1}pcf {:.0}/{:.0}psi",
+                x.name, x.n, x.density_pcf, x.split_mean_psi, x.split_min_psi
+            )
+        })
+        .collect();
+    for chunk in items.chunks(4).take(2) {
+        out.push(format!("  mix (name n rho mean/min) {}", chunk.join("  ")));
+    }
+    out
+}
+
 fn feet(inches: f64) -> String {
     let total = inches.round() as i64;
     format!("{} ft {} in", total / 12, total % 12)
@@ -68,7 +90,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         p.hull.file.as_ref().map_or("(shape search)".to_string(), |f| f.display().to_string()),
         p.hull.stations
     ));
-    out.push(mix_fit_line(&r.strength));
+    out.extend(strength_lines(r));
     for lc in p.load_cases.iter().take(MAX_CASES) {
         let w: Vec<String> = lc.weights_lb.iter().map(|w| format!("{w:.0}")).collect();
         let total: f64 = lc.weights_lb.iter().sum();
@@ -151,9 +173,13 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         Some(w) => {
             let c = &w.candidate;
             let v = c.verdict.as_ref();
+            let rho = match &c.mix {
+                Some(m) => format!("mix {m} ({:.1} pcf)", c.density_pcf),
+                None => format!("rho {:.1} pcf", c.density_pcf),
+            };
             out.push(format!(
-                "WINNER  t {:.3} in  rho {:.1} pcf  depth {:.2} in  weight {:.2} lb",
-                c.thickness_in, c.density_pcf, c.depth_in, c.hull_weight_lb
+                "WINNER  t {:.3} in  {rho}  depth {:.2} in  weight {:.2} lb",
+                c.thickness_in, c.depth_in, c.hull_weight_lb
             ));
             out.push(format!(
                 "        D/C {}  freeboard {} in  governing {}",

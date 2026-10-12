@@ -36,6 +36,38 @@ pub struct MixPoint {
     pub fraction_of_final: f64,
     /// `measured_psi / fraction_of_final`.
     pub final_psi: f64,
+    /// Tested-mix group this row belongs to: the `mix_id` column when given
+    /// and non-empty, else [`mix_group`] of `mix` ("M2 A" -> "M2").
+    pub group: String,
+}
+
+/// One tested mix: all rows sharing a group name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TestedMix {
+    pub name: String,
+    /// Number of rows (cylinders).
+    pub n: usize,
+    /// Mean density of the rows, pcf.
+    pub density_pcf: f64,
+    /// Mean FINAL split tensile strength, psi. This is the design strength.
+    pub split_mean_psi: f64,
+    /// Lowest FINAL split tensile strength of the rows, psi (reported only).
+    pub split_min_psi: f64,
+}
+
+/// Group name for a `mix` cell: a trailing replicate token (a single letter or
+/// a number, after a space) is stripped, so "M2 A", "M2 B" and "M2 3" are all
+/// "M2". Names without such a token ("final target") are kept as given.
+pub fn mix_group(mix: &str) -> String {
+    let m = mix.trim();
+    if let Some((head, last)) = m.rsplit_once(char::is_whitespace) {
+        let rep = (last.chars().count() == 1 && last.chars().all(|c| c.is_ascii_alphabetic()))
+            || (!last.is_empty() && last.chars().all(|c| c.is_ascii_digit()));
+        if rep && !head.trim().is_empty() {
+            return head.trim().to_string();
+        }
+    }
+    m.to_string()
 }
 
 /// Linear fit of FINAL split tensile strength vs density, plus derived strengths.
@@ -66,6 +98,45 @@ impl StrengthFit {
     pub fn fc_psi(&self, rho: f64) -> f64 {
         let s = self.split_psi(rho);
         if s <= 0.0 { s } else { (s / 6.7).powi(2) }
+    }
+
+    /// Tested mixes (rows grouped by [`MixPoint::group`]), ordered by mean
+    /// density then name. Design strength of a mix = mean final split strength.
+    pub fn tested_mixes(&self) -> Vec<TestedMix> {
+        let mut names: Vec<&str> = self.points.iter().map(|p| p.group.as_str()).collect();
+        names.sort();
+        names.dedup();
+        let mut out: Vec<TestedMix> = names
+            .into_iter()
+            .map(|name| {
+                let rows: Vec<&MixPoint> = self.points.iter().filter(|p| p.group == name).collect();
+                let n = rows.len();
+                TestedMix {
+                    name: name.to_string(),
+                    n,
+                    density_pcf: rows.iter().map(|p| p.density_pcf).sum::<f64>() / n as f64,
+                    split_mean_psi: rows.iter().map(|p| p.final_psi).sum::<f64>() / n as f64,
+                    split_min_psi: rows.iter().map(|p| p.final_psi).fold(f64::INFINITY, f64::min),
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.density_pcf.total_cmp(&b.density_pcf).then_with(|| a.name.cmp(&b.name)));
+        out
+    }
+
+    /// Strength model for one tested mix: a flat line at the mix's mean final
+    /// split strength (so `split_psi`, `flexural_psi`, `fc_psi` give that mix's
+    /// values at any density), with the mix's own points and density.
+    pub fn for_mix(&self, m: &TestedMix) -> StrengthFit {
+        StrengthFit {
+            points: self.points.iter().filter(|p| p.group == m.name).cloned().collect(),
+            split_slope_psi_per_pcf: 0.0,
+            split_intercept_psi: m.split_mean_psi,
+            rms_residual_psi: 0.0,
+            density_min_pcf: m.density_pcf,
+            density_max_pcf: m.density_pcf,
+            flex_over_split: self.flex_over_split,
+        }
     }
 
     /// Least-squares fit through the given points.
@@ -106,7 +177,8 @@ impl StrengthFit {
 }
 
 /// Parse the mix CSV: `#` comment lines, one header line, then rows with
-/// columns `mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note`.
+/// columns `mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note`
+/// and an optional `mix_id` column that overrides the tested-mix grouping.
 /// Columns are found by header name, so order may change and extra columns
 /// are ignored. Quoted fields and thousands separators ("7,191") are handled.
 pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
@@ -120,6 +192,7 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
     };
     let (ci_mix, ci_rho, ci_psi, ci_frac) =
         (col("mix")?, col("density_pcf")?, col("split_tensile_psi")?, col("fraction_of_final")?);
+    let ci_id = header.iter().position(|h| h.trim().eq_ignore_ascii_case("mix_id"));
     let mut out = vec![];
     for (ln, line) in lines.enumerate() {
         let f = split_csv(line);
@@ -135,8 +208,11 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
         if !(rho > 0.0 && psi > 0.0 && frac > 0.0 && frac <= 1.0) {
             bail!("row {}: need density > 0, strength > 0, 0 < fraction_of_final <= 1", ln + 1);
         }
+        let mix = f.get(ci_mix).cloned().unwrap_or_default();
+        let id = ci_id.and_then(|i| f.get(i)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         out.push(MixPoint {
-            mix: f.get(ci_mix).cloned().unwrap_or_default(),
+            group: id.unwrap_or_else(|| mix_group(&mix)),
+            mix,
             density_pcf: rho,
             measured_psi: psi,
             fraction_of_final: frac,
@@ -177,6 +253,38 @@ mod tests {
         // f'c from ACI split relation.
         let s = fit.split_psi(60.0);
         assert!((fit.fc_psi(60.0) - (s / 6.7).powi(2)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn grouping_rule() {
+        assert_eq!(mix_group("M2 A"), "M2");
+        assert_eq!(mix_group("M2 b"), "M2");
+        assert_eq!(mix_group("Mix 7 12"), "Mix 7");
+        assert_eq!(mix_group("final target"), "final target");
+        assert_eq!(mix_group("M2"), "M2");
+        assert_eq!(mix_group("A"), "A");
+        let t = "mix,mix_id,density_pcf,split_tensile_psi,fraction_of_final\nM2 A,,56,120,0.6\nfoo,M2,54,150,0.6\nX,,60,300,1\n";
+        let p = parse_csv(t).unwrap();
+        assert_eq!(p[0].group, "M2");
+        assert_eq!(p[1].group, "M2");
+    }
+
+    #[test]
+    fn team_data_per_mix_means() {
+        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let m = fit.tested_mixes();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].name, "M2");
+        assert_eq!(m[0].n, 2);
+        assert!((m[0].density_pcf - (56.408 + 54.860) / 2.0).abs() < 1e-9);
+        assert!((m[0].split_mean_psi - 144.0 / 0.6).abs() < 1e-9);
+        assert!((m[0].split_min_psi - 143.0 / 0.6).abs() < 1e-9);
+        assert_eq!(m[1].n, 1);
+        assert!((m[1].split_mean_psi - 300.0).abs() < 1e-9);
+        let f = fit.for_mix(&m[0]);
+        assert!((f.split_psi(10.0) - 240.0).abs() < 1e-9);
+        assert!((f.fc_psi(99.0) - (240.0f64 / 6.7).powi(2)).abs() < 1e-9);
+        assert_eq!(f.points.len(), 2);
     }
 
     #[test]

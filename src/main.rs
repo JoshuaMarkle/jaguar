@@ -92,7 +92,7 @@ fn main() -> Result<()> {
         Cmd::Check { params } => {
             let p = Params::load(&params)?;
             let fit = optimize::strength(&p)?;
-            let rhos = optimize::densities(&p, &fit)?;
+            let rhos: Vec<f64> = optimize::density_axis(&p, &fit)?.iter().map(|a| a.0).collect();
             match &p.hull.file {
                 Some(f) => {
                     let hull = Hull::load(f)?;
@@ -154,6 +154,23 @@ fn main() -> Result<()> {
                 );
             }
             println!("{}", report::mix_fit_line(&fit));
+            println!(
+                "tested mixes (strength_model = \"tested_mixes\"; design = mean final split):\n{:<16} {:>3} {:>8} {:>10} {:>10} {:>10} {:>8}",
+                "mix", "n", "rho pcf", "split mean", "split min", "flexural", "f'c"
+            );
+            for m in fit.tested_mixes() {
+                let f = fit.for_mix(&m);
+                println!(
+                    "{:<16} {:>3} {:>8.1} {:>10.0} {:>10.0} {:>10.0} {:>8.0}",
+                    m.name,
+                    m.n,
+                    m.density_pcf,
+                    m.split_mean_psi,
+                    m.split_min_psi,
+                    f.flexural_psi(m.density_pcf),
+                    f.fc_psi(m.density_pcf)
+                );
+            }
             for rho in [fit.density_min_pcf, fit.density_max_pcf] {
                 println!(
                     "  at {rho:.1} pcf: split {:.0} psi, flexural {:.0} psi, f'c {:.0} psi",

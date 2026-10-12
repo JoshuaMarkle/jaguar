@@ -11,7 +11,8 @@ does not matter, extra columns are ignored):
 
 | column | meaning |
 |---|---|
-| `mix` | name of the mix / cylinder, free text |
+| `mix` | name of the mix / cylinder, free text. A trailing replicate token (one letter or a number after a space) is stripped to get the tested mix: `M2 A`, `M2 B` -> `M2` |
+| `mix_id` | optional; when present and non-empty it overrides the grouping above |
 | `cured_days` | age at the break (informational) |
 | `density_pcf` | wet density of the cylinder, pcf (the raw sheet's "Wet Density" column; the "final target" row's 60 pcf is also in that column). Hull weight uses the same density, so if your mold-day concrete is lighter once dry, reported weights are conservative. |
 | `split_tensile_psi` | measured split-cylinder tensile strength, psi ("7,191" style commas ok) |
@@ -36,6 +37,24 @@ A row that already is a final (28-day or design) strength has `1.0`.
 Check the fit any time with `jaguar mix` (or `jaguar mix path/to.csv`): it prints every point
 (measured, fraction, final, fitted) and the line. `jaguar check` warns when the fit is weak
 (fewer than 5 points, or rms scatter above 15% of the mean).
+
+## Choosing between tested mixes (`strength_model = "tested_mixes"`)
+
+`material.strength_model = "fit"` (default in `examples/canoe.toml`) uses the line above at any
+density in the trusted range. `"tested_mixes"` (see `examples/canoe_mixes.toml`) instead lets the
+optimizer choose only among the mixes actually tested:
+
+* rows are grouped into mixes by the rule in the `mix` column above;
+* per mix: n, mean density, mean and min FINAL split strength (each row scaled by its
+  `fraction_of_final`). The **design strength is the mean**; min and n are reported so you can see
+  the scatter;
+* the density axis is the list of mixes (ordered by density then name). `search.density_pcf` and
+  `density_extrapolation_pcf` are ignored and there are no grid-edge/mix-edge flags for density;
+* flexural and f'c come from the mix's mean split strength exactly as in fit mode.
+
+The winner line reads e.g. `mix M2 (55.6 pcf)`. `jaguar mix` prints the per-mix table. The
+"final target" row (60 pcf, 300 psi, final) has no replicate token so it is its own mix; it is the
+team's target mix, kept under the name the raw sheet implies.
 
 ## Extrapolation limit (why winners stop at 51 pcf)
 

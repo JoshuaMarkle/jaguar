@@ -17,7 +17,7 @@ use crate::equilibrium::{CrewLoad, solve};
 use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
 use crate::mix::StrengthFit;
-use crate::params::{ObjectiveKind, Params, range};
+use crate::params::{ObjectiveKind, Params, StrengthModel, range};
 use crate::resistance::resistance;
 use crate::section::{Sections, sections};
 use anyhow::Result;
@@ -167,6 +167,23 @@ pub fn densities(params: &Params, fit: &StrengthFit) -> Result<Vec<f64>> {
     Ok(v)
 }
 
+/// The density axis: (density, strength model, tested-mix name) per entry.
+/// Fit mode: [`densities`] with the global fit, no names. Tested-mixes mode:
+/// one entry per tested mix (by density then name) with that mix's own
+/// strength; search.density_pcf and the extrapolation limit are ignored.
+pub fn density_axis(params: &Params, fit: &StrengthFit) -> Result<Vec<(f64, StrengthFit, Option<String>)>> {
+    match params.material.strength_model {
+        StrengthModel::Fit => {
+            Ok(densities(params, fit)?.into_iter().map(|r| (r, fit.clone(), None)).collect())
+        }
+        StrengthModel::TestedMixes => {
+            let m = fit.tested_mixes();
+            anyhow::ensure!(!m.is_empty(), "no tested mixes in the mix data");
+            Ok(m.iter().map(|x| (x.density_pcf, fit.for_mix(x), Some(x.name.clone()))).collect())
+        }
+    }
+}
+
 /// Same result as [`run`] (byte-identical JSON), plus progress events.
 ///
 /// If the winner's analysis fails at verification resolution, it is reported
@@ -200,7 +217,9 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     let floor = params.gates.thickness_min_buildable_in;
     let ts: Vec<f64> = range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect();
     let fit = strength(params)?;
-    let rhos = densities(params, &fit)?;
+    let axis = density_axis(params, &fit)?;
+    let rhos: Vec<f64> = axis.iter().map(|a| a.0).collect();
+    let mixes_mode = params.material.strength_model == StrengthModel::TestedMixes;
     let ds = range(params.search.depth_in);
     let total = ts.len() * rhos.len() * ds.len();
     on_progress(Progress::Started { total });
@@ -221,7 +240,8 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             rhos.iter()
                 .enumerate()
                 .map(|(ri, &rho)| {
-                    let c = evaluate(params, &fit, grid, &sec, t, rho);
+                    let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho);
+                    c.mix = axis[ri].2.clone();
                     let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                     on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
                     (ti, ri, gi, c)
@@ -239,15 +259,17 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         on_progress(Progress::Verifying { stations });
         let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
         let sec = sections(&grid, c.thickness_in);
-        let v = evaluate(params, &fit, &grid, &sec, c.thickness_in, c.density_pcf);
+        let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
+        let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
         let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
         let edge = |x: f64, r: &[f64]| r.len() > 1 && (x == r[0] || x == r[r.len() - 1]);
         // Density at the end of the trusted fit range, where the full search range
         // extended further: the lab data, not the search range, is the limit.
         let full = range(params.search.density_pcf);
         let mix_edge = |x: f64| {
-            (x == rhos[0] && full[0] < rhos[0] - 1e-9)
-                || (x == rhos[rhos.len() - 1] && full[full.len() - 1] > rhos[rhos.len() - 1] + 1e-9)
+            !mixes_mode
+                && ((x == rhos[0] && full[0] < rhos[0] - 1e-9)
+                    || (x == rhos[rhos.len() - 1] && full[full.len() - 1] > rhos[rhos.len() - 1] + 1e-9))
         };
         Winner {
             candidate: c.clone(),
@@ -256,7 +278,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
             // Thickness at the buildable floor is a real constraint, not a range problem.
             on_grid_edge: (edge(c.thickness_in, &ts) && (c.thickness_in - floor).abs() > 1e-9)
-                || (edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
+                || (!mixes_mode && edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
                 || edge(c.depth_in, &ds),
             at_mix_data_edge: mix_edge(c.density_pcf),
             diagrams: Diagrams::default(),
