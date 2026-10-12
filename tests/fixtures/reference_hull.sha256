@@ -1,0 +1,10 @@
+# SHA-256 of the tracked reference hull (the geometry every sweep validates
+# against).  Pinned so an accidental in-repo Godzilla/sweep overwrite fails CI
+# instead of silently corrupting downstream parses.
+#
+# Regenerate ONLY on an intentional hull redesign, in the same commit:
+#     sha256sum in.mlt off1.mlt out.mlt > tests/fixtures/reference_hull.sha256
+# (then restore this header)
+4fe4bb8a2f7ccf931384ae45eb7f191c99c008cec2fa1ddb8b15a361087fbc13  in.mlt
+1e44d6470337aa87bc69e0d790b92b232a9714e7755961c3afc27328332d79ec  off1.mlt
+a7b11dd3b685df547c2880c44532c73aad29a6422581f95a266a4067501edb04  out.mlt
