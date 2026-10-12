@@ -43,6 +43,7 @@ data/               lab mix data (mix_tests.csv, cleaned from data/raw/)
 | `docs/PUNCHING.md` | touching knee punching (it governs every example) |
 | `docs/MIX_DATA.md` | touching strength or `data/` |
 | `docs/SHAPE_SEARCH.md` | touching `shapeopt.rs`, `hullgen.rs`, `resistance.rs` |
+| `docs/DESIGN.md` | touching `web/` (visual language: monochrome, pills, hairlines, no shadows) |
 | `docs/HULLS.md` | example results. Update the table when a change moves a winner |
 
 ## Commands

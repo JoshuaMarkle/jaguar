@@ -4,55 +4,163 @@
 <meta charset="utf-8">
 <title>JAGUAR</title>
 <style>
-  body { margin: 0; font: 13px sans-serif; display: grid; grid-template-columns: 430px 1fr; grid-template-rows: 60vh 40vh; height: 100vh; }
-  #left { grid-row: 1 / 3; padding: 8px; overflow: auto; border-right: 1px solid #ccc; }
-  #toml { width: 100%; height: 40vh; font: 12px monospace; }
-  #view { position: relative; }
-  #plotwrap { border-top: 1px solid #ccc; display: flex; flex-direction: column; min-height: 0; }
-  #plotctl { font-size: 12px; padding: 2px 6px; min-height: 20px; }
+  /* Tokens from docs/DESIGN.md, scaled down for a dense tool UI (CAD/Blender-like, not a marketing page). */
+  :root {
+    --ink: #141414; --ink-soft: #262626; --muted: #707070; --faint: #adadad;
+    --canvas: #ffffff; --soft: #f3f3f3; --field: #f0f0f0; --hair-soft: #f0f0f0; --hair: #e0e0e0;
+    --accent: #0066ff;
+    --font: "Saans", "Inter", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+    --ctl-h: 26px; --label-w: 148px; --unit-w: 28px;
+    --side: 420px; --plot: 40vh;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 450 12px/1.4 var(--font); color: var(--ink); background: var(--canvas);
+    display: grid; grid-template-columns: var(--side) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--plot); overflow: hidden;
+    -webkit-font-smoothing: antialiased; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+
+  /* ---------- left sidebar ---------- */
+  #left { grid-row: 1 / 3; position: relative; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--hair); }
+  #head { display: flex; align-items: baseline; gap: var(--s2); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--hair-soft); }
+  #head b { font-weight: 600; font-size: 13px; }
+  #head span { color: var(--muted); }
+  #scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; scrollbar-gutter: stable; }
+  #scroll::-webkit-scrollbar { width: 8px; }
+  #scroll::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 999px; border: 2px solid var(--canvas); }
+  #scroll::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+  #foot { padding: var(--s3) var(--s4); border-top: 1px solid var(--hair-soft); display: grid; gap: var(--s2); }
+  .statusline { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .sec { border-bottom: 1px solid var(--hair-soft); }
+  /* Section titles start at the same x as row labels. The disclosure chevron sits in the left gutter. */
+  .sec > summary { list-style: none; cursor: pointer; user-select: none; display: flex; align-items: baseline; gap: var(--s2);
+    position: relative; padding: var(--s2) var(--s4); font-weight: 600; }
+  .sec > summary::-webkit-details-marker { display: none; }
+  .sec > summary::before { content: ""; position: absolute; left: 5px; top: 50%; width: 0; height: 0; border: 3.5px solid transparent; border-left: 4.5px solid var(--faint);
+    transform: translate(0, -50%); transition: transform .12s; }
+  .sec[open] > summary::before { transform: translate(-2px, -25%) rotate(90deg); }
+  .sec > summary:hover { background: #fafafa; }
+  .sec > summary:hover::before { border-left-color: var(--ink); }
+  .sec > summary .note { font-weight: 450; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sec > .body { padding: 0 var(--s4) var(--s3); display: grid; gap: var(--s1); }
+
+  /* Every row is the same 3-column grid so labels, controls and units line up through the whole sidebar. */
+  .row, .kv { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr) var(--unit-w); align-items: center; column-gap: var(--s2); min-height: var(--ctl-h); }
+  .row > label { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+  .row > .unit { color: var(--muted); }
+  .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: -2px; }
+  .multi { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s1); }
+  .kv { min-height: 22px; }
+  .kv > :first-child { color: var(--muted); }
+  .kv > :nth-child(2) { grid-column: 2 / 4; font-variant-numeric: tabular-nums; }
+
+  input[type=number], input[type=text], input:not([type]), select, textarea {
+    width: 100%; height: var(--ctl-h); padding: 0 10px; border: 0; border-radius: 999px; background: var(--field); outline: none; min-width: 0; }
+  input[type=number] { font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+  input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  input::placeholder, textarea::placeholder { color: var(--faint); }
+  input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 2px var(--ink); }
+  input:invalid { box-shadow: inset 0 0 0 1px var(--muted); }
+  select { appearance: none; -webkit-appearance: none; padding-right: 26px; cursor: pointer; text-overflow: ellipsis;
+    background: var(--field) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23707070'/%3E%3C/svg%3E") no-repeat right 10px center; }
+  textarea { height: auto; padding: var(--s2) 10px; border-radius: 12px; font: 11px/1.45 var(--mono); resize: vertical; }
+  #toml { height: 40vh; } #gen { height: 30vh; }
+
+  input.switch { appearance: none; -webkit-appearance: none; width: 28px; height: 16px; border-radius: 999px; background: var(--hair);
+    position: relative; cursor: pointer; margin: 0; justify-self: start; transition: background .12s; }
+  input.switch::before { content: ""; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--canvas); transition: left .12s; }
+  input.switch:checked { background: var(--ink); } input.switch:checked::before { left: 14px; }
+
+  .btn { height: var(--ctl-h); padding: 0 var(--s3); border-radius: 999px; border: 1px solid var(--hair); background: var(--canvas);
+    cursor: pointer; font-weight: 500; white-space: nowrap; justify-self: start; }
+  .btn:hover { border-color: var(--faint); }
+  .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--canvas); height: 30px; justify-self: stretch; }
+  .btn.primary:hover { background: var(--ink-soft); }
+  .btn.soft { background: var(--soft); border-color: transparent; } .btn.soft:hover { background: var(--hair); }
+  .btn:disabled { opacity: .45; cursor: default; }
+
+  .lc { border: 1px solid var(--hair); border-radius: 12px; padding: var(--s1) var(--s2); margin: 0 calc(-1 * var(--s2) - 1px); display: grid; gap: var(--s1); }
+
+  progress { appearance: none; -webkit-appearance: none; width: 100%; height: 4px; border: 0; border-radius: 999px; background: var(--soft); overflow: hidden; }
+  progress::-webkit-progress-bar { background: var(--soft); }
+  progress::-webkit-progress-value { background: var(--ink); border-radius: 999px; }
+  progress::-moz-progress-bar { background: var(--ink); border-radius: 999px; }
+
+  #err:empty { display: none; }
+  #err { white-space: pre-wrap; background: var(--soft); border-radius: 12px; padding: var(--s2) var(--s3); color: var(--ink); }
+  #err::before { content: "Error  "; font-weight: 600; }
+  .note-box { background: var(--soft); border-radius: 12px; padding: var(--s2) var(--s3); color: var(--ink-soft); margin-top: var(--s1); }
+  .muted { color: var(--muted); } .hint { color: var(--muted); font-size: 11px; }
+  .badge { display: inline-block; height: 20px; line-height: 18px; padding: 0 var(--s2); border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--ink); }
+  .badge.solid { background: var(--ink); color: var(--canvas); }
+  .group { margin-top: var(--s2); color: var(--muted); }
+
+  .tbl { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; margin-top: var(--s1); }
+  .tbl th { font-weight: 450; color: var(--muted); text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+  .tbl td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair-soft); white-space: nowrap; }
+  .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
+  .tbl tr.gov td { font-weight: 600; }
+  .bar { display: inline-block; height: 6px; border-radius: 999px; vertical-align: middle; }
+
+  /* ---------- resizers ---------- */
+  .gutter { position: absolute; z-index: 5; }
+  .gutter::after { content: ""; position: absolute; background: transparent; transition: background .12s; }
+  .gutter:hover::after, .gutter.drag::after { background: var(--ink); }
+  #gutter-side { top: 0; bottom: 0; right: -4px; width: 7px; cursor: col-resize; }
+  #gutter-side::after { top: 0; bottom: 0; left: 3px; width: 1px; }
+  #gutter-plot { left: 0; right: 0; top: -4px; height: 7px; cursor: row-resize; }
+  #gutter-plot::after { left: 0; right: 0; top: 3px; height: 1px; }
+  body.resizing { user-select: none; } body.resizing canvas { pointer-events: none; }
+
+  /* ---------- viewport + plots ---------- */
+  #view { position: relative; min-height: 0; background: var(--soft); overflow: hidden; }
+  #view canvas { display: block; }
+  #viewlabel:empty { display: none; }
+  #viewlabel { position: absolute; left: var(--s3); top: var(--s3); background: var(--canvas); border-radius: 999px; padding: 3px 10px; color: var(--ink-soft); }
+  #plotwrap { position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; }
+  #plotctl { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
+  #plotctl select { width: auto; height: 24px; }
+  #plotctl .muted { margin-left: var(--s1); }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
-  #tabs { display: flex; border-top: 1px solid #ccc; background: #eee; }
-  #tabs button { border: 0; border-right: 1px solid #ccc; background: none; padding: 4px 10px; cursor: pointer; font: 12px sans-serif; }
-  #tabs button.on { background: #fff; font-weight: bold; box-shadow: inset 0 2px #36c; }
-  progress { width: 100%; }
-  .ok { color: #080; font-weight: bold; } .bad { color: #c00; font-weight: bold; } .warn { color: #b60; }
-  #err { color: #c00; white-space: pre-wrap; }
-  table td { padding: 1px 6px; }
-  fieldset { margin: 6px 0; padding: 4px 6px; } legend { font-weight: bold; }
-  .row { display: flex; align-items: center; gap: 4px; margin: 2px 0; }
-  .row label { width: 150px; } .row input[type=number] { width: 70px; } .row select { flex: 1; }
-  .unit { color: #666; width: 30px; } .q { color: #36c; cursor: help; font-size: 11px; }
-  .lc { border: 1px dashed #bbb; padding: 3px; margin: 3px 0; } .lc input { width: 160px; }
-  .tri input { width: 58px !important; } .bar { display: inline-block; height: 8px; background: #48c; vertical-align: middle; }
-  details { margin: 6px 0; } #gen { width: 100%; height: 30vh; font: 11px monospace; }
-  #checks td { white-space: nowrap; } .gov { font-weight: bold; }
-  .hint { color: #888; font-size: 11px; } #mix table td, #winner table td { padding: 0 4px; }
-  #viewlabel { position: absolute; left: 8px; top: 6px; background: #fffc; padding: 2px 6px; font-weight: bold; }
+  #tabs { display: flex; gap: 2px; margin: var(--s2) var(--s3); padding: 2px; background: var(--soft); border-radius: 999px; align-self: flex-start; }
+  #tabs button { border: 0; background: none; height: 24px; padding: 0 var(--s3); border-radius: 999px; cursor: pointer; color: var(--muted); }
+  #tabs button:hover { color: var(--ink); }
+  #tabs button.on { background: var(--canvas); color: var(--ink); box-shadow: 0 1px 2px rgba(20, 20, 20, .08); }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 <div id="left">
-  <h3 style="margin:4px 0">JAGUAR: lightest wall that does not crack</h3>
-  <form id="form" onsubmit="return false"></form>
-  <details id="raw"><summary>Advanced: edit raw TOML (when open, this text is submitted instead of the form)</summary>
-    <textarea id="toml" spellcheck="false"></textarea></details>
-  <button id="run">Run optimization</button>
-  <div id="err"></div>
-  <details id="gendet"><summary>Generated canoe.toml</summary>
-    <button id="copy" type="button">Copy</button><br><textarea id="gen" readonly></textarea></details>
-  <div id="status">idle</div>
-  <progress id="prog" value="0" max="1"></progress>
-  <h4>Mix data</h4>
-  <div id="mix">loading...</div>
-  <h4>Winner</h4>
-  <div id="winner">no result yet</div>
+  <div id="head"><b>Jaguar</b><span>lightest wall that does not crack</span></div>
+  <div id="scroll">
+    <form id="form" onsubmit="return false"></form>
+    <details class="sec" id="raw"><summary>Raw TOML<span class="note">when open, submitted instead of the form</span></summary>
+      <div class="body"><textarea id="toml" spellcheck="false"></textarea></div></details>
+    <details class="sec" id="gendet"><summary>Generated canoe.toml</summary>
+      <div class="body"><textarea id="gen" readonly></textarea><button id="copy" type="button" class="btn soft">Copy</button></div></details>
+    <details class="sec keep" id="sec-winner" open><summary>Result</summary><div class="body" id="winner"></div></details>
+    <details class="sec keep" id="sec-mix" open><summary>Mix data</summary><div class="body" id="mix">loading</div></details>
+  </div>
+  <div id="foot">
+    <button id="run" class="btn primary">Run optimization</button>
+    <div class="statusline"><span id="status">idle</span></div>
+    <progress id="prog" value="0" max="1"></progress>
+    <div id="err"></div>
+  </div>
+  <div class="gutter" id="gutter-side" title="Drag to resize. Double-click to reset."></div>
 </div>
 <div id="view"><div id="viewlabel"></div></div>
-<div id="plotwrap"><div id="plotctl"></div><canvas id="plot"></canvas><div id="tabs"></div></div>
+<div id="plotwrap"><div class="gutter" id="gutter-plot" title="Drag to resize. Double-click to reset."></div><div id="plotctl"></div><canvas id="plot"></canvas><div id="tabs"></div></div>
 <script>
 const $ = id => document.getElementById(id);
 let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'weight', hullLabel = '';
+// Monochrome palette shared by the canvas plots (docs/DESIGN.md). Accent marks the winner only.
+const C = { ink: '#141414', soft: '#262626', muted: '#707070', faint: '#adadad', hair: '#e0e0e0', grid: '#f0f0f0', bg: '#ffffff', accent: '#0066ff' };
+const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim();
+const font = (px, w = 450) => `${w} ${px}px ${FONT}`;
 
 function parseTomlBits(text) {
   // Just enough to read gates.dc_search and search.depth_in max for drawing.
@@ -69,6 +177,25 @@ function parseTomlBits(text) {
   }
 }
 
+// ---------- layout: draggable sidebar and plot pane, sizes kept in localStorage ----------
+const store = { get: k => { try { return localStorage.getItem('jaguar.' + k); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem('jaguar.' + k, v); } catch (e) {} } };
+function gutter(el, cssVar, key, size, clamp) {
+  const root = document.documentElement.style, saved = Number(store.get(key));
+  if (saved) root.setProperty(cssVar, clamp(saved) + 'px');
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault(); el.setPointerCapture(e.pointerId); el.classList.add('drag'); document.body.classList.add('resizing');
+    const move = ev => { root.setProperty(cssVar, clamp(size(ev)) + 'px'); resize(); };
+    const up = ev => {
+      el.releasePointerCapture(e.pointerId); el.classList.remove('drag'); document.body.classList.remove('resizing');
+      el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up);
+      store.set(key, clamp(size(ev)));
+    };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+  });
+  el.addEventListener('dblclick', () => { root.removeProperty(cssVar); store.set(key, ''); resize(); });
+}
+gutter($('gutter-side'), '--side', 'side', e => e.clientX, x => Math.round(Math.min(Math.max(x, 300), window.innerWidth * 0.7)));
+gutter($('gutter-plot'), '--plot', 'plot', e => window.innerHeight - e.clientY, y => Math.round(Math.min(Math.max(y, 120), window.innerHeight - 120)));
 
 // ---------- form ----------
 // [section, key, label, unit, tooltip, step, min]
@@ -119,28 +246,31 @@ const PUNCH = [
   ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
   ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
   ['d_over_t', 'Mesh depth / wall', '-', 'How deep the reinforcing mesh sits, as a fraction of wall thickness (aci_22_6 only). 0.5 = mesh in the middle of the wall.', 'any', 0]];
-const SECTIONS = { punching: 'Punching (knee through the bottom)', hull: 'Hull', crew: 'Crew (load cases: the design must pass all of them)', material: 'Material', search: 'Search ranges (min / max / step)', gates: 'Gates', stability: 'Stability', objective: 'Objective', shape: 'Shape search (min / max; equal = fixed)' };
+// [title, note shown muted next to it]
+const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
-const tip = t => `<span class="q" title="${t}">(?)</span>`;
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+// One aligned row: label | control | unit. The tooltip lives on the row so hovering anywhere explains it.
+const row = (id, label, t, ctl, unit = '', sub = '') => `<div class="row" title="${esc(t)}"><label${id ? ` for="${id}"` : ''}>${label}</label>${ctl}<span class="unit">${unit === '-' ? '' : unit}</span>${sub}</div>`;
+const section = (key, body, id = 'sec-' + key) => `<details class="sec keep" id="${id}" open><summary>${SECTIONS[key][0]}${SECTIONS[key][1] ? `<span class="note">${SECTIONS[key][1]}</span>` : ''}</summary><div class="body">${body}</div></details>`;
 function numRow(sec, f) {
-  const [k, label, unit, t, step, min] = f;
-  return `<div class="row"><label title="${t}" for="${sec}.${k}">${label} ${tip(t)}</label>
-    <input type="number" id="${sec}.${k}" title="${t}" step="${step}" ${min !== undefined ? `min="${min}"` : ''} required><span class="unit">${unit}</span></div>`;
+  const [k, label, unit, t, step, min] = f, id = `${sec}.${k}`;
+  return row(id, label, t, `<input type="number" id="${id}" step="${step}" ${min !== undefined ? `min="${min}"` : ''} required>`, unit);
 }
 function triRow(f) {
   const [k, label, unit, t] = f;
-  const i = n => `<input type="number" id="search.${k}.${n}" title="${t} (${['min', 'max', 'step'][n]})" step="any" min="0" placeholder="${['min', 'max', 'step'][n]}">`;
-  return `<div class="row tri"><label title="${t}">${label} ${tip(t)}</label>${i(0)}${i(1)}${i(2)}<span class="unit">${unit}</span></div>`;
+  const i = n => `<input type="number" id="search.${k}.${n}" title="${esc(t)} (${['min', 'max', 'step'][n]})" step="any" min="0" placeholder="${['min', 'max', 'step'][n]}">`;
+  return row(`search.${k}.0`, label, t, `<div class="multi">${i(0)}${i(1)}${i(2)}</div>`, unit);
 }
 function lcBlock(lc) {
   const d = document.createElement('div'); d.className = 'lc';
+  const tn = 'Name of this crew arrangement.';
   const tw = 'Paddler weights in lb, bow to stern, comma separated.';
   const ts = 'Optional knee positions in inches from the bow, one per paddler, comma separated. Leave empty to space paddlers evenly.';
-  d.innerHTML = `<div class="row"><label title="Name of this crew arrangement.">Name ${tip('Name of this crew arrangement.')}</label><input class="lcname" title="Name of this crew arrangement." value="${esc(lc.name || '')}"></div>
-    <div class="row"><label title="${tw}">Weights ${tip(tw)}</label><input class="lcw" title="${tw}" value="${(lc.weights_lb || []).join(', ')}"><span class="unit">lb</span></div>
-    <div class="row"><label title="${ts}">Seats (optional) ${tip(ts)}</label><input class="lcs" title="${ts}" value="${(lc.seats_in || []).join(', ')}"><span class="unit">in</span></div>
-    <button type="button">Remove case</button>`;
+  d.innerHTML = row('', 'Name', tn, `<input class="lcname" value="${esc(lc.name || '')}">`)
+    + row('', 'Weights', tw, `<input class="lcw" value="${(lc.weights_lb || []).join(', ')}">`, 'lb')
+    + row('', 'Seats', ts, `<input class="lcs" placeholder="evenly spaced" value="${(lc.seats_in || []).join(', ')}">`, 'in')
+    + row('', '', 'Delete this load case.', '<button type="button" class="btn soft">Remove case</button>');
   d.querySelector('button').onclick = () => d.remove();
   $('cases').appendChild(d);
 }
@@ -153,35 +283,42 @@ function buildForm() {
   const pmt = 'Which ACI rule checks a knee punching through the hull bottom. aci_22_6 = reinforced slab (mesh in the wall). plain_14_5 = plain (unreinforced) concrete, more conservative.';
   const pkt = 'How many knees carry one paddler\'s weight. 1 = all on one knee (safe). 2 = kneeling on both knees (realistic), split by the knee split below.';
   const pair = ([k, label, unit, t]) => {
-    const i = n => `<input type="number" id="shape.${k}.${n}" title="${t} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
-    return `<div class="row tri"><label title="${t}">${label} ${tip(t)}</label>${i(0)}${i(1)}<span class="unit">${unit}</span><span class="hint" id="shape.${k}.hint"></span></div>`;
+    const i = n => `<input type="number" id="shape.${k}.${n}" title="${esc(t)} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
+    const sub = ['length_in', 'beam_in', 'draft_in'].includes(k) ? `<span class="sub" id="shape.${k}.hint"></span>` : '';
+    return row(`shape.${k}.0`, label, t, `<div class="multi">${i(0)}${i(1)}</div>`, unit, sub);
   };
-  const intRow = ([k, label, t]) => `<div class="row"><label title="${t}" for="shape.${k}">${label} ${tip(t)}</label><input type="number" id="shape.${k}" title="${t}" step="1" min="${k === 'samples' ? 1 : 0}"></div>`;
-  $('form').innerHTML = `
-    <fieldset><legend>${SECTIONS.hull}</legend>
-      <div class="row"><label title="${st}" for="shapemode">Optimize hull shape ${tip(st)}</label><input type="checkbox" id="shapemode" title="${st}"></div>
-      <div class="row" id="hullpick"><label title="${ht}">Hull file ${tip(ht)}</label><select id="hull.file" title="${ht}"></select></div>
-      ${FIELDS.hull.map(f => numRow('hull', f)).join('')}</fieldset>
-    <fieldset id="shapefs" style="display:none"><legend>${SECTIONS.shape}</legend>${SHAPE.map(pair).join('')}${SHAPE_INT.map(intRow).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.crew}</legend><div id="cases"></div><button type="button" id="addcase">Add load case</button></fieldset>
-    <fieldset><legend>${SECTIONS.material}</legend>
-      <div class="row"><label title="${mt}" for="material.mix_data">Mix data file ${tip(mt)}</label><input id="material.mix_data" title="${mt}" style="flex:1"></div>
-      <div class="row"><label title="${smt}" for="material.strength_model">Strength model ${tip(smt)}</label><select id="material.strength_model" title="${smt}"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select></div>
-      ${FIELDS.material.map(f => numRow('material', f)).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.punching}</legend>
-      <div class="row"><label title="${pmt}" for="punching.method">Method ${tip(pmt)}</label><select id="punching.method" title="${pmt}"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select></div>
-      <div class="row"><label title="${pkt}" for="punching.knees">Knees per paddler ${tip(pkt)}</label><select id="punching.knees" title="${pkt}"><option value="1">1 (all weight on one knee)</option><option value="2">2 (weight shared)</option></select></div>
-      ${PUNCH.map(f => numRow('punching', f)).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.search}</legend>${FIELDS.search.map(triRow).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.gates}</legend>${FIELDS.gates.map(f => numRow('gates', f)).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.stability}</legend>${FIELDS.stability.map(f => numRow('stability', f)).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.objective}</legend>
-      <div class="row"><label title="${ot}" for="objective.kind">Optimize for ${tip(ot)}</label><select id="objective.kind" title="${ot}"><option value="weight">weight (lightest hull)</option><option value="drag">drag (least resistance)</option></select></div>
-      ${FIELDS.objective.map(f => numRow('objective', f)).join('')}</fieldset>`;
+  const intRow = ([k, label, t]) => row(`shape.${k}`, label, t, `<input type="number" id="shape.${k}" step="1" min="${k === 'samples' ? 1 : 0}">`);
+  $('form').innerHTML =
+    section('hull',
+      row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
+      + `<div id="hullpick">${row('hull.file', 'Hull file', ht, '<select id="hull.file"></select>')}</div>`
+      + FIELDS.hull.map(f => numRow('hull', f)).join(''))
+    + section('shape', SHAPE.map(pair).join('') + SHAPE_INT.map(intRow).join(''), 'shapefs')
+    + section('crew', '<div id="cases" style="display:grid;gap:var(--s2)"></div>' + row('addcase', '', 'Add another crew arrangement. The design must pass every load case.', '<button type="button" class="btn soft" id="addcase">Add load case</button>'))
+    + section('material',
+      row('material.mix_data', 'Mix data file', mt, '<input id="material.mix_data">')
+      + row('material.strength_model', 'Strength model', smt, '<select id="material.strength_model"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select>')
+      + FIELDS.material.map(f => numRow('material', f)).join(''))
+    + section('punching',
+      row('punching.method', 'Method', pmt, '<select id="punching.method"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select>')
+      + row('punching.knees', 'Knees per paddler', pkt, '<select id="punching.knees"><option value="1">1 (all weight on one knee)</option><option value="2">2 (weight shared)</option></select>')
+      + PUNCH.map(f => numRow('punching', f)).join(''))
+    + section('search', FIELDS.search.map(triRow).join(''))
+    + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
+    + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
+    + section('objective',
+      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="weight">weight (lightest hull)</option><option value="drag">drag (least resistance)</option></select>')
+      + FIELDS.objective.map(f => numRow('objective', f)).join(''));
   $('addcase').onclick = () => lcBlock({ name: 'case' + ($('cases').children.length + 1), weights_lb: [] });
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
+  // Remember which sections are collapsed. The raw TOML panel is deliberately not remembered:
+  // when open it replaces the form, which must never happen silently on reload.
+  for (const d of document.querySelectorAll('details.keep')) {
+    if (store.get('sec.' + d.id) === '0') d.open = false;
+    d.addEventListener('toggle', () => store.set('sec.' + d.id, d.open ? '1' : '0'));
+  }
 }
 function setShapeMode() {
   const on = $('shapemode').checked;
@@ -191,7 +328,7 @@ function setShapeMode() {
 function shapeHints() {
   for (const k of ['length_in', 'beam_in', 'draft_in']) {
     const v = [0, 1].map(n => Number($(`shape.${k}.${n}`).value));
-    $(`shape.${k}.hint`).textContent = v.every(isFinite) ? `${ftin(v[0])} .. ${ftin(v[1])}` : '';
+    $(`shape.${k}.hint`).textContent = v.every(isFinite) ? `${ftin(v[0])} to ${ftin(v[1])}` : '';
   }
 }
 function fillForm(p, hulls) {
@@ -255,11 +392,12 @@ $('copy').onclick = () => navigator.clipboard && navigator.clipboard.writeText($
 // ---------- 3D ----------
 const view = $('view');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
 view.appendChild(renderer.domElement);
-const scene = new THREE.Scene(); scene.background = new THREE.Color(0xf4f4f4);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xf3f3f3);
 const camera = new THREE.PerspectiveCamera(40, 1, 1, 10000);
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(1, 2, 1.5); scene.add(sun);
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 0.65); sun.position.set(1, 2, 1.5); scene.add(sun);
 let canoe = null, water = null;
 let theta = 0.8, phi = 1.1, radius = 400, target = new THREE.Vector3();
 function placeCam() {
@@ -278,8 +416,9 @@ window.addEventListener('mousemove', e => {
 renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
-  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
-  const c = $('plot'); c.width = c.clientWidth; c.height = c.clientHeight; drawPlot();
+  renderer.setSize(w, h); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+  const c = $('plot'), dpr = window.devicePixelRatio || 1;
+  c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); drawPlot();
 }
 window.addEventListener('resize', resize);
 (function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); })();
@@ -310,8 +449,8 @@ function buildCanoe() {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setIndex(idx); g.computeVertexNormals();
   canoe = new THREE.Group();
-  canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xb08850, side: THREE.DoubleSide })));
-  canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x5a4020, transparent: true, opacity: 0.25 })));
+  canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xd2cfc9, side: THREE.DoubleSide })));
+  canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.08 })));
   scene.add(canoe);
   // Waterline plane at the loaded midship waterline (from the winner's diagrams).
   const dg = result && result.winner && result.winner.diagrams;
@@ -319,7 +458,7 @@ function buildCanoe() {
   if (typeof draft === 'number') {
     const maxB = Math.max(...hull.half_breadth.flat());
     water = new THREE.Mesh(new THREE.PlaneGeometry(hull.length * 1.3, maxB * 5),
-      new THREE.MeshBasicMaterial({ color: 0x3070ff, transparent: true, opacity: 0.3, side: THREE.DoubleSide }));
+      new THREE.MeshBasicMaterial({ color: 0x4d8dff, transparent: true, opacity: 0.18, side: THREE.DoubleSide }));
     water.rotation.x = -Math.PI / 2; water.position.set(hull.length / 2, draft, 0); scene.add(water);
   }
   target.set(hull.length / 2, depth / 2, 0);
@@ -334,14 +473,15 @@ const AXES = {
   thickness: ['thickness', 'in', k => k.thickness_in], density: ['density', 'pcf', k => k.density_pcf], depth: ['depth', 'in', k => k.depth_in],
   freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'N', k => k.drag_n],
   length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in]};
+const axLabel = (l, u) => u === '-' ? l : `${l}, ${u}`;
 const axSel = { x: null, y: 'dc' };
 function buildTabs() {
   $('tabs').innerHTML = TABS.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === tab ? 'on' : ''}">${l}</button>`).join('');
   for (const b of $('tabs').children) b.onclick = () => { tab = b.dataset.tab; buildTabs(); drawPlot(); };
-  const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${l} (${u})</option>`).join('');
+  const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${axLabel(l, u)}</option>`).join('');
   const xa = axSel.x || (objKind === 'drag' ? 'drag' : 'weight');
-  $('plotctl').innerHTML = tab === 'cands' ? `x: <select id="axx">${opts(xa)}</select> y: <select id="axy">${opts(axSel.y)}</select>
-    <span class="hint">green = passes, grey = fails, red = analysis error, blue ring = winner</span>` : '';
+  $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
+    <span class="hint" style="margin-left:auto">dark = passes, light = fails, cross = analysis error, blue ring = winner</span>` : '';
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
 const flareDeg = () => { const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
@@ -366,22 +506,24 @@ const fmt = v => Math.abs(v) >= 1e5 || (Math.abs(v) < 1e-2 && v !== 0) ? v.toExp
 // Axes frame in rectangle r = {l,t,w,h}; returns {px, py}.
 function axes(ctx, r, xr, yr, xl, yl) {
   const px = x => r.l + (x - xr[0]) / (xr[1] - xr[0] || 1) * r.w, py = y => r.t + r.h - (y - yr[0]) / (yr[1] - yr[0] || 1) * r.h;
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(r.l, r.t, r.w, r.h);
-  ctx.fillStyle = '#000'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
-  for (const v of niceTicks(xr[0], xr[1])) { ctx.fillText(fmt(v), px(v), r.t + r.h + 12); ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(px(v), r.t); ctx.lineTo(px(v), r.t + r.h); ctx.stroke(); }
-  ctx.fillText(xl, r.l + r.w / 2, r.t + r.h + 25);
+  ctx.lineWidth = 1; ctx.font = font(11); ctx.fillStyle = C.muted; ctx.textAlign = 'center';
+  for (const v of niceTicks(xr[0], xr[1])) { ctx.fillText(fmt(v), px(v), r.t + r.h + 14); ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(px(v), r.t); ctx.lineTo(px(v), r.t + r.h); ctx.stroke(); }
+  ctx.fillText(xl, r.l + r.w / 2, r.t + r.h + 28);
   ctx.textAlign = 'right';
-  if (yl) for (const v of niceTicks(yr[0], yr[1], 4)) { ctx.fillText(fmt(v), r.l - 4, py(v) + 4); ctx.strokeStyle = '#eee'; ctx.beginPath(); ctx.moveTo(r.l, py(v)); ctx.lineTo(r.l + r.w, py(v)); ctx.stroke(); }
-  ctx.save(); ctx.translate(r.l - 44, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText(yl, 0, 0); ctx.restore();
-  ctx.textAlign = 'left'; ctx.strokeStyle = '#000'; ctx.strokeRect(r.l, r.t, r.w, r.h);
+  if (yl) for (const v of niceTicks(yr[0], yr[1], 4)) { ctx.fillText(fmt(v), r.l - 6, py(v) + 4); ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(r.l, py(v)); ctx.lineTo(r.l + r.w, py(v)); ctx.stroke(); }
+  ctx.save(); ctx.translate(r.l - 46, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText(yl, 0, 0); ctx.restore();
+  ctx.textAlign = 'left'; ctx.strokeStyle = C.hair; ctx.strokeRect(r.l + 0.5, r.t + 0.5, r.w, r.h);
   return { px, py };
 }
 const range2 = (vs, pad = 0.05) => { let a = Math.min(...vs), b = Math.max(...vs); if (a === b) { a -= 1; b += 1; } const d = (b - a) * pad; return [a - d, b + d]; };
 function legend(ctx, x, y, items) {
-  ctx.font = '11px sans-serif';
+  ctx.font = font(11);
+  // White backdrop so the legend stays readable over data points.
+  const w = items.reduce((s, [, label]) => s + 36 + ctx.measureText(label).width, 0) - 12;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillRect(x - 6, y - 13, w + 12, 18);
   for (const [col, label, dash] of items) {
-    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 18, y - 4); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = '#000'; ctx.fillText(label, x + 22, y); x += 30 + ctx.measureText(label).width;
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(x, y - 4); ctx.lineTo(x + 18, y - 4); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.soft; ctx.fillText(label, x + 24, y); x += 36 + ctx.measureText(label).width;
   }
   ctx.lineWidth = 1;
 }
@@ -389,7 +531,14 @@ function line(ctx, a, xs, ys, col, dash) {
   ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash || []); ctx.beginPath();
   xs.forEach((x, i) => i ? ctx.lineTo(a.px(x), a.py(ys[i])) : ctx.moveTo(a.px(x), a.py(ys[i]))); ctx.stroke(); ctx.setLineDash([]); ctx.lineWidth = 1;
 }
-function msg(ctx, W, H, t) { ctx.fillStyle = '#666'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(t, W / 2, H / 2); ctx.textAlign = 'left'; }
+function hline(ctx, x0, x1, y, col, dash) { ctx.strokeStyle = col; ctx.setLineDash(dash || []); ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); ctx.setLineDash([]); }
+// Candidate marker: dark dot = passes, light dot = fails, cross = analysis error (no verdict).
+function marker(ctx, x, y, k, r = 2.5) {
+  if (!k.verdict) { ctx.strokeStyle = C.ink; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r); ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r); ctx.stroke(); ctx.lineWidth = 1; return; }
+  ctx.fillStyle = k.passes ? C.ink : '#c8c8c8'; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+}
+function ring(ctx, x, y, r = 8) { ctx.strokeStyle = C.accent; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
+function msg(ctx, W, H, t) { ctx.fillStyle = C.faint; ctx.font = font(12); ctx.textAlign = 'center'; ctx.fillText(t, W / 2, H / 2); ctx.textAlign = 'left'; }
 const winC = () => result && result.winner && result.winner.candidate;
 const diag = () => { const d = result && result.winner && result.winner.diagrams; return d && d.x_in && d.x_in.length ? d : null; };
 function knees(ctx, a, r) {
@@ -398,109 +547,125 @@ function knees(ctx, a, r) {
   const L = c.length_in, k = lc.weights_lb.length;
   lc.weights_lb.forEach((w, i) => {
     const x = lc.seats_in ? lc.seats_in[i] : L * (i + 1) / (k + 1);
-    ctx.strokeStyle = '#a0a'; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
-    ctx.fillStyle = '#a0a'; ctx.fillText(`knee ${w} lb`, a.px(x) + 3, r.t + 11);
+    ctx.strokeStyle = C.faint; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = C.muted; ctx.font = font(11); ctx.fillText(`knee ${w} lb`, a.px(x) + 4, r.t + 13);
   });
 }
 
 function drawPlot() {
-  const c = $('plot'), ctx = c.getContext('2d'), W = c.width, H = c.height;
-  ctx.clearRect(0, 0, W, H); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
-  ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  const c = $('plot'), ctx = c.getContext('2d'), dpr = window.devicePixelRatio || 1, W = c.width / dpr, H = c.height / dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  ctx.font = font(11); ctx.textAlign = 'left';
   ({ cands: plotCands, hull: plotHull, stress: plotStress, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
-  if (!cands.length) return msg(ctx, W, H, 'run an optimization first');
+  if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
   const xk = axSel.x || (objKind === 'drag' ? 'drag' : 'weight'), yk = axSel.y;
   const [xl, xu, xf] = AXES[xk], [yl, yu, yf] = AXES[yk];
   const pts = cands.map(k => [xf(k), yf(k), k]).filter(p => typeof p[0] === 'number' && typeof p[1] === 'number' && isFinite(p[0]) && isFinite(p[1]));
-  if (!pts.length) return msg(ctx, W, H, `no candidates have both ${xl} and ${yl}`);
+  if (!pts.length) return msg(ctx, W, H, `No candidates have both ${xl} and ${yl}.`);
   let ys = pts.map(p => p[1]);
   if (yk === 'dc') ys = ys.map(v => Math.min(v, dcGate * 4)).concat([0, dcGate]);
-  const r = { l: 60, t: 18, w: W - 75, h: H - 50 };
-  const a = axes(ctx, r, range2(pts.map(p => p[0])), range2(ys), `${xl}, ${xu}`, `${yl}, ${yu}`);
+  const r = { l: 64, t: 12, w: W - 84, h: H - 52 };
+  const a = axes(ctx, r, range2(pts.map(p => p[0])), range2(ys), axLabel(xl, xu), axLabel(yl, yu));
   const cy = v => yk === 'dc' ? Math.min(v, dcGate * 4) : v;
-  if (yk === 'dc') { ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(r.l, a.py(dcGate)); ctx.lineTo(r.l + r.w, a.py(dcGate)); ctx.stroke(); ctx.setLineDash([]); }
-  for (const [x, y, k] of pts) { ctx.fillStyle = !k.verdict ? '#d00' : k.passes ? '#1a1' : '#999'; ctx.fillRect(a.px(x) - 2, a.py(cy(y)) - 2, 4, 4); }
+  if (yk === 'dc') hline(ctx, r.l, r.l + r.w, a.py(dcGate), C.muted, [5, 4]);
+  for (const [x, y, k] of pts) if (!k.passes) marker(ctx, a.px(x), a.py(cy(y)), k);
+  for (const [x, y, k] of pts) if (k.passes) marker(ctx, a.px(x), a.py(cy(y)), k);
   const w = winC();
-  if (w && typeof xf(w) === 'number' && typeof yf(w) === 'number') { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a.px(xf(w)), a.py(cy(yf(w))), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
-  if (yk === 'dc') legend(ctx, r.l + 8, r.t + 14, [['#c00', `D/C gate ${dcGate}`, [6, 4]]]);
+  if (w && typeof xf(w) === 'number' && typeof yf(w) === 'number') ring(ctx, a.px(xf(w)), a.py(cy(yf(w))));
+  if (yk === 'dc') legend(ctx, r.l + 10, r.t + 16, [[C.muted, `D/C gate ${dcGate}`, [5, 4]]]);
 }
 function plotHull(ctx, W, H) {
-  const d = diag(); if (!d) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const h2 = (H - 30) / 2 - 20;
-  const r1 = { l: 70, t: 14, w: W - 85, h: h2 }, r2 = { l: 70, t: 14 + h2 + 30, w: W - 85, h: h2 };
+  const r1 = { l: 72, t: 12, w: W - 92, h: h2 }, r2 = { l: 72, t: 12 + h2 + 30, w: W - 92, h: h2 };
   const xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
   const a1 = axes(ctx, r1, xr, range2(d.shear_lb.concat([0])), '', 'shear, lb');
-  line(ctx, a1, d.x_in, d.shear_lb, '#06c'); knees(ctx, a1, r1);
+  hline(ctx, r1.l, r1.l + r1.w, a1.py(0), C.hair);
+  line(ctx, a1, d.x_in, d.shear_lb, C.ink); knees(ctx, a1, r1);
   const a2 = axes(ctx, r2, xr, range2(d.moment_lbin.concat([0])), 'x from bow, in', 'moment, lb*in');
-  line(ctx, a2, d.x_in, d.moment_lbin, '#c60'); knees(ctx, a2, r2);
-  legend(ctx, r1.l + r1.w - 330, r1.t + r1.h - 6, [['#06c', 'shear V(x)'], ['#c60', 'moment M(x) (+ = sagging)'], ['#a0a', 'knee', [2, 3]]]);
+  hline(ctx, r2.l, r2.l + r2.w, a2.py(0), C.hair);
+  line(ctx, a2, d.x_in, d.moment_lbin, C.ink, [6, 3]); knees(ctx, a2, r2);
+  legend(ctx, r1.l + r1.w - 360, r1.t + r1.h - 8, [[C.ink, 'shear V(x)'], [C.ink, 'moment M(x), + = sagging', [6, 3]], [C.faint, 'knee', [2, 3]]]);
 }
 function plotStress(ctx, W, H) {
-  const d = diag(); if (!d) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const h2 = (H - 30) / 2 - 20, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
-  const r1 = { l: 70, t: 14, w: W - 85, h: h2 }, r2 = { l: 70, t: 14 + h2 + 30, w: W - 85, h: h2 };
+  const r1 = { l: 72, t: 12, w: W - 92, h: h2 }, r2 = { l: 72, t: 12 + h2 + 30, w: W - 92, h: h2 };
   const a1 = axes(ctx, r1, xr, [0, Math.max(d.tension_allow_psi, ...d.tension_psi) * 1.1], '', 'tension stress, psi');
-  line(ctx, a1, d.x_in, d.tension_psi, '#c00');
-  line(ctx, a1, xr, [d.tension_allow_psi, d.tension_allow_psi], '#080', [6, 4]); knees(ctx, a1, r1);
-  legend(ctx, r1.l + 8, r1.t + 26, [['#c00', 'bending tension |M|c/I'], ['#080', `allowable ${d.tension_allow_psi.toFixed(0)} psi`, [6, 4]]]);
+  line(ctx, a1, d.x_in, d.tension_psi, C.ink);
+  line(ctx, a1, xr, [d.tension_allow_psi, d.tension_allow_psi], C.muted, [5, 4]); knees(ctx, a1, r1);
+  legend(ctx, r1.l + 10, r1.t + 28, [[C.ink, 'bending tension |M|c/I'], [C.muted, `allowable ${d.tension_allow_psi.toFixed(0)} psi`, [5, 4]]]);
   const c = winC();
   const a2 = axes(ctx, r2, xr, [0, (c ? c.depth_in : Math.max(...d.waterline_in)) * 1.05], 'x from bow, in', 'height above keel, in');
-  line(ctx, a2, d.x_in, d.waterline_in, '#36f');
-  if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], '#963');
+  line(ctx, a2, d.x_in, d.waterline_in, C.muted, [5, 3]);
+  if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], C.ink);
   const tr = d.waterline_in[d.waterline_in.length - 1] - d.waterline_in[0];
-  legend(ctx, r2.l + 8, r2.t + 14, [['#36f', `loaded waterline (stern - bow = ${tr.toFixed(2)} in trim)`], ['#963', 'gunwale (mold depth)']]);
+  legend(ctx, r2.l + 10, r2.t + 16, [[C.muted, `loaded waterline (stern - bow = ${tr.toFixed(2)} in trim)`, [5, 3]], [C.ink, 'gunwale (mold depth)']]);
 }
+// D/C bars: darker = closer to (or over) the gate.
+const dcShade = dc => { const m = dcGate - dc; return m < 0 ? C.ink : m < 0.15 * dcGate ? C.muted : C.hair; };
 function plotChecks(ctx, W, H) {
   const c = winC(), v = c && c.verdict;
-  if (!v || !Array.isArray(v.checks) || !v.checks.length) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  if (!v || !Array.isArray(v.checks) || !v.checks.length) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const ks = v.checks, n = ks.length, max = Math.max(1.0, dcGate, ...ks.map(k => isFinite(k.dc) ? k.dc : 0)) * 1.1;
-  const r = { l: 140, t: 14, w: W - 160, h: H - 50 };
+  const r = { l: 140, t: 12, w: W - 164, h: H - 52 };
   const a = axes(ctx, r, [0, max], [0, n], 'D/C (demand / capacity)', '');
   const bh = r.h / n;
   ks.forEach((k, i) => {
-    const y = r.t + i * bh + bh * 0.2, dc = isFinite(k.dc) ? k.dc : max;
-    const m = dcGate - dc; ctx.fillStyle = m < 0 ? '#c33' : m < 0.15 * dcGate ? '#e90' : '#4a4';
-    ctx.fillRect(r.l, y, a.px(dc) - r.l, bh * 0.6);
-    ctx.fillStyle = '#000'; ctx.textAlign = 'right'; ctx.fillText(k.name + (k.name === v.governing_check ? ' *' : ''), r.l - 6, y + bh * 0.35); ctx.textAlign = 'left';
-    ctx.fillText(`${isFinite(k.dc) ? k.dc.toFixed(3) : 'inf'}  (${k.demand.toFixed(0)} / ${k.capacity.toFixed(0)} psi)`, a.px(dc) + 4, y + bh * 0.35);
+    const y = r.t + i * bh + bh * 0.25, dc = isFinite(k.dc) ? k.dc : max, gov = k.name === v.governing_check;
+    ctx.fillStyle = dcShade(dc); ctx.fillRect(r.l + 1, y, a.px(dc) - r.l - 1, bh * 0.5);
+    ctx.fillStyle = C.ink; ctx.font = font(11, gov ? 600 : 450); ctx.textAlign = 'right'; ctx.fillText(k.name, r.l - 8, y + bh * 0.25 + 4); ctx.textAlign = 'left';
+    ctx.font = font(11); ctx.fillStyle = C.soft;
+    ctx.fillText(`${isFinite(k.dc) ? k.dc.toFixed(3) : 'inf'}   ${k.demand.toFixed(0)} / ${k.capacity.toFixed(0)} psi${gov ? '   governs' : ''}`, a.px(dc) + 6, y + bh * 0.25 + 4);
   });
-  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(a.px(dcGate), r.t); ctx.lineTo(a.px(dcGate), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
-  legend(ctx, r.l + 8, r.t + r.h - 6, [['#c00', `gate dc_search ${dcGate}`, [6, 4]], ['#4a4', 'margin'], ['#e90', 'within 15% of gate'], ['#c33', 'over gate']]);
+  ctx.strokeStyle = C.ink; ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(a.px(dcGate), r.t); ctx.lineTo(a.px(dcGate), r.t + r.h); ctx.stroke(); ctx.setLineDash([]);
+  const lx = r.l + 10, ly = r.t + r.h - 10;
+  legend(ctx, lx, ly, [[C.ink, `gate dc_search ${dcGate}`, [5, 4]]]);
+  let x = lx + 36 + ctx.measureText(`gate dc_search ${dcGate}`).width;
+  for (const [col, l] of [[C.hair, 'margin'], [C.muted, 'within 15% of gate'], [C.ink, 'over gate']]) {
+    ctx.fillStyle = col; ctx.fillRect(x, ly - 8, 12, 6); ctx.fillStyle = C.soft; ctx.fillText(l, x + 18, ly); x += 32 + ctx.measureText(l).width;
+  }
 }
 function plotMap(ctx, W, H) {
-  const w = winC(); if (!w) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  const w = winC(); if (!w) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const sel = cands.filter(k => Math.abs(k.depth_in - w.depth_in) < 1e-9 && !k.shape === !w.shape && Math.abs(k.length_in - w.length_in) < 1e-6);
   const ts = [...new Set(sel.map(k => k.thickness_in))].sort((a, b) => a - b), rs = [...new Set(sel.map(k => k.density_pcf))].sort((a, b) => a - b);
-  if (!ts.length || !rs.length) return msg(ctx, W, H, 'no grid candidates at the winner depth');
-  const r = { l: 70, t: 20, w: W - 240, h: H - 55 }, cw = r.w / rs.length, ch = r.h / ts.length;
+  if (!ts.length || !rs.length) return msg(ctx, W, H, 'No grid candidates at the winner depth.');
+  const r = { l: 72, t: 22, w: W - 260, h: H - 58 }, cw = r.w / rs.length, ch = r.h / ts.length;
   const wts = sel.filter(k => k.passes).map(k => k.hull_weight_lb), w0 = Math.min(...wts), w1 = Math.max(...wts);
+  // Passing cells are light (white = lightest hull), failing cells are dark (darker = further over the gate).
+  const passCol = f => { const g = Math.round(255 - 30 * f); return `rgb(${g},${g},${g})`; };
+  const failCol = dc => { const g = Math.round(175 - 70 * Math.min(Math.max(dc / dcGate - 1, 0), 3) / 3); return `rgb(${g},${g},${g})`; };
+  ctx.font = font(10);
   for (const k of sel) {
     const i = rs.indexOf(k.density_pcf), j = ts.indexOf(k.thickness_in), x = r.l + i * cw, y = r.t + r.h - (j + 1) * ch;
-    let col;
-    if (k.passes) { const f = w1 > w0 ? (k.hull_weight_lb - w0) / (w1 - w0) : 0; col = `hsl(${120 - 70 * f},60%,${40 + 25 * f}%)`; }
-    else if (!k.verdict) col = '#d00';
-    else { const g = Math.max(0, 230 - 40 * Math.min(k.verdict.dc / dcGate - 1, 3)); col = `rgb(${g},${g},${g})`; }
-    ctx.fillStyle = col; ctx.fillRect(x, y, cw + 0.5, ch + 0.5);
-    if (cw > 34 && ch > 12) { ctx.fillStyle = k.passes ? '#fff' : '#000'; ctx.font = '10px sans-serif'; ctx.fillText(k.passes ? k.hull_weight_lb.toFixed(0) : k.verdict ? k.verdict.dc.toFixed(2) : 'err', x + 2, y + ch / 2 + 4); }
-    if (k.thickness_in === w.thickness_in && k.density_pcf === w.density_pcf) { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2); ctx.lineWidth = 1; }
+    ctx.fillStyle = k.passes ? passCol(w1 > w0 ? (k.hull_weight_lb - w0) / (w1 - w0) : 0) : !k.verdict ? C.ink : failCol(k.verdict.dc);
+    ctx.fillRect(x, y, cw + 0.5, ch + 0.5);
+    if (cw > 34 && ch > 12) { ctx.fillStyle = k.passes ? C.ink : C.bg; ctx.fillText(k.passes ? k.hull_weight_lb.toFixed(0) : k.verdict ? k.verdict.dc.toFixed(2) : 'err', x + 3, y + ch / 2 + 4); }
   }
-  ctx.strokeStyle = '#000'; ctx.strokeRect(r.l, r.t, r.w, r.h); ctx.fillStyle = '#000'; ctx.font = '11px sans-serif';
+  ctx.strokeStyle = C.hair; ctx.strokeRect(r.l + 0.5, r.t + 0.5, r.w, r.h);
+  for (const k of sel) if (k.thickness_in === w.thickness_in && k.density_pcf === w.density_pcf) {
+    const x = r.l + rs.indexOf(k.density_pcf) * cw, y = r.t + r.h - (ts.indexOf(k.thickness_in) + 1) * ch;
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 2; ctx.strokeRect(x + 1, y + 1, cw - 2, ch - 2); ctx.lineWidth = 1;
+  }
+  ctx.fillStyle = C.muted; ctx.font = font(11);
   const every = n => Math.max(1, Math.ceil(n / 12));
-  ctx.textAlign = 'center'; rs.forEach((v, i) => { if (i % every(rs.length) === 0) ctx.fillText(v.toFixed(0), r.l + (i + 0.5) * cw, r.t + r.h + 12); });
-  ctx.fillText('density, pcf', r.l + r.w / 2, r.t + r.h + 26); ctx.textAlign = 'right';
-  ts.forEach((v, j) => { if (j % every(ts.length) === 0) ctx.fillText(v.toFixed(3), r.l - 4, r.t + r.h - (j + 0.5) * ch + 4); });
-  ctx.save(); ctx.translate(14, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('thickness, in', 0, 0); ctx.restore(); ctx.textAlign = 'left';
-  ctx.fillText(`depth ${w.depth_in} in. Cell = hull weight lb (passes) or D/C (fails).`, r.l, 12);
-  const lx = r.l + r.w + 12;
-  [['hsl(120,60%,40%)', `passes, lightest${wts.length ? ' ' + w0.toFixed(0) + ' lb' : ''}`], ['hsl(50,60%,65%)', `passes, heaviest${wts.length ? ' ' + w1.toFixed(0) + ' lb' : ''}`], ['rgb(230,230,230)', 'fails, D/C near gate'], ['rgb(110,110,110)', 'fails, D/C far over'], ['#d00', 'analysis error']]
-    .forEach(([c, l], i) => { ctx.fillStyle = c; ctx.fillRect(lx, r.t + i * 18, 12, 12); ctx.fillStyle = '#000'; ctx.fillText(l, lx + 16, r.t + i * 18 + 10); });
-  ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.strokeRect(lx, r.t + 5 * 18, 12, 12); ctx.lineWidth = 1; ctx.fillText('winner', lx + 16, r.t + 5 * 18 + 10);
+  ctx.textAlign = 'center'; rs.forEach((v, i) => { if (i % every(rs.length) === 0) ctx.fillText(v.toFixed(0), r.l + (i + 0.5) * cw, r.t + r.h + 14); });
+  ctx.fillText('density, pcf', r.l + r.w / 2, r.t + r.h + 28); ctx.textAlign = 'right';
+  ts.forEach((v, j) => { if (j % every(ts.length) === 0) ctx.fillText(v.toFixed(3), r.l - 6, r.t + r.h - (j + 0.5) * ch + 4); });
+  ctx.save(); ctx.translate(16, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('thickness, in', 0, 0); ctx.restore(); ctx.textAlign = 'left';
+  ctx.fillText(`Depth ${w.depth_in} in. Cell = hull weight lb (passes) or D/C (fails).`, r.l, 14);
+  const lx = r.l + r.w + 16;
+  [[passCol(0), `passes, lightest${wts.length ? ' ' + w0.toFixed(0) + ' lb' : ''}`], [passCol(1), `passes, heaviest${wts.length ? ' ' + w1.toFixed(0) + ' lb' : ''}`], [failCol(dcGate), 'fails, D/C near gate'], [failCol(4 * dcGate), 'fails, D/C far over'], [C.ink, 'analysis error']]
+    .forEach(([c, l], i) => { ctx.fillStyle = c; ctx.fillRect(lx, r.t + i * 20, 12, 12); ctx.strokeStyle = C.hair; ctx.strokeRect(lx + 0.5, r.t + i * 20 + 0.5, 12, 12); ctx.fillStyle = C.soft; ctx.fillText(l, lx + 20, r.t + i * 20 + 10); });
+  ctx.strokeStyle = C.accent; ctx.lineWidth = 2; ctx.strokeRect(lx + 1, r.t + 5 * 20 + 1, 11, 11); ctx.lineWidth = 1; ctx.fillStyle = C.soft; ctx.fillText('winner', lx + 20, r.t + 5 * 20 + 10);
 }
 function plotXsec(ctx, W, H) {
   const w = winC(), h = result && result.winner_hull;
-  if (!w || !h) return msg(ctx, W, H, 'run an optimization first (needs a passing winner)');
+  if (!w || !h) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const d = diag(), fl = flareDeg(), depth = w.depth_in, n = 5;
   const zs = h.z.slice(); if (depth > h.draft_design) for (let k = 1; k <= 8; k++) zs.push(h.draft_design + (depth - h.draft_design) * k / 8);
   const sts = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => f * h.length);
@@ -511,93 +676,98 @@ function plotXsec(ctx, W, H) {
   });
   const ymax = Math.max(...prof.flat()) * 1.1, pw = (W - 20) / n;
   const sc = Math.min((pw - 30) / (2 * ymax), (H - 70) / (depth * 1.1));
-  ctx.fillStyle = '#000'; ctx.fillText(`Winner hull sections, bow to stern, flare ${fl} deg, depth ${depth} in, wall ${w.thickness_in} in (same scale; x = station from bow)`, 10, 12);
+  ctx.fillStyle = C.muted; ctx.font = font(11);
+  ctx.fillText(`Winner hull sections, bow to stern. Flare ${fl} deg, depth ${depth} in, wall ${w.thickness_in} in. Same scale.`, 12, 16);
   prof.forEach((yb, s) => {
-    const cx = 10 + pw * (s + 0.5), base = Math.min(H - 35, (H + depth * sc) / 2 + 10), X = y => cx + y * sc, Y = z => base - z * sc;
-    ctx.strokeStyle = '#ddd'; ctx.beginPath(); ctx.moveTo(cx, Y(0) + 4); ctx.lineTo(cx, Y(depth) - 4); ctx.stroke();
-    if (d) { const wl = interp(d.x_in, d.waterline_in, sts[s]); ctx.strokeStyle = '#36f'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(-ymax), Y(wl)); ctx.lineTo(X(ymax), Y(wl)); ctx.stroke(); }
-    ctx.strokeStyle = '#963'; ctx.lineWidth = Math.max(1.5, w.thickness_in * sc); ctx.beginPath();
+    const cx = 10 + pw * (s + 0.5), base = Math.min(H - 38, (H + depth * sc) / 2 + 10), X = y => cx + y * sc, Y = z => base - z * sc;
+    ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(cx, Y(0) + 4); ctx.lineTo(cx, Y(depth) - 4); ctx.stroke();
+    if (d) { const wl = interp(d.x_in, d.waterline_in, sts[s]); hline(ctx, X(-ymax), X(ymax), Y(wl), C.muted, [5, 3]); }
+    ctx.strokeStyle = C.ink; ctx.lineWidth = Math.max(1.5, w.thickness_in * sc); ctx.lineJoin = 'round'; ctx.beginPath();
     for (let k = zs.length - 1; k >= 0; k--) ctx.lineTo(X(-yb[k]), Y(zs[k]));
     for (let k = 0; k < zs.length; k++) ctx.lineTo(X(yb[k]), Y(zs[k]));
     ctx.stroke(); ctx.lineWidth = 1;
-    ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.fillText(`x = ${sts[s].toFixed(0)} in`, cx, H - 18);
-    ctx.fillText(`gunwale ${(2 * yb[yb.length - 1]).toFixed(1)} in`, cx, H - 5); ctx.textAlign = 'left';
+    ctx.textAlign = 'center'; ctx.fillStyle = C.soft; ctx.fillText(`x = ${sts[s].toFixed(0)} in`, cx, H - 20);
+    ctx.fillStyle = C.muted; ctx.fillText(`gunwale ${(2 * yb[yb.length - 1]).toFixed(1)} in`, cx, H - 6); ctx.textAlign = 'left';
   });
-  legend(ctx, W - 300, 28, [['#963', 'hull wall'], ['#36f', 'loaded waterline']]);
+  legend(ctx, W - 260, 16, [[C.ink, 'hull wall'], [C.muted, 'loaded waterline', [5, 3]]]);
 }
 function plotShape(ctx, W, H) {
   const sh = cands.filter(k => k.shape);
-  if (!sh.length) return msg(ctx, W, H, 'run a shape search first (Hull: Optimize hull shape)');
+  if (!sh.length) return msg(ctx, W, H, 'Run a shape search first (Hull: Optimize hull shape).');
   const score = k => objKind === 'drag' ? k.drag_n : k.hull_weight_lb;
   let best = Infinity; const bx = [], by = [];
   sh.forEach((k, i) => { if (k.passes && typeof score(k) === 'number' && score(k) < best) best = score(k); if (isFinite(best)) { bx.push(i + 1); by.push(best); } });
-  const hw = (W - 40) / 2, r1 = { l: 70, t: 14, w: hw - 70, h: H - 50 }, r2 = { l: hw + 90, t: 14, w: hw - 70, h: H - 50 };
+  const hw = (W - 40) / 2, r1 = { l: 72, t: 12, w: hw - 72, h: H - 52 }, r2 = { l: hw + 92, t: 12, w: hw - 72, h: H - 52 };
   const ul = objKind === 'drag' ? 'best drag, N' : 'best hull weight, lb';
-  if (bx.length) { const a = axes(ctx, r1, [1, Math.max(2, sh.length)], range2(by), 'shape evaluation #', ul); line(ctx, a, bx, by, '#06c'); legend(ctx, r1.l + 8, r1.t + 14, [['#06c', 'best passing so far']]); }
-  else { ctx.strokeRect(r1.l, r1.t, r1.w, r1.h); ctx.fillText('no passing shape yet', r1.l + 10, r1.t + 20); }
+  if (bx.length) { const a = axes(ctx, r1, [1, Math.max(2, sh.length)], range2(by), 'shape evaluation #', ul); line(ctx, a, bx, by, C.ink); legend(ctx, r1.l + 10, r1.t + 16, [[C.ink, 'best passing so far']]); }
+  else { ctx.strokeStyle = C.hair; ctx.strokeRect(r1.l + 0.5, r1.t + 0.5, r1.w, r1.h); ctx.fillStyle = C.faint; ctx.fillText('No passing shape yet.', r1.l + 10, r1.t + 20); }
   const a2 = axes(ctx, r2, range2(sh.map(k => k.length_in)), range2(sh.map(k => k.beam_in)), 'length, in', 'beam, in');
-  for (const k of sh) { ctx.fillStyle = !k.verdict ? '#d00' : k.passes ? '#1a1' : '#999'; ctx.beginPath(); ctx.arc(a2.px(k.length_in), a2.py(k.beam_in), 3, 0, 7); ctx.fill(); }
-  const w = winC(); if (w) { ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(a2.px(w.length_in), a2.py(w.beam_in), 8, 0, 7); ctx.stroke(); ctx.lineWidth = 1; }
-  ctx.fillStyle = '#000'; ctx.fillText('green = passes, grey = fails, red = error, ring = winner', r2.l + 6, r2.t + 14);
+  for (const k of sh) if (!k.passes) marker(ctx, a2.px(k.length_in), a2.py(k.beam_in), k, 3);
+  for (const k of sh) if (k.passes) marker(ctx, a2.px(k.length_in), a2.py(k.beam_in), k, 3);
+  const w = winC(); if (w) ring(ctx, a2.px(w.length_in), a2.py(w.beam_in));
+  ctx.fillStyle = C.muted; ctx.font = font(11); ctx.fillText('dark = passes, light = fails, cross = error, ring = winner', r2.l + 8, r2.t + 16);
 }
 
-// ---------- winner box ----------
+// ---------- result panel ----------
+const kv = (k, v, t = '') => `<div class="kv"${t ? ` title="${esc(t)}"` : ''}><span>${k}</span><span>${v}</span></div>`;
 function checksTable(v) {
-  if (!Array.isArray(v.checks) || !v.checks.length) return '<div class="warn">(no per-check breakdown in this result)</div>';
+  if (!Array.isArray(v.checks) || !v.checks.length) return '<div class="note-box">No per-check breakdown in this result.</div>';
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
-  const rows = v.checks.map(k => `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${k.name}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td>
-    <td>${f(k.dc, 3)}</td><td><span class="bar" style="width:${Math.min(60, 60 * (k.dc || 0))}px;background:${k.dc > dcGate ? '#c33' : '#48c'}"></span></td></tr>`).join('');
-  return `<table id="checks"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table>`;
+  const rows = v.checks.map(k => `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td>
+    <td>${f(k.dc, 3)}</td><td><span class="bar" style="width:${Math.min(48, 48 * (k.dc || 0))}px;background:${dcShade(k.dc || 0)}"></span></td></tr>`).join('');
+  return `<table class="tbl"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table>`;
 }
 function showWinner() {
   const box = $('winner');
-  if (!result) { box.textContent = 'no result yet'; return; }
+  if (!result) { box.innerHTML = '<span class="muted">No result yet.</span>'; return; }
   const win = result.winner;
-  if (!win) { box.innerHTML = '<span class="bad">NO DESIGN PASSES</span>'; return; }
+  if (!win) { box.innerHTML = '<div><span class="badge">No design passes</span></div><div class="note-box">Every candidate failed a check. Widen the search ranges or relax the inputs.</div>'; return; }
   const c = win.candidate, v = c.verdict || {};
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
   const sh = c.shape;
-  const gmOk = typeof c.gm_in === 'number' && gmGate !== null ? (c.gm_in >= gmGate ? 'ok' : 'bad') : '';
-  const shapeTbl = sh ? `<h4 style="margin:4px 0">Hull shape factors</h4><table>${SHAPE.map(([k, label, unit, t]) =>
-    `<tr title="${esc(t)}"><td>${label}</td><td>${f(sh[k], unit === 'in' ? 1 : 3)}${unit === 'in' ? ' in (' + ftin(sh[k]) + ')' : ''}</td></tr>`).join('')}</table>` : '';
-  box.innerHTML = `<table>
-    <tr><td>length</td><td>${f(c.length_in, 1)} in (${typeof c.length_in === 'number' ? ftin(c.length_in) : '?'})</td></tr>
-    <tr><td>beam</td><td>${f(c.beam_in, 1)} in</td></tr>
-    ${sh ? `<tr><td>design draft</td><td>${f(sh.draft_in, 2)} in</td></tr>` : ''}
-    <tr><td>GM (stability)</td><td class="${gmOk}">${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} (gate &ge; ${f(gmGate, 2)} in)</td></tr>
-    ${typeof c.drag_n === 'number' ? `<tr><td>drag</td><td>${f(c.drag_n, 1)} N</td></tr>` : ''}
-    <tr><td>thickness</td><td>${f(c.thickness_in, 3)} in</td></tr>
-    <tr><td>density</td><td>${f(c.density_pcf, 1)} pcf</td></tr>
-    ${c.mix ? `<tr><td>mix</td><td>${esc(c.mix)}</td></tr>` : ''}
-    <tr><td>side flare</td><td>${f(flareDeg(), 1)} deg</td></tr>
-    <tr><td>depth</td><td>${f(c.depth_in, 2)} in</td></tr>
-    <tr><td>hull weight</td><td>${f(c.hull_weight_lb, 1)} lb</td></tr>
-    <tr><td>D/C (search)</td><td>${f(v.dc, 3)} (${c.governing_case || ''})</td></tr>
-    <tr><td>D/C verify @${win.verify_stations}</td><td>${f(win.verify_dc, 3)}</td></tr>
-    <tr><td>freeboard</td><td>${f(v.freeboard_in, 2)} in (gate &ge; ${f(fbGate, 2)} in)</td></tr>
-    <tr><td>governing load case</td><td>${c.governing_case || '?'}</td></tr></table>
+  const gmBelow = typeof c.gm_in === 'number' && gmGate !== null && c.gm_in < gmGate;
+  const shapeRows = sh ? `<div class="group">Hull shape factors</div>${SHAPE.map(([k, label, unit, t]) =>
+    kv(label, `${f(sh[k], unit === 'in' ? 1 : 3)}${unit === 'in' ? ' in <span class="muted">' + ftin(sh[k]) + '</span>' : ''}`, t)).join('')}` : '';
+  box.innerHTML = `<div style="display:flex;gap:var(--s2);align-items:center;margin-bottom:var(--s1)">
+      <span class="badge ${win.verified ? 'solid' : ''}">${win.verified ? 'Verified' : 'Not verified'}</span>
+      <span class="muted">${f(c.hull_weight_lb, 1)} lb hull, D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations</span></div>
+    ${kv('Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`)}
+    ${kv('Beam', `${f(c.beam_in, 1)} in`)}
+    ${sh ? kv('Design draft', `${f(sh.draft_in, 2)} in`) : ''}
+    ${kv('Thickness', `${f(c.thickness_in, 3)} in`)}
+    ${kv('Density', `${f(c.density_pcf, 1)} pcf`)}
+    ${c.mix ? kv('Mix', esc(c.mix)) : ''}
+    ${kv('Side flare', `${f(flareDeg(), 1)} deg`)}
+    ${kv('Depth', `${f(c.depth_in, 2)} in`)}
+    ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
+    ${typeof c.drag_n === 'number' ? kv('Drag', `${f(c.drag_n, 1)} N`) : ''}
+    ${kv('GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}${gmBelow ? ', below gate' : ''}</span>`, 'Metacentric height (stability).')}
+    ${kv('Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`)}
+    ${kv('D/C search', `${f(v.dc, 3)}`)}
+    ${kv(`D/C verify`, `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`)}
+    ${kv('Governing case', esc(c.governing_case || '?'))}
     ${checksTable(v)}
-    <div class="${win.verified ? 'ok' : 'bad'}">${win.verified ? 'VERIFIED' : 'NOT VERIFIED'}</div>
-    ${win.on_grid_edge ? '<div class="warn">Winner is on the search grid edge: widen the search range.</div>' : ''}
-    ${win.at_mix_data_edge ? '<div class="warn">Density is the lightest mix the lab data supports; test lighter mixes to go lower.</div>' : ''}
-    ${shapeTbl}`;
+    ${win.on_grid_edge ? '<div class="note-box">Winner is on the search grid edge. Widen the search range.</div>' : ''}
+    ${win.at_mix_data_edge ? '<div class="note-box">Density is the lightest mix the lab data supports. Test lighter mixes to go lower.</div>' : ''}
+    ${shapeRows}`;
 }
 
 // ---------- API ----------
 function setHull(h, label) { hull = h; hullLabel = label; $('viewlabel').textContent = label; buildCanoe(); }
 async function loadHull(file) {
-  if ($('shapemode') && $('shapemode').checked && !file) { $('viewlabel').textContent = 'shape search: hull appears after the run'; return; }
+  if ($('shapemode') && $('shapemode').checked && !file) { $('viewlabel').textContent = 'Shape search: hull appears after the run'; return; }
   const r = await fetch('/api/hull' + (file ? '?file=' + encodeURIComponent(file) : ''));
-  if (r.ok) { const h = await r.json(); setHull(h, 'picked hull: ' + (h.name || file || '')); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
+  if (r.ok) { const h = await r.json(); setHull(h, 'Picked hull: ' + (h.name || file || '')); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
 }
 async function loadMix() {
   const r = await fetch('/api/mix'); const m = await r.json();
-  if (!r.ok) { $('mix').innerHTML = `<span class="bad">${esc(m.error)}</span>`; return; }
+  if (!r.ok) { $('mix').innerHTML = `<div class="note-box">${esc(m.error)}</div>`; return; }
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
-  $('mix').innerHTML = `<table><tr><th>mix</th><th>pcf</th><th>measured psi</th><th>fraction</th><th>final psi</th></tr>
+  $('mix').innerHTML = `<table class="tbl"><tr><th>mix</th><th>pcf</th><th>measured psi</th><th>fraction</th><th>final psi</th></tr>
     ${m.points.map(p => `<tr><td>${esc(p.mix)}</td><td>${f(p.density_pcf, 1)}</td><td>${f(p.measured_psi, 0)}</td><td>${f(p.fraction_of_final, 2)}</td><td>${f(p.final_psi, 0)}</td></tr>`).join('')}</table>
-    <div title="Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.">split tensile = ${f(m.split_slope_psi_per_pcf, 2)} x density ${m.split_intercept_psi < 0 ? '-' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi (rms error ${f(m.rms_residual_psi, 1)} psi)</div>
-    <div>tested densities ${f(m.density_min_pcf, 1)} .. ${f(m.density_max_pcf, 1)} pcf</div>`;
+    ${kv('Split tensile', `${f(m.split_slope_psi_per_pcf, 2)} &times; density ${m.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi`, 'Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.')}
+    ${kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`)}
+    ${kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)}`;
 }
 async function loadResult() {
   const r = await fetch('/api/result');
@@ -610,7 +780,7 @@ async function loadResult() {
     if (p.objective) objKind = p.objective.kind;
     if (result.winner_hull) {
       const wc = result.winner && result.winner.candidate;
-      setHull(result.winner_hull, 'winner hull: ' + (result.winner_hull.name || '') + (wc ? ` at ${wc.depth_in.toFixed(1)} in depth` : ''));
+      setHull(result.winner_hull, 'Winner hull: ' + (result.winner_hull.name || '') + (wc ? `, ${wc.depth_in.toFixed(1)} in depth` : ''));
     }
   }
   showWinner(); buildCanoe(); buildTabs(); drawPlot();
@@ -619,7 +789,7 @@ async function poll() {
   const r = await fetch('/api/status?since=' + cands.length);
   const s = await r.json();
   cands = cands.concat(s.candidates);
-  $('status').textContent = `${s.state}: ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
+  $('status').textContent = `${s.state[0].toUpperCase() + s.state.slice(1)}  ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
   $('prog').max = s.total || 1; $('prog').value = s.done;
   $('err').textContent = s.error || '';
   drawPlot();
@@ -631,7 +801,7 @@ $('run').onclick = async () => {
   if ($('raw').open) text = $('toml').value;
   else {
     try { text = formToml(); } catch (e) { $('err').textContent = 'form: ' + e.message; return; }
-    $('gen').value = text; $('gendet').open = true;
+    $('gen').value = text;
   }
   parseTomlBits(text);
   const r = await fetch('/api/run', { method: 'POST', body: text });
