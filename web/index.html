@@ -22,6 +22,8 @@
   .tri input { width: 58px !important; } .bar { display: inline-block; height: 8px; background: #48c; vertical-align: middle; }
   details { margin: 6px 0; } #gen { width: 100%; height: 30vh; font: 11px monospace; }
   #checks td { white-space: nowrap; } .gov { font-weight: bold; }
+  .hint { color: #888; font-size: 11px; } #mix table td, #winner table td { padding: 0 4px; }
+  #viewlabel { position: absolute; left: 8px; top: 6px; background: #fffc; padding: 2px 6px; font-weight: bold; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
@@ -37,14 +39,16 @@
     <button id="copy" type="button">Copy</button><br><textarea id="gen" readonly></textarea></details>
   <div id="status">idle</div>
   <progress id="prog" value="0" max="1"></progress>
+  <h4>Mix data</h4>
+  <div id="mix">loading...</div>
   <h4>Winner</h4>
   <div id="winner">no result yet</div>
 </div>
-<div id="view"></div>
+<div id="view"><div id="viewlabel"></div></div>
 <div id="plotwrap"><canvas id="plot"></canvas></div>
 <script>
 const $ = id => document.getElementById(id);
-let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14;
+let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'weight', hullLabel = '';
 
 function parseTomlBits(text) {
   // Just enough to read gates.dc_search and search.depth_in max for drawing.
@@ -55,6 +59,8 @@ function parseTomlBits(text) {
     const kv = l.match(/^(\w+)\s*=\s*(.+)$/); if (!kv) continue;
     if (sec === 'gates' && kv[1] === 'dc_search') dcGate = parseFloat(kv[2]);
     if (sec === 'gates' && kv[1] === 'freeboard_min_in') fbGate = parseFloat(kv[2]);
+    if (sec === 'stability' && kv[1] === 'gm_min_in') gmGate = parseFloat(kv[2]);
+    if (sec === 'objective' && kv[1] === 'kind') objKind = kv[2].replace(/"/g, '').trim();
     if (sec === 'search' && kv[1] === 'depth_in') { try { searchDepthMax = JSON.parse(kv[2])[1]; } catch (e) {} }
   }
 }
@@ -65,14 +71,16 @@ function parseTomlBits(text) {
 const FIELDS = {
   hull: [['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11]],
   material: [
-    ['ft_slope_psi_per_pcf', 'Tensile slope', 'psi/pcf', 'Tensile strength fit: f_t = slope x density + intercept. How much tensile strength each extra pcf of density buys.', 'any'],
-    ['ft_intercept_psi', 'Tensile intercept', 'psi', 'Intercept of the tensile strength fit f_t = slope x density + intercept.', 'any'],
-    ['fc_slope_psi_per_pcf', 'Compressive slope', 'psi/pcf', "Compressive strength fit: f'c = slope x density + intercept. Used by compression, shear and punching checks.", 'any'],
-    ['fc_intercept_psi', 'Compressive intercept', 'psi', "Intercept of the compressive strength fit f'c = slope x density + intercept.", 'any'],
+    ['flex_over_split', 'Flex / split ratio', '-', 'Bending (flexural) strength divided by the split-cylinder tensile strength the lab measured. 1.0 is the safe choice; textbook relations give about 1.12.', 'any', 0],
+    ['density_extrapolation_pcf', 'Density extrapolation', 'pcf', 'How far beyond the lightest and heaviest tested mixes the search may go. The strength line is fitted through only a few lab points, so far outside them it is a guess.', 'any', 0],
     ['factor_of_safety', 'Factor of safety', '-', 'Strength is divided by this. Must be at least 1.', 'any', 1],
     ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight to cover paddling impact.', 'any', 0],
-    ['knee_patch_in', 'Knee patch length', 'in', 'Length of the knee contact patch. Never zero: a point load makes D/C stop converging.', 'any', 0],
-    ['lambda_lightweight', 'Lightweight factor (lambda)', '-', 'Lightweight-concrete factor from ACI 318. 0.75 = all-lightweight, 1.0 = normal weight.', 'any', 0]],
+    ['knee_patch_in', 'Knee patch length', 'in', 'Length of the knee contact patch. Never zero: a point load makes D/C stop converging.', 'any', 0]],
+  stability: [
+    ['crew_cg_in', 'Crew CG height', 'in', 'Height of the paddlers\' centre of gravity above the keel. Kneeling paddlers are about 12 in (an assumption, not a measurement). Higher = tippier.', 'any', 0],
+    ['gm_min_in', 'Min GM', 'in', 'Minimum metacentric height (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
+  objective: [
+    ['speed_mps', 'Race speed', 'm/s', 'Speed at which water resistance is computed for the drag objective. A 2-person sprint is about 2.5 m/s.', 'any', 0]],
   search: [
     ['thickness_in', 'Wall thickness', 'in', 'Wall thickness range to search: min, max, step (inclusive).'],
     ['density_pcf', 'Mix density', 'pcf', 'Concrete density range to search: min, max, step (inclusive). Denser is stronger but heavier.'],
@@ -83,7 +91,26 @@ const FIELDS = {
     ['freeboard_min_in', 'Min freeboard', 'in', 'Minimum loaded freeboard (gunwale above water) at the worst station.', 'any', 0],
     ['thickness_min_buildable_in', 'Thinnest buildable wall', 'in', 'Thinnest wall the team can actually cast. Thinner candidates are never generated.', 'any', 0]],
 };
-const SECTIONS = { hull: 'Hull', crew: 'Crew (load cases: the design must pass all of them)', material: 'Material', search: 'Search ranges (min / max / step)', gates: 'Gates' };
+// Shape search bounds: [key, label, unit, tooltip, default [min, max]]. Meanings from hullgen.rs ShapeParams.
+const SHAPE = [
+  ['length_in', 'Length', 'in', 'Overall hull length. Longer = faster and stiffer to paddle straight, but heavier.', [216, 264]],
+  ['beam_in', 'Beam', 'in', 'Maximum width at the design waterline. Wider = more stable, more drag.', [18, 30]],
+  ['draft_in', 'Design draft', 'in', 'Depth of the design waterline of the generated hull table (not the mold depth).', [4, 8]],
+  ['fore_wp', 'Bow waterplane', '-', 'Bow waterline shape exponent. Larger = finer, more hollow bow; 0 = full width all the way to the stem (blunt).', [0.3, 1.6]],
+  ['section', 'Section shape', '-', 'Cross-section exponent. Small (~0.1) = boxy, near-vertical sides and a flat bottom; 0.5 = rounded (elliptic); 1 = V-ish.', [0.2, 0.8]],
+  ['fore_rocker', 'Bow rocker', '-', 'Bow rocker exponent. Larger = keel rises sooner toward the bow (turns easier, tracks worse).', [0, 0.6]],
+  ['aft_wp', 'Stern waterplane', '-', 'Stern waterline shape exponent, like the bow one: larger = finer stern, 0 = blunt.', [0.3, 1.6]],
+  ['aft_rocker', 'Stern rocker', '-', 'Stern rocker exponent, like the bow one: larger = keel rises sooner toward the stern.', [0, 0.6]],
+  ['fore_len_frac', 'Bow taper length', 'frac', 'Fraction of the length over which the bow tapers (0..1). If bow + stern exceed 1 both are scaled down (no straight middle section).', [0.3, 0.5]],
+  ['aft_len_frac', 'Stern taper length', 'frac', 'Fraction of the length over which the stern tapers (0..1).', [0.3, 0.5]],
+];
+const SHAPE_INT = [
+  ['samples', 'Samples', 'Number of random-but-repeatable shapes tried first (each one runs a full wall search). More = better coverage, slower.', 96],
+  ['refine_rounds', 'Refine rounds', 'Rounds of local tweaking around the best shapes found.', 6],
+  ['seed', 'Seed', 'Random seed. Same seed = same shapes = same result.', 1],
+];
+const SECTIONS = { hull: 'Hull', crew: 'Crew (load cases: the design must pass all of them)', material: 'Material', search: 'Search ranges (min / max / step)', gates: 'Gates', stability: 'Stability', objective: 'Objective', shape: 'Shape search (min / max; equal = fixed)' };
+const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const tip = t => `<span class="q" title="${t}">(?)</span>`;
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 function numRow(sec, f) {
@@ -109,23 +136,58 @@ function lcBlock(lc) {
 }
 function buildForm() {
   const ht = 'Which hull shape (jaguar-hull/1 JSON next to the canoe.toml) to optimize.';
+  const st = 'Let JAGUAR design the hull shape too (length, beam, bow/stern shape...) within the bounds below, instead of using a fixed hull file.';
+  const mt = 'Lab test results (CSV, path relative to the canoe.toml). Strength vs density is fitted from these breaks; every strength the checks use comes from that fit.';
+  const ot = 'What best means among designs that pass every check: weight = lightest hull, drag = least water resistance at the race speed (only matters with shape search).';
+  const pair = ([k, label, unit, t]) => {
+    const i = n => `<input type="number" id="shape.${k}.${n}" title="${t} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
+    return `<div class="row tri"><label title="${t}">${label} ${tip(t)}</label>${i(0)}${i(1)}<span class="unit">${unit}</span><span class="hint" id="shape.${k}.hint"></span></div>`;
+  };
+  const intRow = ([k, label, t]) => `<div class="row"><label title="${t}" for="shape.${k}">${label} ${tip(t)}</label><input type="number" id="shape.${k}" title="${t}" step="1" min="${k === 'samples' ? 1 : 0}"></div>`;
   $('form').innerHTML = `
     <fieldset><legend>${SECTIONS.hull}</legend>
-      <div class="row"><label title="${ht}">Hull file ${tip(ht)}</label><select id="hull.file" title="${ht}"></select></div>
+      <div class="row"><label title="${st}" for="shapemode">Optimize hull shape ${tip(st)}</label><input type="checkbox" id="shapemode" title="${st}"></div>
+      <div class="row" id="hullpick"><label title="${ht}">Hull file ${tip(ht)}</label><select id="hull.file" title="${ht}"></select></div>
       ${FIELDS.hull.map(f => numRow('hull', f)).join('')}</fieldset>
+    <fieldset id="shapefs" style="display:none"><legend>${SECTIONS.shape}</legend>${SHAPE.map(pair).join('')}${SHAPE_INT.map(intRow).join('')}</fieldset>
     <fieldset><legend>${SECTIONS.crew}</legend><div id="cases"></div><button type="button" id="addcase">Add load case</button></fieldset>
-    <fieldset><legend>${SECTIONS.material}</legend>${FIELDS.material.map(f => numRow('material', f)).join('')}</fieldset>
+    <fieldset><legend>${SECTIONS.material}</legend>
+      <div class="row"><label title="${mt}" for="material.mix_data">Mix data file ${tip(mt)}</label><input id="material.mix_data" title="${mt}" style="flex:1"></div>
+      ${FIELDS.material.map(f => numRow('material', f)).join('')}</fieldset>
     <fieldset><legend>${SECTIONS.search}</legend>${FIELDS.search.map(triRow).join('')}</fieldset>
-    <fieldset><legend>${SECTIONS.gates}</legend>${FIELDS.gates.map(f => numRow('gates', f)).join('')}</fieldset>`;
+    <fieldset><legend>${SECTIONS.gates}</legend>${FIELDS.gates.map(f => numRow('gates', f)).join('')}</fieldset>
+    <fieldset><legend>${SECTIONS.stability}</legend>${FIELDS.stability.map(f => numRow('stability', f)).join('')}</fieldset>
+    <fieldset><legend>${SECTIONS.objective}</legend>
+      <div class="row"><label title="${ot}" for="objective.kind">Optimize for ${tip(ot)}</label><select id="objective.kind" title="${ot}"><option value="weight">weight (lightest hull)</option><option value="drag">drag (least resistance)</option></select></div>
+      ${FIELDS.objective.map(f => numRow('objective', f)).join('')}</fieldset>`;
   $('addcase').onclick = () => lcBlock({ name: 'case' + ($('cases').children.length + 1), weights_lb: [] });
   $('hull.file').onchange = () => loadHull($('hull.file').value);
+  $('shapemode').onchange = setShapeMode;
+  for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
+}
+function setShapeMode() {
+  const on = $('shapemode').checked;
+  $('hullpick').style.display = on ? 'none' : '';
+  $('shapefs').style.display = on ? '' : 'none';
+}
+function shapeHints() {
+  for (const k of ['length_in', 'beam_in', 'draft_in']) {
+    const v = [0, 1].map(n => Number($(`shape.${k}.${n}`).value));
+    $(`shape.${k}.hint`).textContent = v.every(isFinite) ? `${ftin(v[0])} .. ${ftin(v[1])}` : '';
+  }
 }
 function fillForm(p, hulls) {
   const sel = $('hull.file');
   sel.innerHTML = hulls.map(h => `<option value="${esc(h.file)}" title="${esc(h.notes || '')}">${esc(h.name)}: ${(h.length / 12).toFixed(1)} ft (${esc(h.file)})</option>`).join('');
-  if (!hulls.some(h => h.file === p.hull.file)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(p.hull.file)}">${esc(p.hull.file)}</option>`);
-  sel.value = p.hull.file;
-  for (const sec of ['hull', 'material', 'gates']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
+  if (p.hull.file && !hulls.some(h => h.file === p.hull.file)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(p.hull.file)}">${esc(p.hull.file)}</option>`);
+  if (p.hull.file) sel.value = p.hull.file;
+  $('material.mix_data').value = p.material.mix_data;
+  $('objective.kind').value = p.objective.kind;
+  const ss = p.shape_search;
+  for (const [k, , , , d] of SHAPE) for (const n of [0, 1]) $(`shape.${k}.${n}`).value = ss ? ss[k][n] : d[n];
+  for (const [k, , , d] of SHAPE_INT) $(`shape.${k}`).value = ss ? ss[k] : d;
+  $('shapemode').checked = !!ss; setShapeMode(); shapeHints();
+  for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
 }
@@ -135,16 +197,28 @@ const list = s => s.split(',').map(x => x.trim()).filter(x => x !== '');
 const tstr = s => JSON.stringify(s);
 function formToml() {
   const g = id => $(id).value;
-  const out = ['# generated by the JAGUAR web UI', '[hull]', `file = ${tstr(g('hull.file'))}`, `stations = ${parseInt(g('hull.stations'), 10)}`, ''];
+  const shape = $('shapemode').checked;
+  const int = id => { const n = Number(g(id)); if (g(id) === '' || !Number.isInteger(n) || n < 0) throw new Error(id + ': not a whole number: "' + g(id) + '"'); return String(n); };
+  const out = ['# generated by the JAGUAR web UI', '[hull]'];
+  if (!shape) out.push(`file = ${tstr(g('hull.file'))}`);
+  out.push(`stations = ${int('hull.stations')}`, '');
   for (const d of $('cases').children) {
     out.push('[[load_case]]', `name = ${tstr(d.querySelector('.lcname').value)}`, `weights_lb = [${list(d.querySelector('.lcw').value).map(fl).join(', ')}]`);
     const seats = list(d.querySelector('.lcs').value);
     if (seats.length) out.push(`seats_in = [${seats.map(fl).join(', ')}]`);
     out.push('');
   }
-  for (const sec of ['material', 'search', 'gates']) {
+  for (const sec of ['material', 'search', 'gates', 'stability', 'objective']) {
     out.push(`[${sec}]`);
+    if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
+    if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
+    out.push('');
+  }
+  if (shape) {
+    out.push('[shape_search]');
+    for (const [k] of SHAPE) out.push(`${k} = [${[0, 1].map(n => fl(g(`shape.${k}.${n}`))).join(', ')}]`);
+    for (const [k] of SHAPE_INT) out.push(`${k} = ${int('shape.' + k)}`);
     out.push('');
   }
   return out.join('\n');
@@ -231,25 +305,30 @@ function drawPlot() {
   const L = 50, R = 10, T = 15, B = 30;
   const ok = cands.filter(k => k.verdict);
   if (!cands.length) { ctx.fillText('no candidates yet: press Run', L, H / 2); return; }
-  const ws = cands.map(k => k.hull_weight_lb);
+  const useDrag = objKind === 'drag';
+  const xv = k => useDrag ? k.drag_n : k.hull_weight_lb;
+  const shapeRun = cands.some(k => k.shape);
+  const ws = cands.map(xv).filter(v => typeof v === 'number');
+  if (!ws.length) { ctx.fillText('no ' + (useDrag ? 'drag' : 'weight') + ' values yet', L, H / 2); return; }
   let x0 = Math.min(...ws), x1 = Math.max(...ws); if (x1 === x0) x1 = x0 + 1;
   let y1 = Math.max(dcGate * 2, ...ok.map(k => Math.min(k.verdict.dc, dcGate * 4))) * 1.05;
   const px = w => L + (w - x0) / (x1 - x0) * (W - L - R);
   const py = d => T + 8 + (1 - Math.min(d, y1) / y1) * (H - T - B - 8);
   ctx.strokeStyle = '#000'; ctx.strokeRect(L, T, W - L - R, H - T - B);
   ctx.fillStyle = '#000';
-  ctx.fillText('hull weight, lb', W / 2, H - 5); ctx.fillText(x0.toFixed(0), L, H - 18); ctx.fillText(x1.toFixed(0), W - R - 30, H - 18);
+  ctx.fillText((useDrag ? 'drag, N' : 'hull weight, lb') + (shapeRun ? '   (each dot = one shape x wall candidate)' : ''), W / 2 - 60, H - 5); ctx.fillText(x0.toFixed(0), L, H - 18); ctx.fillText(x1.toFixed(0), W - R - 30, H - 18);
   ctx.save(); ctx.translate(12, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('D/C', 0, 0); ctx.restore();
   for (const v of [0, dcGate, y1]) ctx.fillText(v.toFixed(2), 18, py(v) + 4);
   ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(L, py(dcGate)); ctx.lineTo(W - R, py(dcGate)); ctx.stroke(); ctx.setLineDash([]);
   for (const k of cands) {
+    if (typeof xv(k) !== 'number') continue;
     let y, col;
     if (!k.verdict) { y = T + 4; col = '#d00'; } else { y = py(k.verdict.dc); col = k.passes ? '#1a1' : '#999'; }
-    ctx.fillStyle = col; ctx.fillRect(px(k.hull_weight_lb) - 2, y - 2, 4, 4);
+    ctx.fillStyle = col; ctx.fillRect(px(xv(k)) - 2, y - 2, 4, 4);
   }
   const w = result && result.winner && result.winner.candidate;
-  if (w && w.verdict) {
-    ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(px(w.hull_weight_lb), py(w.verdict.dc), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
+  if (w && w.verdict && typeof xv(w) === 'number') {
+    ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(px(xv(w)), py(w.verdict.dc), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
   }
 }
 
@@ -268,7 +347,16 @@ function showWinner() {
   if (!win) { box.innerHTML = '<span class="bad">NO DESIGN PASSES</span>'; return; }
   const c = win.candidate, v = c.verdict || {};
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
+  const sh = c.shape;
+  const gmOk = typeof c.gm_in === 'number' && gmGate !== null ? (c.gm_in >= gmGate ? 'ok' : 'bad') : '';
+  const shapeTbl = sh ? `<h4 style="margin:4px 0">Hull shape factors</h4><table>${SHAPE.map(([k, label, unit, t]) =>
+    `<tr title="${esc(t)}"><td>${label}</td><td>${f(sh[k], unit === 'in' ? 1 : 3)}${unit === 'in' ? ' in (' + ftin(sh[k]) + ')' : ''}</td></tr>`).join('')}</table>` : '';
   box.innerHTML = `<table>
+    <tr><td>length</td><td>${f(c.length_in, 1)} in (${typeof c.length_in === 'number' ? ftin(c.length_in) : '?'})</td></tr>
+    <tr><td>beam</td><td>${f(c.beam_in, 1)} in</td></tr>
+    ${sh ? `<tr><td>design draft</td><td>${f(sh.draft_in, 2)} in</td></tr>` : ''}
+    <tr><td>GM (stability)</td><td class="${gmOk}">${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} (gate &ge; ${f(gmGate, 2)} in)</td></tr>
+    ${typeof c.drag_n === 'number' ? `<tr><td>drag</td><td>${f(c.drag_n, 1)} N</td></tr>` : ''}
     <tr><td>thickness</td><td>${f(c.thickness_in, 3)} in</td></tr>
     <tr><td>density</td><td>${f(c.density_pcf, 1)} pcf</td></tr>
     <tr><td>depth</td><td>${f(c.depth_in, 2)} in</td></tr>
@@ -279,25 +367,48 @@ function showWinner() {
     <tr><td>governing load case</td><td>${c.governing_case || '?'}</td></tr></table>
     ${checksTable(v)}
     <div class="${win.verified ? 'ok' : 'bad'}">${win.verified ? 'VERIFIED' : 'NOT VERIFIED'}</div>
-    ${win.on_grid_edge ? '<div class="warn">Winner is on the search grid edge: widen the search range.</div>' : ''}`;
+    ${win.on_grid_edge ? '<div class="warn">Winner is on the search grid edge: widen the search range.</div>' : ''}
+    ${win.at_mix_data_edge ? '<div class="warn">Density is the lightest mix the lab data supports; test lighter mixes to go lower.</div>' : ''}
+    ${shapeTbl}`;
 }
 
 // ---------- API ----------
+function setHull(h, label) { hull = h; hullLabel = label; $('viewlabel').textContent = label; buildCanoe(); }
 async function loadHull(file) {
+  if ($('shapemode') && $('shapemode').checked && !file) { $('viewlabel').textContent = 'shape search: hull appears after the run'; return; }
   const r = await fetch('/api/hull' + (file ? '?file=' + encodeURIComponent(file) : ''));
-  if (r.ok) { hull = await r.json(); buildCanoe(); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
+  if (r.ok) { const h = await r.json(); setHull(h, 'picked hull: ' + (h.name || file || '')); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
+}
+async function loadMix() {
+  const r = await fetch('/api/mix'); const m = await r.json();
+  if (!r.ok) { $('mix').innerHTML = `<span class="bad">${esc(m.error)}</span>`; return; }
+  const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
+  $('mix').innerHTML = `<table><tr><th>mix</th><th>pcf</th><th>measured psi</th><th>fraction</th><th>final psi</th></tr>
+    ${m.points.map(p => `<tr><td>${esc(p.mix)}</td><td>${f(p.density_pcf, 1)}</td><td>${f(p.measured_psi, 0)}</td><td>${f(p.fraction_of_final, 2)}</td><td>${f(p.final_psi, 0)}</td></tr>`).join('')}</table>
+    <div title="Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.">split tensile = ${f(m.split_slope_psi_per_pcf, 2)} x density ${m.split_intercept_psi < 0 ? '-' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi (rms error ${f(m.rms_residual_psi, 1)} psi)</div>
+    <div>tested densities ${f(m.density_min_pcf, 1)} .. ${f(m.density_max_pcf, 1)} pcf</div>`;
 }
 async function loadResult() {
   const r = await fetch('/api/result');
   result = r.ok ? await r.json() : null;
-  if (result) cands = result.candidates;
+  if (result) {
+    cands = result.candidates;
+    const p = result.params || {};
+    if (p.gates) { dcGate = p.gates.dc_search; fbGate = p.gates.freeboard_min_in; }
+    if (p.stability) gmGate = p.stability.gm_min_in;
+    if (p.objective) objKind = p.objective.kind;
+    if (result.winner_hull) {
+      const wc = result.winner && result.winner.candidate;
+      setHull(result.winner_hull, 'winner hull: ' + (result.winner_hull.name || '') + (wc ? ` at ${wc.depth_in.toFixed(1)} in depth` : ''));
+    }
+  }
   showWinner(); buildCanoe(); drawPlot();
 }
 async function poll() {
   const r = await fetch('/api/status?since=' + cands.length);
   const s = await r.json();
   cands = cands.concat(s.candidates);
-  $('status').textContent = `${s.state}: ${s.done} / ${s.total}`;
+  $('status').textContent = `${s.state}: ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
   $('prog').max = s.total || 1; $('prog').value = s.done;
   $('err').textContent = s.error || '';
   drawPlot();
@@ -316,7 +427,8 @@ $('run').onclick = async () => {
   if (r.status !== 202) { $('err').textContent = `run rejected (${r.status}): ` + ((await r.json()).error || ''); return; }
   $('err').textContent = ''; cands = []; result = null; showWinner(); drawPlot();
   $('run').disabled = true;
-  await loadHull($('raw').open ? null : $('hull.file').value);
+  await loadHull($('raw').open || $('shapemode').checked ? null : $('hull.file').value);
+  loadMix();
   if (!polling) { polling = true; poll(); }
 };
 (async () => {
@@ -326,6 +438,7 @@ $('run').onclick = async () => {
   const hulls = await (await fetch('/api/hulls')).json();
   fillForm(p.params, hulls);
   resize();
+  loadMix();
   await loadHull();
   await loadResult();
   const s = await (await fetch('/api/status')).json();

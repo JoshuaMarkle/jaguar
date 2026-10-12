@@ -11,9 +11,28 @@ fn example() -> (Params, Hull) {
     (p, h)
 }
 
+/// The example with the GM gate relaxed to 0 (upright stable). The real hull
+/// has loaded GM_T 0.29 in at the old winner and at most 0.81 in over the grid
+/// with crew CG 12 in, so examples/canoe.toml's gm_min_in = 2.0 rejects every
+/// candidate (T12 finding, reported to the coordinator; not changed here).
+fn example_gm0() -> (Params, Hull) {
+    let (mut p, h) = example();
+    p.stability.gm_min_in = 0.0;
+    (p, h)
+}
+
+#[test]
+fn example_gm_gate_2in_rejects_all() {
+    let (p, h) = example();
+    let r = optimize::run(&p, &h).unwrap();
+    assert!(r.winner.is_none());
+    let mx = r.candidates.iter().filter_map(|c| c.gm_in).fold(f64::MIN, f64::max);
+    assert!(mx > 0.0 && mx < 2.0, "{mx}");
+}
+
 #[test]
 fn example_finds_verified_winner() {
-    let (p, h) = example();
+    let (p, h) = example_gm0();
     let t0 = Instant::now();
     let r = optimize::run(&p, &h).unwrap();
     eprintln!("run: {} candidates in {:?}", r.candidates.len(), t0.elapsed());
@@ -42,7 +61,7 @@ fn example_finds_verified_winner() {
 
 #[test]
 fn deterministic_json() {
-    let (p, h) = example();
+    let (p, h) = example_gm0();
     let a = serde_json::to_string(&optimize::run(&p, &h).unwrap()).unwrap();
     let b = serde_json::to_string(&optimize::run(&p, &h).unwrap()).unwrap();
     assert_eq!(a, b);
@@ -79,4 +98,43 @@ fn heavy_crew_no_winner() {
         assert!(c.error.is_some() && c.verdict.is_none() && !c.passes);
         assert!(c.hull_weight_lb.is_finite() && c.hull_weight_lb > 0.0);
     }
+}
+
+#[test]
+fn gm_gate_100_in_no_winner() {
+    let (mut p, h) = example();
+    p.stability.gm_min_in = 100.0;
+    let r = optimize::run(&p, &h).unwrap();
+    assert!(r.winner.is_none());
+    assert!(r.candidates.iter().any(|c| c.gm_in.is_some()));
+}
+
+#[test]
+fn drag_objective_picks_min_drag_passing() {
+    let (mut p, h) = example_gm0();
+    p.objective.kind = jaguar::params::ObjectiveKind::Drag;
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.expect("winner").candidate;
+    let d = w.drag_n.expect("drag");
+    eprintln!(
+        "drag winner: t {} rho {} depth {} drag {d:.2} N gm {:?}",
+        w.thickness_in, w.density_pcf, w.depth_in, w.gm_in
+    );
+    assert!(w.passes);
+    for c in r.candidates.iter().filter(|c| c.passes) {
+        assert!(c.drag_n.unwrap() >= d);
+    }
+}
+
+#[test]
+fn example_winner_gm_and_drag() {
+    let (mut p, h) = example_gm0();
+    let r = optimize::run(&p, &h).unwrap();
+    let c = r.winner.unwrap().candidate;
+    assert!(c.drag_n.is_none(), "weight objective computes no drag");
+    eprintln!("weight winner GM {:?} in", c.gm_in);
+    assert!(c.gm_in.unwrap() >= p.stability.gm_min_in);
+    p.objective.kind = jaguar::params::ObjectiveKind::Drag;
+    let r = optimize::run(&p, &h).unwrap();
+    eprintln!("drag-mode winner drag {:?} N", r.winner.unwrap().candidate.drag_n);
 }

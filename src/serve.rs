@@ -20,9 +20,13 @@
 //!   invalid, 409 if a run is already going, else 202 {"ok":true} and starts
 //!   `optimize::run_with_progress` on a background thread.
 //! * `GET  /api/status`    -> {"state": "idle"|"running"|"done"|"error",
-//!   "done": n, "total": n, "error": str|null, "candidates": [...new since ?since=k...]}
+//!   "done": n, "total": n, "error": str|null,
+//!   "shape": {"index": i, "shapes": n} | null (shape search only), "candidates": [...new since ?since=k...]}
 //!   Poll every ~250 ms with `?since=<count already seen>` to get only new
 //!   candidates (cheap incremental updates; no websockets needed).
+//! * `GET  /api/mix`       -> the mix::StrengthFit (lab points, fit line, tested
+//!   range) for the most recently submitted params (startup params before any run).
+//!   500 {"error"} if the mix data cannot be loaded or fitted.
 //! * `GET  /api/result`    -> the last jaguar-result/1, 404 if none yet.
 //!   Also written to `result.json` next to the canoe.toml when a run finishes.
 //!
@@ -51,6 +55,10 @@ struct Shared {
     error: Option<String>,
     /// Hull file of the most recently submitted params.
     hull_file: PathBuf,
+    /// Shape search progress: (index, shapes) of the shape being evaluated.
+    shape: Option<(usize, usize)>,
+    /// Params of the most recent run (feeds /api/mix).
+    params: Option<Params>,
 }
 
 /// Request handler, independent of the socket so it can be unit tested.
@@ -59,6 +67,8 @@ struct App {
     /// Params as loaded at startup, hull.file relative to `base_dir` (for the form).
     params_json: serde_json::Value,
     base_dir: PathBuf,
+    /// Params as loaded at startup (absolute paths).
+    params: Params,
     result_path: PathBuf,
     shared: Arc<Mutex<Shared>>,
 }
@@ -89,13 +99,21 @@ impl App {
             rel.material.mix_data = r.to_path_buf();
         }
         let params_json = serde_json::to_value(&rel)?;
+        let startup = params.clone();
         let result_path = base_dir.join("result.json");
         let shared = Shared {
             state: "idle",
             hull_file: params.hull.file.clone().unwrap_or_default(),
             ..Default::default()
         };
-        Ok(App { toml_text, params_json, base_dir, result_path, shared: Arc::new(Mutex::new(shared)) })
+        Ok(App {
+            toml_text,
+            params_json,
+            base_dir,
+            params: startup,
+            result_path,
+            shared: Arc::new(Mutex::new(shared)),
+        })
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
@@ -132,6 +150,13 @@ impl App {
                 }
             }
             ("GET", "/api/status") => self.status(query),
+            ("GET", "/api/mix") => {
+                let p = self.lock().params.clone().unwrap_or_else(|| self.params.clone());
+                match optimize::strength(&p).and_then(|f| Ok(serde_json::to_string(&f)?)) {
+                    Ok(s) => (200, "application/json", s),
+                    Err(e) => err_reply(500, format!("{e:#}")),
+                }
+            }
             ("GET", "/api/result") => match self.lock().result.clone() {
                 Some(s) => (200, "application/json", s),
                 None => err_reply(404, "no result yet"),
@@ -139,7 +164,7 @@ impl App {
             ("POST", "/api/run") => self.start_run(body),
             (
                 _,
-                "/" | "/index.html" | "/api/params" | "/api/hulls" | "/api/hull" | "/api/status"
+                "/" | "/index.html" | "/api/params" | "/api/hulls" | "/api/hull" | "/api/status" | "/api/mix"
                 | "/api/result" | "/api/run",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
@@ -187,6 +212,7 @@ impl App {
                 "done": s.done,
                 "total": s.total,
                 "error": s.error,
+                "shape": s.shape.map(|(i, n)| serde_json::json!({ "index": i, "shapes": n })),
                 "candidates": new,
             }),
         )
@@ -207,6 +233,7 @@ impl App {
                 state: "running",
                 hull_file: params.hull.file.clone().unwrap_or_default(),
                 result,
+                params: Some(params.clone()),
                 ..Default::default()
             };
         }
@@ -253,7 +280,8 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
                     s.total = total;
                     s.candidates.push(candidate);
                 }
-                Progress::Verifying { .. } | Progress::Shape { .. } => {}
+                Progress::Shape { index, shapes, .. } => s.shape = Some((index, shapes)),
+                Progress::Verifying { .. } => {}
             }
         };
         let result = optimize::run_params(&params, &on_progress)?;
@@ -348,6 +376,34 @@ mod tests {
         let (st, _, body) = a.handle("GET", "/api/hull?file=off1_hull.json", "");
         assert_eq!(st, 200, "{body}");
         assert!(body.contains("jaguar-hull/1"));
+    }
+
+    #[test]
+    fn mix_endpoint_returns_fit() {
+        let a = app();
+        let (st, _, body) = a.handle("GET", "/api/mix", "");
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(!v["points"].as_array().unwrap().is_empty());
+        assert!(v["split_slope_psi_per_pcf"].as_f64().unwrap().is_finite());
+        assert!(v["density_min_pcf"].as_f64().unwrap() <= v["density_max_pcf"].as_f64().unwrap());
+        assert_eq!(a.handle("POST", "/api/mix", "").0, 405);
+        // A missing mix file is an error, never a made-up fit.
+        let mut p = a.params.clone();
+        p.material.mix_data = PathBuf::from("/nonexistent/mix.csv");
+        a.lock().params = Some(p);
+        assert_eq!(a.handle("GET", "/api/mix", "").0, 500);
+    }
+
+    #[test]
+    fn status_reports_shape_progress() {
+        let a = app();
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/status", "").2).unwrap();
+        assert!(v["shape"].is_null());
+        a.lock().shape = Some((3, 96));
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/status", "").2).unwrap();
+        assert_eq!(v["shape"]["index"], 3);
+        assert_eq!(v["shape"]["shapes"], 96);
     }
 
     #[test]

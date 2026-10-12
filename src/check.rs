@@ -224,7 +224,14 @@ mod tests {
     }
 
     fn loads(nx: usize, m: f64, v: f64) -> Loads {
-        Loads { hull_weight_lb: 0.0, draft_in: 2.0, trim_in: 0.0, shear: vec![v; nx], moment: vec![m; nx] }
+        Loads {
+            hull_weight_lb: 0.0,
+            draft_in: 2.0,
+            trim_in: 0.0,
+            shear: vec![v; nx],
+            moment: vec![m; nx],
+            gm_in: 10.0,
+        }
     }
 
     fn get<'a>(v: &'a Verdict, n: &str) -> &'a CheckResult {

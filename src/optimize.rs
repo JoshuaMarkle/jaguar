@@ -17,7 +17,8 @@ use crate::equilibrium::{CrewLoad, solve};
 use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
 use crate::mix::StrengthFit;
-use crate::params::{Params, range};
+use crate::params::{ObjectiveKind, Params, range};
+use crate::resistance::resistance;
 use crate::section::{Sections, sections};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -181,10 +182,7 @@ pub fn run_with_progress(
     candidates.sort_by_key(|&(t, r, d, _)| (t, r, d));
     let candidates: Vec<Candidate> = candidates.into_iter().map(|x| x.3).collect();
 
-    let best = candidates
-        .iter()
-        .filter(|c| c.passes)
-        .reduce(|a, b| if b.hull_weight_lb < a.hull_weight_lb { b } else { a });
+    let best = candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
 
     let winner = best.map(|c| {
         let stations = 2 * n - 1;
@@ -225,6 +223,31 @@ pub fn run_with_progress(
     })
 }
 
+/// Is `b` a better winner than `a` (both passing) under the objective?
+/// Weight: lighter. Drag: less drag, ties broken by weight.
+fn better(params: &Params, b: &Candidate, a: &Candidate) -> bool {
+    match (params.objective.kind, b.drag_n, a.drag_n) {
+        (ObjectiveKind::Drag, Some(db), Some(da)) if db != da => db < da,
+        _ => b.hull_weight_lb < a.hull_weight_lb,
+    }
+}
+
+/// The analysis grid as a hull table (all rows; `resistance` clips at the draft).
+fn grid_hull(grid: &Grid) -> Hull {
+    let nz = grid.nz();
+    Hull {
+        format: crate::hull::FORMAT.into(),
+        units: "in".into(),
+        name: "grid".into(),
+        source: String::new(),
+        length: grid.x[grid.nx() - 1],
+        draft_design: grid.z[nz - 1],
+        x: grid.x.clone(),
+        z: grid.z.clone(),
+        half_breadth: (0..grid.nx()).map(|i| grid.row(i).to_vec()).collect(),
+    }
+}
+
 /// Self weight in lb: trapezoid of A*rho/1728 over x.
 fn hull_weight(grid: &Grid, sec: &Sections, rho: f64) -> f64 {
     let w: f64 =
@@ -252,6 +275,9 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
     let mat = &params.material;
     let length = grid.x[grid.x.len() - 1] - grid.x[0];
     let mut worst: Option<(Verdict, String)> = None;
+    let mut gm = f64::INFINITY;
+    // (crew lb, midship draft) of the heaviest load case, for drag
+    let mut heaviest: Option<(f64, f64)> = None;
     for case in &params.load_cases {
         let max_paddler =
             case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
@@ -268,8 +294,15 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
                 lb: w * mat.dynamic_load_factor,
             })
             .collect();
-        let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in) {
-            Ok(loads) => check(grid, sec, &loads, rho, mat, fit, max_paddler),
+        let v = match solve(grid, sec, rho, &crew, mat.knee_patch_in, params.stability.crew_cg_in) {
+            Ok(loads) => {
+                gm = gm.min(loads.gm_in);
+                let lb: f64 = case.weights_lb.iter().sum();
+                if heaviest.is_none_or(|(h, _)| lb > h) {
+                    heaviest = Some((lb, loads.draft_in));
+                }
+                check(grid, sec, &loads, rho, mat, fit, max_paddler)
+            }
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));
                 return c;
@@ -285,7 +318,22 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         }
     }
     if let Some((v, name)) = worst {
-        c.passes = v.dc <= params.gates.dc_search && v.freeboard_in >= params.gates.freeboard_min_in;
+        c.gm_in = Some(gm);
+        if params.objective.kind == ObjectiveKind::Drag {
+            let draft = heaviest.map(|h| h.1).unwrap_or(f64::NAN);
+            match resistance(&grid_hull(grid), draft, params.objective.speed_mps) {
+                Ok(r) => c.drag_n = Some(r.total_n),
+                Err(e) => {
+                    c.error = Some(format!("drag: {e:#}"));
+                    c.verdict = Some(v);
+                    c.governing_case = Some(name);
+                    return c;
+                }
+            }
+        }
+        c.passes = v.dc <= params.gates.dc_search
+            && v.freeboard_in >= params.gates.freeboard_min_in
+            && gm >= params.stability.gm_min_in;
         c.verdict = Some(v);
         c.governing_case = Some(name);
     } else {

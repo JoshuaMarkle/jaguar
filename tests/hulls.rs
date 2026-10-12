@@ -4,7 +4,10 @@ use jaguar::{hull::Hull, optimize, params::Params};
 use std::path::Path;
 
 fn winner_weight(toml: &str) -> f64 {
-    let p = Params::load(Path::new(toml)).unwrap();
+    let mut p = Params::load(Path::new(toml)).unwrap();
+    // Weight comparison only: the GM gate (T12) rejects the off1 hull at
+    // gm_min_in = 2 (its loaded GM is < 1 in), so it is disabled here.
+    p.stability.gm_min_in = f64::NEG_INFINITY;
     let hull = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
     let r = optimize::run(&p, &hull).unwrap();
     // All four example hulls carry the 2M crew with margin, so a missing

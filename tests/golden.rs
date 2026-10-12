@@ -36,7 +36,8 @@ fn golden_weight_and_draft() {
         let grid = Grid::build(&hull, f(i, "depth"), f(i, "stations") as usize);
         let sec = section::sections(&grid, f(i, "thickness"));
         let crew = crew(i);
-        let loads = equilibrium::solve(&grid, &sec, f(i, "density"), &crew, f(i, "knee_patch_in")).unwrap();
+        let loads =
+            equilibrium::solve(&grid, &sec, f(i, "density"), &crew, f(i, "knee_patch_in"), 12.0).unwrap();
         assert_rel("weight", loads.hull_weight_lb, f(o, "weight"), tol);
         assert_rel("draft", loads.draft_in, f(o, "draft"), tol);
         let mmax = loads.moment.iter().fold(0.0_f64, |a, m| a.max(m.abs()));
@@ -53,7 +54,7 @@ fn golden_bending_dc() {
         let grid = Grid::build(&hull, f(i, "depth"), f(i, "stations") as usize);
         let sec = section::sections(&grid, f(i, "thickness"));
         let loads =
-            equilibrium::solve(&grid, &sec, f(i, "density"), &crew(i), f(i, "knee_patch_in")).unwrap();
+            equilibrium::solve(&grid, &sec, f(i, "density"), &crew(i), f(i, "knee_patch_in"), 12.0).unwrap();
         let mat = Material {
             mix_data: "unused".into(),
             flex_over_split: 1.0,
