@@ -61,7 +61,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    tested mixes with `strength_model = "tested_mixes"`. Every capacity is divided by
    `factor_of_safety`.
 5. **Checks** (`src/check.rs`; governing D/C = max):
-   * bending tension: |M| c / I with c = max(zbar, D - zbar), vs flexural strength
+   * bending tension: |M| c / I at the tension fibre (bottom, c = zbar, when sagging M > 0; top,
+     c = D - zbar, when hogging), vs flexural strength
      (stations with I > 1e-3 max I)
    * bending compression vs 0.85 f'c
    * shell shear VQ/(I*2t) vs 2 sqrt(f'c)

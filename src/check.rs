@@ -6,10 +6,10 @@
 //!
 //! Checks (bending is the golden-tested one
 //! and must keep matching `tests/golden.rs`):
-//! * `bending_tension`: sigma = |M| c / I, c = max(zbar, D - zbar), stations
-//!   with I > 1e-3 max I. capacity = (ft_slope*rho + ft_intercept) / FS.
-//!   The tension fibre is NOT sign-selected: the golden oracle uses max(c) and
-//!   the signed fibre misses it by ~40%, so the conservative max stays.
+//! * `bending_tension`: sigma = |M| c / I at the actual tension fibre (M > 0
+//!   sagging: bottom, c = zbar; hogging: top, c = D - zbar), stations with
+//!   I > 1e-3 max I. capacity = flexural strength / FS. Matches
+//!   tests/golden/reference.py.
 //! * `bending_compression`: sigma at the actual compression fibre (M > 0
 //!   sagging: c = D - zbar; hogging: c = zbar) vs 0.85 f'c / FS,
 //!   f'c from the lab fit (`mix::StrengthFit::fc_psi`).
@@ -177,6 +177,12 @@ pub fn punching_calc(
     }
 }
 
+/// (tension, compression) fibre distances from the axis for moment `m`.
+/// Sagging (M >= 0): bottom in tension, top in compression; hogging: reverse.
+pub fn fibres(m: f64, c_top: f64, c_bot: f64) -> (f64, f64) {
+    if m >= 0.0 { (c_bot, c_top) } else { (c_top, c_bot) }
+}
+
 fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> CheckResult {
     let dc = if capacity.is_nan() || capacity <= 0.0 || !capacity.is_finite() || !demand.is_finite() {
         f64::INFINITY
@@ -214,11 +220,8 @@ pub fn check(
         }
         let m = loads.moment[i];
         let (c_top, c_bot) = (grid.depth - sec.zbar[i], sec.zbar[i]);
-        // Sagging (M > 0): top in compression, bottom in tension.
-        // Tension keeps the conservative max fibre: the signed tension fibre
-        // misses the golden reference (0.49 vs 0.84), which uses max(c).
-        let cc = if m >= 0.0 { c_top } else { c_bot };
-        let s = m.abs() * c_top.max(c_bot) / ii;
+        let (ct, cc) = fibres(m, c_top, c_bot);
+        let s = m.abs() * ct / ii;
         if s > st {
             (st, xt) = (s, grid.x[i]);
         }
@@ -395,6 +398,9 @@ mod tests {
         assert!((get(&sag, "bending_compression").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
         let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1());
         assert!((get(&hog, "bending_compression").demand - 1000.0 * zb / i).abs() < 1e-9);
+        // B5: tension at the opposite fibre (bottom when sagging, top when hogging).
+        assert!((get(&sag, "bending_tension").demand - 1000.0 * zb / i).abs() < 1e-9);
+        assert!((get(&hog, "bending_tension").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
         let names: Vec<_> = sag.checks.iter().map(|c| c.name).collect();
         assert_eq!(names, ["bending_tension", "bending_compression", "shear", "punching"]);
     }

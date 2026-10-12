@@ -425,8 +425,8 @@ pub fn case_diagrams(
         }
         let m = loads.moment[i];
         let (c_top, c_bot) = (grid.depth - sec.zbar[i], sec.zbar[i]);
-        let cc = if m >= 0.0 { c_top } else { c_bot };
-        let st = m.abs() * c_top.max(c_bot) / ii;
+        let (ct, cc) = crate::check::fibres(m, c_top, c_bot);
+        let st = m.abs() * ct / ii;
         let sc = m.abs() * cc / ii;
         let q = first_moment_below(grid.row(i), &grid.z, t, sec.zbar[i]);
         let tau = loads.shear[i].abs() * q / (ii * 2.0 * t);

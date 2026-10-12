@@ -120,7 +120,7 @@ def evaluate(L, T, y0, depth, n, t, rho, crew, seats, dyn):
     A, zbar, I = section(z, y, t)
     M, W_hull, draft = moments(x, z, y, A, crew, seats, dyn, rho)
     ok = I > 1e-3 * I.max()                           # skip the pointed tips
-    c = np.maximum(zbar, depth - zbar)
+    c = np.where(M >= 0, zbar, depth - zbar)       # tension fibre: bottom when sagging (M > 0)
     sigma = np.abs(M[ok]) * c[ok] / I[ok]
     cap = (FT_SLOPE * rho + FT_ICPT) / FS
     dc = np.inf if cap <= 0 else sigma.max() / cap
@@ -128,7 +128,24 @@ def evaluate(L, T, y0, depth, n, t, rho, crew, seats, dyn):
                 x_gov=x[ok][sigma.argmax()], Mmax=np.abs(M).max())
 
 
+def regen(path="tests/golden/bending_v0.json", off1="tests/golden/michlet/off1.mlt",
+          out="tests/golden/michlet/out.mlt"):
+    """Recompute the outputs of every case in the golden JSON from its inputs."""
+    import json
+    d = json.load(open(path))
+    L, T, y0 = read_hull(off1, out)
+    for c in d["cases"]:
+        i = c["inputs"]
+        r = evaluate(L, T, y0, i["depth"], i["stations"], i["thickness"], i["density"],
+                     i["crew_lb"], i["seats_in"], i["dyn"])
+        c["outputs"] = {k: float(r[k]) for k in ("weight", "dc", "draft", "x_gov", "Mmax")}
+    json.dump(d, open(path, "w"), indent=1)
+    open(path, "a").write("\n")
+
+
 def main():
+    if sys.argv[1:] == ["--regen"]:
+        return regen()
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--off1", default="tests/golden/michlet/off1.mlt")
     ap.add_argument("--out", default="tests/golden/michlet/out.mlt")

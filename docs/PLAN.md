@@ -91,8 +91,8 @@ user's approval and a SPEC update before starting.
 - **B4. Swamped flotation.** DONE (T43) except pockets in the STEP export. Bow/stern air pocket length (max `air_pocket_max_in`) sized so
   concrete volume + pockets displace >= `swamp_factor` x canoe weight. Gate, and pocket length in
   the result and the STEP export.
-- **B5. Sign-aware bending fibre** (tension fibre checked against tension only). Less conservative
-  than max(c), so it needs the golden reference updated in step.
+- **B5. Sign-aware bending fibre.** DONE (T44): tension at the bottom when sagging, top when
+  hogging; golden reference regenerated (`reference.py --regen`). Example tension D/C 0.56 -> 0.31.
 - **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
   dc_search / dc_verify margin.
 
