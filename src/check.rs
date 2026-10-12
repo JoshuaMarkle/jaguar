@@ -197,7 +197,7 @@ pub fn kupfer_dc(st: f64, sc: f64, tau: f64, ft: f64, fc: f64) -> f64 {
         let r = (0.25 * s * s + tau * tau).sqrt();
         let (s1, s2) = (0.5 * s + r, 0.5 * s - r);
         let cap = ft * (1.0 - 0.8 * s2.abs() / fc);
-        if !(cap > 0.0) || !cap.is_finite() { f64::INFINITY } else { s1.max(0.0) / cap }
+        if cap.is_nan() || cap <= 0.0 || !cap.is_finite() { f64::INFINITY } else { s1.max(0.0) / cap }
     };
     one(st).max(one(-sc))
 }
@@ -257,7 +257,7 @@ pub fn check(
             (tau, xs) = (s, grid.x[i]);
         }
         let k = kupfer_dc(m.abs() * ct / ii, m.abs() * cc / ii, s, ft_cap, fc_kupfer);
-        if !(k <= kz) {
+        if k.is_nan() || k > kz {
             (kz, xk) = (k, grid.x[i]);
         }
     }
