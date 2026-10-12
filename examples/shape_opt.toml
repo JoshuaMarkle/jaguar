@@ -55,6 +55,13 @@ gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself).
 [objective]
 kind = "weight"           # "weight" = lightest hull, "drag" = least water resistance
 speed_mps = 2.5           # race speed for the drag objective
+# Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
+# Absent = heaviest load case. Weights must sum to 1. Presets:
+#   Regionals: [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+#   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]
+#   Total:     [{ crew_lb = 350, weight = 0.675 }, { crew_lb = 525, weight = 0.10 }, { crew_lb = 700, weight = 0.225 }]
+# displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = turning proxy (docs/SHAPE_SEARCH.md)
 
 # Optimize the hull SHAPE too (docs/SHAPE_SEARCH.md). Each [min, max]; min == max holds it fixed.
 # Bounds follow ASCE-ish limits: 18-22 ft long, practical beam/draft for a 2-person canoe.
@@ -69,6 +76,13 @@ fore_rocker   = [0.0, 0.6]
 aft_rocker    = [0.0, 0.6]
 fore_len_frac = [0.3, 0.5]
 aft_len_frac  = [0.3, 0.5]
+# Manufacturability (all optional, docs/SHAPE_SEARCH.md):
+# draft_step_in  = 0.25           # snap draft / length / beam to mold-friendly steps
+# length_step_in = 6.0
+# beam_step_in   = 0.5
+# rocker_in = [0.5, 3.0]          # keel rise at 5% L from each end, in; outside = rejected
+# min_entry_angle_deg = 8.0       # waterline entry half-angle; finer bows rejected
+# symmetric = false               # true: aft factors follow the fore ones
 samples       = 96
 refine_rounds = 6
 seed          = 1

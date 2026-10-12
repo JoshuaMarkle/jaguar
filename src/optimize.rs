@@ -18,7 +18,7 @@ use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
 use crate::mix::StrengthFit;
 use crate::params::{ObjectiveKind, Params, StrengthModel, range};
-use crate::resistance::resistance;
+use crate::resistance::{resistance, weighted_resistance};
 use crate::section::{Sections, sections};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -449,8 +449,14 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         c.gm_in = Some(gm);
         if params.objective.kind == ObjectiveKind::Drag {
             let draft = heaviest.map(|h| h.1).unwrap_or(f64::NAN);
-            match resistance(&grid_hull(grid), draft, params.objective.speed_mps) {
-                Ok(r) => c.drag_n = Some(r.total_n),
+            let hull = grid_hull(grid);
+            let speed = params.objective.speed_mps;
+            let drag = match &params.objective.displacements {
+                None => resistance(&hull, draft, speed).map(|r| r.total_n),
+                Some(ds) => weighted_resistance(&hull, c.hull_weight_lb, ds, speed),
+            };
+            match drag {
+                Ok(r) => c.drag_n = Some(r),
                 Err(e) => {
                     c.error = Some(format!("drag: {e:#}"));
                     c.verdict = Some(v);

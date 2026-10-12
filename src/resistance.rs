@@ -19,7 +19,8 @@
 
 use crate::hull::Hull;
 use crate::hull::linspace;
-use crate::units::M_TO_IN;
+use crate::params::Displacement;
+use crate::units::{IN3_PER_FT3, M_TO_IN, WATER_PCF};
 use anyhow::{Result, ensure};
 use serde::Serialize;
 
@@ -53,6 +54,54 @@ pub fn resistance(hull: &Hull, draft_in: f64, speed_mps: f64) -> Result<Resistan
     ensure!(draft_in.is_finite() && draft_in > 0.0, "draft must be finite and > 0, got {draft_in}");
     ensure!(speed_mps.is_finite() && speed_mps > 0.0, "speed must be finite and > 0, got {speed_mps}");
     ensure!(hull.length.is_finite() && hull.length > 0.0, "hull length must be > 0");
+    let (x, z, y) = sample(hull, draft_in);
+    resistance_offsets(&x, &z, &y, speed_mps)
+}
+
+/// Displaced volume of `hull` floating level at `draft_in`, in^3 (same
+/// sampling as the resistance integrals).
+pub fn displaced_volume_in3(hull: &Hull, draft_in: f64) -> f64 {
+    let (_, z, y) = sample(hull, draft_in);
+    let dx = hull.length / (NX - 1) as f64;
+    let dz = z[1] - z[0];
+    let area: Vec<f64> = (0..NX).map(|i| 2.0 * trapz(&y[i * NZ..(i + 1) * NZ], dz)).collect();
+    trapz(&area, dx)
+}
+
+/// Level draft at which `hull` displaces `weight_lb` of fresh water
+/// (bisection on [`displaced_volume_in3`], monotone in draft). Err if it
+/// would sink past the top of the hull table.
+pub fn level_draft_in(hull: &Hull, weight_lb: f64) -> Result<f64> {
+    ensure!(weight_lb.is_finite() && weight_lb > 0.0, "displacement must be > 0, got {weight_lb}");
+    let need = weight_lb * IN3_PER_FT3 / WATER_PCF;
+    let top = hull.z[hull.z.len() - 1];
+    ensure!(displaced_volume_in3(hull, top) >= need, "{weight_lb:.0} lb sinks the hull past z = {top:.1} in");
+    let (mut lo, mut hi) = (0.0, top);
+    for _ in 0..60 {
+        let mid = 0.5 * (lo + hi);
+        if displaced_volume_in3(hull, mid) < need { lo = mid } else { hi = mid }
+    }
+    Ok(0.5 * (lo + hi))
+}
+
+/// Displacement-weighted drag, N: sum of weight x total resistance at the
+/// level draft of (hull_lb + crew_lb), for each `(crew_lb, weight)`.
+pub fn weighted_resistance(
+    hull: &Hull,
+    hull_lb: f64,
+    displacements: &[Displacement],
+    speed_mps: f64,
+) -> Result<f64> {
+    let mut sum = 0.0;
+    for d in displacements {
+        let draft = level_draft_in(hull, hull_lb + d.crew_lb)?;
+        sum += d.weight * resistance(hull, draft, speed_mps)?.total_n;
+    }
+    Ok(sum)
+}
+
+/// Resample `hull` on the NX x NZ grid from keel to `draft_in` (bilinear).
+fn sample(hull: &Hull, draft_in: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
     let x = linspace(0.0, hull.length, NX);
     let z = linspace(0.0, draft_in, NZ);
     let mut y = vec![0.0; NX * NZ];
@@ -69,7 +118,7 @@ pub fn resistance(hull: &Hull, draft_in: f64, speed_mps: f64) -> Result<Resistan
             y[i * NZ + k] = col[m - 1] * (1.0 - u) + col[m] * u;
         }
     }
-    resistance_offsets(&x, &z, &y, speed_mps)
+    (x, z, y)
 }
 
 fn trapz(f: &[f64], dx: f64) -> f64 {
@@ -213,6 +262,43 @@ mod tests {
             }
         }
         (x, z, y)
+    }
+
+    fn box_hull() -> Hull {
+        // 200 x 20 in box, 12 in deep: volume = 4000 in^2 x draft.
+        Hull {
+            format: crate::hull::FORMAT.into(),
+            units: "in".into(),
+            name: "box".into(),
+            source: String::new(),
+            length: 200.0,
+            draft_design: 12.0,
+            x: linspace(0.0, 200.0, 11),
+            z: linspace(0.0, 12.0, 7),
+            half_breadth: vec![vec![10.0; 7]; 11],
+        }
+    }
+
+    #[test]
+    fn level_draft_of_a_box() {
+        let h = box_hull();
+        let w = 4000.0 * 5.0 * WATER_PCF / IN3_PER_FT3;
+        assert!((level_draft_in(&h, w).unwrap() - 5.0).abs() < 1e-9);
+        assert!(level_draft_in(&h, 1e6).is_err());
+    }
+
+    #[test]
+    fn weighted_drag_with_one_displacement_equals_single_drag() {
+        let h = box_hull();
+        let one = [Displacement { crew_lb: 350.0, weight: 1.0 }];
+        let d = level_draft_in(&h, 100.0 + 350.0).unwrap();
+        let single = resistance(&h, d, 2.5).unwrap().total_n;
+        assert_eq!(weighted_resistance(&h, 100.0, &one, 2.5).unwrap(), single);
+        let two =
+            [Displacement { crew_lb: 350.0, weight: 0.75 }, Displacement { crew_lb: 700.0, weight: 0.25 }];
+        let heavy = resistance(&h, level_draft_in(&h, 800.0).unwrap(), 2.5).unwrap().total_n;
+        let wsum = weighted_resistance(&h, 100.0, &two, 2.5).unwrap();
+        assert!((wsum - (0.75 * single + 0.25 * heavy)).abs() < 1e-9 && heavy > single);
     }
 
     #[test]
