@@ -1,0 +1,214 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>JAGUAR</title>
+<style>
+  body { margin: 0; font: 13px sans-serif; display: grid; grid-template-columns: 380px 1fr; grid-template-rows: 60vh 40vh; height: 100vh; }
+  #left { grid-row: 1 / 3; padding: 8px; overflow: auto; border-right: 1px solid #ccc; }
+  #toml { width: 100%; height: 40vh; font: 12px monospace; }
+  #view { position: relative; }
+  #plotwrap { border-top: 1px solid #ccc; }
+  #plot { width: 100%; height: 100%; display: block; }
+  progress { width: 100%; }
+  .ok { color: #080; font-weight: bold; } .bad { color: #c00; font-weight: bold; } .warn { color: #b60; }
+  #err { color: #c00; white-space: pre-wrap; }
+  table td { padding: 1px 6px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+<div id="left">
+  <h3 style="margin:4px 0">JAGUAR canoe.toml</h3>
+  <textarea id="toml" spellcheck="false"></textarea><br>
+  <button id="run">Run optimization</button>
+  <div id="status">idle</div>
+  <progress id="prog" value="0" max="1"></progress>
+  <div id="err"></div>
+  <h4>Winner</h4>
+  <div id="winner">no result yet</div>
+</div>
+<div id="view"></div>
+<div id="plotwrap"><canvas id="plot"></canvas></div>
+<script>
+const $ = id => document.getElementById(id);
+let hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14;
+
+function parseTomlBits(text) {
+  // Just enough to read gates.dc_search and search.depth_in max for drawing.
+  let sec = '';
+  for (const line of text.split('\n')) {
+    const l = line.replace(/#.*/, '').trim();
+    const m = l.match(/^\[([^\]]+)\]$/); if (m) { sec = m[1]; continue; }
+    const kv = l.match(/^(\w+)\s*=\s*(.+)$/); if (!kv) continue;
+    if (sec === 'gates' && kv[1] === 'dc_search') dcGate = parseFloat(kv[2]);
+    if (sec === 'search' && kv[1] === 'depth_in') { try { searchDepthMax = JSON.parse(kv[2])[1]; } catch (e) {} }
+  }
+}
+
+// ---------- 3D ----------
+const view = $('view');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xf4f4f4);
+const camera = new THREE.PerspectiveCamera(40, 1, 1, 10000);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(1, 2, 1.5); scene.add(sun);
+let canoe = null, water = null;
+let theta = 0.8, phi = 1.1, radius = 400, target = new THREE.Vector3();
+function placeCam() {
+  camera.position.set(target.x + radius * Math.sin(phi) * Math.cos(theta), target.y + radius * Math.cos(phi), target.z + radius * Math.sin(phi) * Math.sin(theta));
+  camera.lookAt(target);
+}
+let drag = null;
+renderer.domElement.addEventListener('mousedown', e => drag = [e.clientX, e.clientY]);
+window.addEventListener('mouseup', () => drag = null);
+window.addEventListener('mousemove', e => {
+  if (!drag) return;
+  theta += (e.clientX - drag[0]) * 0.01;
+  phi = Math.min(3.1, Math.max(0.05, phi - (e.clientY - drag[1]) * 0.01));
+  drag = [e.clientX, e.clientY]; placeCam();
+});
+renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix();
+  const c = $('plot'); c.width = c.clientWidth; c.height = c.clientHeight; drawPlot();
+}
+window.addEventListener('resize', resize);
+(function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); })();
+
+function buildCanoe() {
+  if (!hull) return;
+  if (canoe) scene.remove(canoe);
+  if (water) { scene.remove(water); water = null; }
+  const w = result && result.winner ? result.winner.candidate : null;
+  const depth = Math.max(w ? w.depth_in : searchDepthMax, hull.draft_design);
+  // z levels: hull table, then topsides extruded vertically from draft_design to depth.
+  const zs = hull.z.slice();
+  const nTop = 4;
+  for (let k = 1; k <= nTop; k++) zs.push(hull.draft_design + (depth - hull.draft_design) * k / nTop);
+  const nz = zs.length, nx = hull.x.length;
+  const hb = (i, k) => k < hull.z.length ? hull.half_breadth[i][k] : hull.half_breadth[i][hull.z.length - 1];
+  const pos = [], idx = [];
+  // two sides: s = +1, -1. three.js: x along length, y up, z = half breadth.
+  for (const s of [1, -1]) {
+    const base = pos.length / 3;
+    for (let i = 0; i < nx; i++) for (let k = 0; k < nz; k++) pos.push(hull.x[i], zs[k], s * hb(i, k));
+    for (let i = 0; i < nx - 1; i++) for (let k = 0; k < nz - 1; k++) {
+      const a = base + i * nz + k, b = a + nz, c = b + 1, d = a + 1;
+      idx.push(a, b, c, a, c, d);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  canoe = new THREE.Group();
+  canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xb08850, side: THREE.DoubleSide })));
+  canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x5a4020, transparent: true, opacity: 0.25 })));
+  scene.add(canoe);
+  // Waterline plane only if the result carries a draft (Candidate does not; skip otherwise).
+  const draft = w && w.draft_in;
+  if (typeof draft === 'number') {
+    const maxB = Math.max(...hull.half_breadth.flat());
+    water = new THREE.Mesh(new THREE.PlaneGeometry(hull.length * 1.3, maxB * 5),
+      new THREE.MeshBasicMaterial({ color: 0x3070ff, transparent: true, opacity: 0.3, side: THREE.DoubleSide }));
+    water.rotation.x = -Math.PI / 2; water.position.set(hull.length / 2, draft, 0); scene.add(water);
+  }
+  target.set(hull.length / 2, depth / 2, 0);
+  radius = hull.length * 1.1; placeCam();
+}
+
+// ---------- scatter ----------
+function drawPlot() {
+  const c = $('plot'), ctx = c.getContext('2d'), W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+  const L = 50, R = 10, T = 15, B = 30;
+  const ok = cands.filter(k => k.verdict);
+  if (!cands.length) { ctx.fillText('no candidates yet: press Run', L, H / 2); return; }
+  const ws = cands.map(k => k.hull_weight_lb);
+  let x0 = Math.min(...ws), x1 = Math.max(...ws); if (x1 === x0) x1 = x0 + 1;
+  let y1 = Math.max(dcGate * 2, ...ok.map(k => Math.min(k.verdict.dc, dcGate * 4))) * 1.05;
+  const px = w => L + (w - x0) / (x1 - x0) * (W - L - R);
+  const py = d => T + 8 + (1 - Math.min(d, y1) / y1) * (H - T - B - 8);
+  ctx.strokeStyle = '#000'; ctx.strokeRect(L, T, W - L - R, H - T - B);
+  ctx.fillStyle = '#000';
+  ctx.fillText('hull weight, lb', W / 2, H - 5); ctx.fillText(x0.toFixed(0), L, H - 18); ctx.fillText(x1.toFixed(0), W - R - 30, H - 18);
+  ctx.save(); ctx.translate(12, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('D/C', 0, 0); ctx.restore();
+  for (const v of [0, dcGate, y1]) ctx.fillText(v.toFixed(2), 18, py(v) + 4);
+  ctx.setLineDash([6, 4]); ctx.strokeStyle = '#c00'; ctx.beginPath(); ctx.moveTo(L, py(dcGate)); ctx.lineTo(W - R, py(dcGate)); ctx.stroke(); ctx.setLineDash([]);
+  for (const k of cands) {
+    let y, col;
+    if (!k.verdict) { y = T + 4; col = '#d00'; } else { y = py(k.verdict.dc); col = k.passes ? '#1a1' : '#999'; }
+    ctx.fillStyle = col; ctx.fillRect(px(k.hull_weight_lb) - 2, y - 2, 4, 4);
+  }
+  const w = result && result.winner && result.winner.candidate;
+  if (w && w.verdict) {
+    ctx.strokeStyle = '#00c'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(px(w.hull_weight_lb), py(w.verdict.dc), 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
+  }
+}
+
+// ---------- winner box ----------
+function showWinner() {
+  const box = $('winner');
+  if (!result) { box.textContent = 'no result yet'; return; }
+  const win = result.winner;
+  if (!win) { box.innerHTML = '<span class="bad">NO DESIGN PASSES</span>'; return; }
+  const c = win.candidate, v = c.verdict || {};
+  const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
+  box.innerHTML = `<table>
+    <tr><td>thickness</td><td>${f(c.thickness_in, 3)} in</td></tr>
+    <tr><td>density</td><td>${f(c.density_pcf, 1)} pcf</td></tr>
+    <tr><td>depth</td><td>${f(c.depth_in, 2)} in</td></tr>
+    <tr><td>hull weight</td><td>${f(c.hull_weight_lb, 1)} lb</td></tr>
+    <tr><td>D/C (search)</td><td>${f(v.dc, 3)} (${c.governing_case || ''})</td></tr>
+    <tr><td>D/C verify @${win.verify_stations}</td><td>${f(win.verify_dc, 3)}</td></tr>
+    <tr><td>freeboard</td><td>${f(v.freeboard_in, 2)} in</td></tr></table>
+    <div class="${win.verified ? 'ok' : 'bad'}">${win.verified ? 'VERIFIED' : 'NOT VERIFIED'}</div>
+    ${win.on_grid_edge ? '<div class="warn">Winner is on the search grid edge: widen the search range.</div>' : ''}`;
+}
+
+// ---------- API ----------
+async function loadHull() {
+  const r = await fetch('/api/hull');
+  if (r.ok) { hull = await r.json(); buildCanoe(); } else { $('err').textContent = 'hull: ' + (await r.json()).error; }
+}
+async function loadResult() {
+  const r = await fetch('/api/result');
+  result = r.ok ? await r.json() : null;
+  if (result) cands = result.candidates;
+  showWinner(); buildCanoe(); drawPlot();
+}
+async function poll() {
+  const r = await fetch('/api/status?since=' + cands.length);
+  const s = await r.json();
+  cands = cands.concat(s.candidates);
+  $('status').textContent = `${s.state}: ${s.done} / ${s.total}`;
+  $('prog').max = s.total || 1; $('prog').value = s.done;
+  $('err').textContent = s.error || '';
+  drawPlot();
+  if (s.state === 'running') setTimeout(poll, 250);
+  else { polling = false; $('run').disabled = false; if (s.state === 'done') loadResult(); }
+}
+$('run').onclick = async () => {
+  const text = $('toml').value;
+  parseTomlBits(text);
+  const r = await fetch('/api/run', { method: 'POST', body: text });
+  if (r.status !== 202) { $('err').textContent = `run rejected (${r.status}): ` + ((await r.json()).error || ''); return; }
+  $('err').textContent = ''; cands = []; result = null; showWinner(); drawPlot();
+  $('run').disabled = true;
+  await loadHull();
+  if (!polling) { polling = true; poll(); }
+};
+(async () => {
+  const p = await (await fetch('/api/params')).json();
+  $('toml').value = p.toml; parseTomlBits(p.toml);
+  resize();
+  await loadHull();
+  await loadResult();
+  const s = await (await fetch('/api/status')).json();
+  if (s.state === 'running') { cands = []; polling = true; $('run').disabled = true; poll(); }
+})();
+</script>
+</body>
+</html>

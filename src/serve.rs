@@ -23,10 +23,301 @@
 //! Any panic or Err inside a run must land as state "error" with a message,
 //! never kill the server.
 
-use anyhow::Result;
-use std::path::Path;
+use crate::hull::Hull;
+use crate::optimize::{self, Candidate, Progress};
+use crate::params::Params;
+use crate::report;
+use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+const INDEX_HTML: &str = include_str!("../web/index.html");
+
+/// Run state shared between the HTTP thread and the optimizer thread.
+#[derive(Debug, Default)]
+struct Shared {
+    state: &'static str,
+    done: usize,
+    total: usize,
+    candidates: Vec<Candidate>,
+    /// Last jaguar-result/1, already serialized.
+    result: Option<String>,
+    error: Option<String>,
+    /// Hull file of the most recently submitted params.
+    hull_file: PathBuf,
+}
+
+/// Request handler, independent of the socket so it can be unit tested.
+struct App {
+    toml_text: String,
+    base_dir: PathBuf,
+    result_path: PathBuf,
+    shared: Arc<Mutex<Shared>>,
+}
+
+type Reply = (u16, &'static str, String);
+
+fn json_reply(status: u16, v: serde_json::Value) -> Reply {
+    (status, "application/json", v.to_string())
+}
+
+fn err_reply(status: u16, msg: impl std::fmt::Display) -> Reply {
+    json_reply(status, serde_json::json!({ "error": msg.to_string() }))
+}
+
+impl App {
+    fn new(params_path: &Path) -> Result<App> {
+        let toml_text = std::fs::read_to_string(params_path)
+            .with_context(|| format!("reading {}", params_path.display()))?;
+        let params = Params::load(params_path)?;
+        let base_dir = params_path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let result_path = base_dir.join("result.json");
+        let shared = Shared { state: "idle", hull_file: params.hull.file.clone(), ..Default::default() };
+        Ok(App { toml_text, base_dir, result_path, shared: Arc::new(Mutex::new(shared)) })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
+        self.shared.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn handle(&self, method: &str, url: &str, body: &str) -> Reply {
+        let (path, query) = url.split_once('?').unwrap_or((url, ""));
+        match (method, path) {
+            ("GET", "/") | ("GET", "/index.html") => {
+                (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
+            }
+            ("GET", "/api/params") => json_reply(200, serde_json::json!({ "toml": self.toml_text })),
+            ("GET", "/api/hull") => {
+                let file = self.lock().hull_file.clone();
+                match Hull::load(&file).and_then(|h| Ok(serde_json::to_string(&h)?)) {
+                    Ok(s) => (200, "application/json", s),
+                    Err(e) => err_reply(500, format!("{e:#}")),
+                }
+            }
+            ("GET", "/api/status") => self.status(query),
+            ("GET", "/api/result") => match self.lock().result.clone() {
+                Some(s) => (200, "application/json", s),
+                None => err_reply(404, "no result yet"),
+            },
+            ("POST", "/api/run") => self.start_run(body),
+            (
+                _,
+                "/" | "/index.html" | "/api/params" | "/api/hull" | "/api/status" | "/api/result"
+                | "/api/run",
+            ) => err_reply(405, "method not allowed"),
+            _ => err_reply(404, "not found"),
+        }
+    }
+
+    fn status(&self, query: &str) -> Reply {
+        let since = query
+            .split('&')
+            .find_map(|kv| kv.strip_prefix("since="))
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        let s = self.lock();
+        let new = &s.candidates[since.min(s.candidates.len())..];
+        json_reply(
+            200,
+            serde_json::json!({
+                "state": s.state,
+                "done": s.done,
+                "total": s.total,
+                "error": s.error,
+                "candidates": new,
+            }),
+        )
+    }
+
+    fn start_run(&self, body: &str) -> Reply {
+        let params = match Params::parse(body, &self.base_dir) {
+            Ok(p) => p,
+            Err(e) => return err_reply(400, format!("{e:#}")),
+        };
+        {
+            let mut s = self.lock();
+            if s.state == "running" {
+                return err_reply(409, "a run is already going");
+            }
+            let result = s.result.take();
+            *s = Shared {
+                state: "running",
+                hull_file: params.hull.file.clone(),
+                result,
+                ..Default::default()
+            };
+        }
+        let shared = Arc::clone(&self.shared);
+        let out = self.result_path.clone();
+        std::thread::spawn(move || run_job(params, shared, out));
+        json_reply(202, serde_json::json!({ "ok": true }))
+    }
+}
+
+fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
+    s.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
+    let sh = Arc::clone(&shared);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
+        let hull = Hull::load(&params.hull.file)?;
+        let on_progress = |p: Progress| {
+            let mut s = lock(&sh);
+            match p {
+                Progress::Started { total } => s.total = total,
+                Progress::Candidate { done, total, candidate } => {
+                    s.done = s.done.max(done);
+                    s.total = total;
+                    s.candidates.push(candidate);
+                }
+                Progress::Verifying { .. } => {}
+            }
+        };
+        let result = optimize::run_with_progress(&params, &hull, &on_progress)?;
+        report::write_json(&result, &out)?;
+        Ok(serde_json::to_string_pretty(&result)?)
+    }));
+    let mut s = lock(&shared);
+    match outcome {
+        Ok(Ok(json)) => {
+            s.result = Some(json);
+            s.state = "done";
+        }
+        Ok(Err(e)) => {
+            s.error = Some(format!("{e:#}"));
+            s.state = "error";
+        }
+        Err(panic) => {
+            let msg = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|m| m.to_string()))
+                .unwrap_or_else(|| "unknown panic".into());
+            s.error = Some(format!("optimizer panicked: {msg}"));
+            s.state = "error";
+        }
+    }
+}
+
+fn serve_on(server: tiny_http::Server, app: App) {
+    for mut req in server.incoming_requests() {
+        let mut body = String::new();
+        if req.as_reader().read_to_string(&mut body).is_err() {
+            body.clear();
+        }
+        let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
+        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
+            .expect("static header is valid");
+        let resp = tiny_http::Response::from_string(text).with_status_code(status).with_header(header);
+        let _ = req.respond(resp);
+    }
+}
 
 pub fn serve(params_path: &Path, port: u16) -> Result<()> {
-    let _ = (params_path, port);
-    todo!("T7")
+    let app = App::new(params_path)?;
+    let server = tiny_http::Server::http(("127.0.0.1", port))
+        .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
+    println!("JAGUAR serving http://127.0.0.1:{port}/  (Ctrl-C to stop)");
+    serve_on(server, app);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+
+    fn app() -> App {
+        App::new(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml"))).unwrap()
+    }
+
+    #[test]
+    fn routes() {
+        let a = app();
+        let (st, ct, body) = a.handle("GET", "/", "");
+        assert_eq!((st, ct), (200, "text/html; charset=utf-8"));
+        assert!(body.contains("three"));
+        let (st, _, body) = a.handle("GET", "/api/params", "");
+        assert_eq!(st, 200);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["toml"].as_str().unwrap().contains("[hull]"));
+        let (st, _, body) = a.handle("GET", "/api/hull", "");
+        assert_eq!(st, 200, "{body}");
+        assert!(body.contains("jaguar-hull/1"));
+        assert_eq!(a.handle("GET", "/api/result", "").0, 404);
+        assert_eq!(a.handle("GET", "/nope", "").0, 404);
+        assert_eq!(a.handle("DELETE", "/api/run", "").0, 405);
+    }
+
+    #[test]
+    fn status_since_slices_candidates() {
+        let a = app();
+        {
+            let mut s = a.lock();
+            for i in 0..3 {
+                s.candidates.push(Candidate {
+                    thickness_in: 0.5,
+                    density_pcf: 60.0,
+                    depth_in: 12.0 + i as f64,
+                    hull_weight_lb: 100.0,
+                    verdict: None,
+                    governing_case: None,
+                    error: Some("x".into()),
+                    passes: false,
+                });
+            }
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&a.handle("GET", "/api/status?since=2", "").2).unwrap();
+        assert_eq!(v["state"], "idle");
+        assert_eq!(v["candidates"].as_array().unwrap().len(), 1);
+        let v: serde_json::Value =
+            serde_json::from_str(&a.handle("GET", "/api/status?since=99", "").2).unwrap();
+        assert_eq!(v["candidates"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn run_rejects_bad_toml_and_concurrent_runs() {
+        let a = app();
+        let (st, _, body) = a.handle("POST", "/api/run", "bogus = 1");
+        assert_eq!(st, 400);
+        assert!(body.contains("error"));
+        a.lock().state = "running";
+        assert_eq!(a.handle("POST", "/api/run", &a.toml_text.clone()).0, 409);
+    }
+
+    #[test]
+    fn run_job_never_panics_out() {
+        // Whatever the optimizer does (result, Err, or panic), the job ends in done/error.
+        let a = app();
+        let params = Params::parse(&a.toml_text, &a.base_dir).unwrap();
+        let dir = std::env::temp_dir().join(format!("jaguar_serve_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        a.lock().state = "running";
+        run_job(params, Arc::clone(&a.shared), dir.join("result.json"));
+        let s = a.lock();
+        assert!(s.state == "done" || (s.state == "error" && s.error.is_some()), "{}", s.state);
+    }
+
+    #[test]
+    fn socket_smoke() {
+        let a = app();
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        std::thread::spawn(move || serve_on(server, a));
+        let get = |path: &str| {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        };
+        let r = get("/");
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        assert!(r.contains("<html"));
+        let r = get("/api/params");
+        assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+        assert!(r.contains("\"toml\""));
+    }
 }
