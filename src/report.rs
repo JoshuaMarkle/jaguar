@@ -32,6 +32,33 @@ fn fmt_opt(v: Option<f64>, prec: usize) -> String {
     v.map_or_else(|| "-".to_string(), |x| format!("{x:.prec$}"))
 }
 
+/// One-line description of the strength fit.
+pub fn mix_fit_line(f: &crate::mix::StrengthFit) -> String {
+    format!(
+        "strength: final split = {:.2}*rho {:+.1} psi from {} lab tests ({:.1}-{:.1} pcf), rms {:.1} psi",
+        f.split_slope_psi_per_pcf,
+        f.split_intercept_psi,
+        f.points.len(),
+        f.density_min_pcf,
+        f.density_max_pcf,
+        f.rms_residual_psi
+    )
+}
+
+fn feet(inches: f64) -> String {
+    let total = inches.round() as i64;
+    format!("{} ft {} in", total / 12, total % 12)
+}
+
+fn hull_line(c: &Candidate) -> String {
+    let mut s =
+        format!("        hull  L {:.1} in ({})  beam {:.1} in", c.length_in, feet(c.length_in), c.beam_in);
+    if let Some(sh) = &c.shape {
+        s.push_str(&format!("  draft {:.1} in", sh.draft_in));
+    }
+    s
+}
+
 /// Pure summary text, one entry per output line, never more than `MAX_LINES`.
 pub fn summary_lines(r: &RunResult) -> Vec<String> {
     let p = &r.params;
@@ -41,6 +68,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         p.hull.file.as_ref().map_or("(shape search)".to_string(), |f| f.display().to_string()),
         p.hull.stations
     ));
+    out.push(mix_fit_line(&r.strength));
     for lc in p.load_cases.iter().take(MAX_CASES) {
         let w: Vec<String> = lc.weights_lb.iter().map(|w| format!("{w:.0}")).collect();
         let total: f64 = lc.weights_lb.iter().sum();
@@ -69,6 +97,11 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         out.push(format!("  most common error ({cnt}x): {msg}"));
     }
 
+    // Shape runs: candidates differ in length/beam, so show L and B columns.
+    let shape_cols = r.candidates.iter().any(|c| {
+        (c.length_in - r.candidates[0].length_in).abs() > 1e-6
+            || (c.beam_in - r.candidates[0].beam_in).abs() > 1e-6
+    });
     // Frontier: lightest passing candidate per thickness.
     let mut frontier: Vec<&Candidate> = Vec::new();
     for c in r.candidates.iter().filter(|c| c.passes) {
@@ -87,14 +120,17 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         out.push("frontier: (no passing candidates)".to_string());
     } else {
         out.push("frontier (lightest passing per thickness)".to_string());
+        let lb_head = if shape_cols { format!(" {:>6} {:>5}", "L in", "B in") } else { String::new() };
         out.push(format!(
-            "  {:>6} {:>5} {:>6} {:>8} {:>6} {:>7}  {}",
+            "  {:>6} {:>5} {:>6} {:>8} {:>6} {:>7}{lb_head}  {}",
             "t in", "pcf", "depth", "wt lb", "D/C", "fb in", "case"
         ));
         for c in frontier.iter().take(MAX_FRONTIER) {
             let v = c.verdict.as_ref();
+            let lb =
+                if shape_cols { format!(" {:>6.1} {:>5.1}", c.length_in, c.beam_in) } else { String::new() };
             out.push(format!(
-                "  {:>6.3} {:>5.1} {:>6.2} {:>8.2} {:>6} {:>7}  {}",
+                "  {:>6.3} {:>5.1} {:>6.2} {:>8.2} {:>6} {:>7}{lb}  {}",
                 c.thickness_in,
                 c.density_pcf,
                 c.depth_in,
@@ -125,6 +161,23 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 fmt_opt(v.map(|v| v.freeboard_in), 2),
                 c.governing_case.as_deref().unwrap_or("-")
             ));
+            out.push(hull_line(c));
+            if let Some(sh) = &c.shape {
+                out.push(format!(
+                    "        shape fore_wp {:.2} aft_wp {:.2} section {:.2} rocker {:.2}/{:.2} taper {:.2}/{:.2}",
+                    sh.fore_wp, sh.aft_wp, sh.section, sh.fore_rocker, sh.aft_rocker, sh.fore_len_frac, sh.aft_len_frac
+                ));
+            }
+            let mut extra = vec![];
+            if let Some(gm) = c.gm_in {
+                extra.push(format!("GM {gm:.1} in (min {:.1})", p.stability.gm_min_in));
+            }
+            if let Some(d) = c.drag_n {
+                extra.push(format!("drag {d:.1} N at {:.1} m/s", p.objective.speed_mps));
+            }
+            if !extra.is_empty() {
+                out.push(format!("        {}", extra.join("  ")));
+            }
             if let Some(v) = v {
                 for k in &v.checks {
                     let mark = if k.name == v.governing_check { "  <- governs" } else { "" };
@@ -143,6 +196,14 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 out.push(format!(
                     "        NOT VERIFIED at {} stations (D/C {:.3} > {:.3})",
                     w.verify_stations, w.verify_dc, g.dc_verify
+                ));
+            }
+            if w.at_mix_data_edge {
+                let f = &r.strength;
+                out.push(format!(
+                    "NOTE density {:.0} pcf is the lightest the lab data supports (+{:.0} pcf extrapolation); test lighter mixes to go lower",
+                    c.density_pcf,
+                    (c.density_pcf - f.density_min_pcf).abs()
                 ));
             }
             if w.on_grid_edge {
@@ -172,7 +233,14 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                         .iter()
                         .filter(|c| c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= g.freeboard_min_in))
                         .count();
-                    let blocker = if dc_ok == 0 && fb_ok == 0 {
+                    let gm_min = p.stability.gm_min_in;
+                    let gm_fail = analysed.iter().filter(|c| c.gm_in.is_some_and(|g| g < gm_min)).count();
+                    let best_gm = analysed.iter().filter_map(|c| c.gm_in).fold(f64::NEG_INFINITY, f64::max);
+                    let blocker = if gm_fail == analysed.len() {
+                        format!(
+                            "stability: best GM {best_gm:.2} in < gm_min {gm_min:.2} in (hull too narrow/tender)"
+                        )
+                    } else if dc_ok == 0 && fb_ok == 0 {
                         "both D/C and freeboard".to_string()
                     } else if dc_ok == 0 {
                         "D/C (no candidate under the limit)".to_string()
@@ -262,6 +330,7 @@ mod tests {
         assert!(s.contains("VERIFIED at 81 stations (D/C 0.783)"));
         assert!(!s.contains("NOT VERIFIED"));
         assert!(!s.contains("WARNING"));
+        assert!(!s.contains("L in"));
         assert!(s.contains("passed 3  errored 2"));
         assert!(s.contains("most common error (2x): hull sinks"));
         // Frontier: 0.25 row picks the lighter (84.80) candidate.
@@ -280,6 +349,39 @@ mod tests {
     }
 
     #[test]
+    fn mix_and_shape_lines() {
+        let mut r = base(Some(winner(true, false)), false);
+        let w = r.winner.as_mut().unwrap();
+        w.at_mix_data_edge = true;
+        w.candidate.gm_in = Some(4.3);
+        w.candidate.drag_n = Some(23.1);
+        w.candidate.shape = Some(crate::hullgen::ShapeParams {
+            length_in: 240.0,
+            beam_in: 20.7,
+            draft_in: 5.9,
+            fore_wp: 1.0,
+            section: 0.5,
+            fore_rocker: 2.0,
+            aft_wp: 1.0,
+            aft_rocker: 2.0,
+            fore_len_frac: 0.4,
+            aft_len_frac: 0.4,
+        });
+        r.candidates[0].length_in = 220.0;
+        let l = summary_lines(&r);
+        show(&l);
+        let s = l.join("\n");
+        assert!(s.contains("strength: final split ="));
+        assert!(s.contains("NOTE density 70 pcf"));
+        assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in  draft 5.9 in"));
+        assert!(s.contains("GM 4.3 in (min"));
+        assert!(s.contains("drag 23.1 N at"));
+        assert!(s.contains("shape fore_wp"));
+        assert!(s.contains("L in"));
+        assert!(l.len() <= MAX_LINES);
+    }
+
+    #[test]
     fn no_winner() {
         let l = summary_lines(&base(None, true));
         show(&l);
@@ -287,6 +389,11 @@ mod tests {
         assert!(s.contains("NO DESIGN PASSES"));
         assert!(s.contains("lowest D/C seen 0.550"));
         assert!(s.contains("hint: blocker is"));
+        let mut r = base(None, true);
+        for c in &mut r.candidates {
+            c.gm_in = Some(0.5);
+        }
+        assert!(summary_lines(&r).join("\n").contains("blocker is stability: best GM 0.50"));
         assert!(l.len() <= MAX_LINES);
     }
 

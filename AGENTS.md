@@ -11,15 +11,18 @@ no Godzilla runs). If a feature is not in `docs/SPEC.md`, do not add it.
 ## Layout
 ```
 src/params.rs       canoe.toml -> Params (the only input)         DONE
+src/mix.rs          lab CSV -> strength fit (docs/MIX_DATA.md)     DONE
 src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid      DONE
 src/section.rs      shell A, zbar, I per station                  DONE
 src/equilibrium.rs  float + trim, V(x), M(x)                      DONE
 src/check.rs        bending/compression/shear/punching, freeboard DONE
+src/resistance.rs   Michell wave + ITTC friction drag             T12
 src/hullgen.rs      parametric hull generator (gen-hull)          DONE
 src/optimize.rs     grid search, verify at 2n-1, progress events  DONE
+src/shapeopt.rs     outer hull-shape search (docs/SHAPE_PLAN.md)  T13
 src/report.rs       terminal summary                              DONE
 src/serve.rs + web/ optional localhost web UI (API in serve.rs)   DONE
-src/main.rs         CLI: run | check | import-michlet | serve
+src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | serve
 tests/golden.rs     must match the Python prototype (oracle)
 old/                legacy app. READ-ONLY reference. Never edit, never import.
 ```

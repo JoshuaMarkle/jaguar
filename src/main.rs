@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use jaguar::{hull::Hull, optimize, params::Params, report, serve};
+use jaguar::{hull::Hull, mix::StrengthFit, optimize, params::Params, report, serve};
 use std::path::PathBuf;
 
 /// JAGUAR: find the lightest concrete canoe wall that survives the crew.
@@ -46,6 +46,14 @@ enum Cmd {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Print the lab mix data points and the strength fit (sanity-check lab data).
+    Mix {
+        #[arg(default_value = "data/mix_tests.csv")]
+        data: PathBuf,
+        /// Modulus of rupture / split tensile used for derived strengths.
+        #[arg(long, default_value_t = 1.0)]
+        flex_over_split: f64,
+    },
     /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
         #[arg(default_value = "canoe.toml")]
@@ -53,6 +61,20 @@ enum Cmd {
         #[arg(short, long, default_value_t = 8000)]
         port: u16,
     },
+}
+
+/// Warn when the strength fit rests on too little or too scattered data.
+fn weak_fit_warning(fit: &StrengthFit) -> Option<String> {
+    let n = fit.points.len();
+    let mean = fit.points.iter().map(|p| p.final_psi).sum::<f64>() / n as f64;
+    let mut why = vec![];
+    if n < 5 {
+        why.push(format!("only {n} lab points (want >= 5)"));
+    }
+    if fit.rms_residual_psi > 0.15 * mean {
+        why.push(format!("rms {:.0} psi is > 15% of mean {:.0} psi", fit.rms_residual_psi, mean));
+    }
+    (!why.is_empty()).then(|| format!("WARNING strength fit is weak: {}; add lab tests", why.join(", ")))
 }
 
 fn main() -> Result<()> {
@@ -97,6 +119,9 @@ fn main() -> Result<()> {
                 rhos[0],
                 rhos[rhos.len() - 1]
             );
+            if let Some(w) = weak_fit_warning(&fit) {
+                println!("{w}");
+            }
         }
         Cmd::ImportMichlet { off1, out_mlt, out } => {
             let hull = Hull::from_michlet(&off1, &out_mlt)?;
@@ -110,6 +135,36 @@ fn main() -> Result<()> {
             let hull = jaguar::hullgen::generate(&sp, stations, waterlines, &name)?;
             hull.save(&out)?;
             println!("wrote {} ({} x {})", out.display(), hull.x.len(), hull.z.len());
+        }
+        Cmd::Mix { data, flex_over_split } => {
+            let fit = StrengthFit::load(&data, flex_over_split)?;
+            println!(
+                "{:<16} {:>8} {:>10} {:>9} {:>10} {:>10}",
+                "mix", "rho pcf", "measured", "fraction", "final psi", "fit psi"
+            );
+            for pt in &fit.points {
+                println!(
+                    "{:<16} {:>8.1} {:>10.0} {:>9.2} {:>10.0} {:>10.0}",
+                    pt.mix,
+                    pt.density_pcf,
+                    pt.measured_psi,
+                    pt.fraction_of_final,
+                    pt.final_psi,
+                    fit.split_psi(pt.density_pcf)
+                );
+            }
+            println!("{}", report::mix_fit_line(&fit));
+            for rho in [fit.density_min_pcf, fit.density_max_pcf] {
+                println!(
+                    "  at {rho:.1} pcf: split {:.0} psi, flexural {:.0} psi, f'c {:.0} psi",
+                    fit.split_psi(rho),
+                    fit.flexural_psi(rho),
+                    fit.fc_psi(rho)
+                );
+            }
+            if let Some(w) = weak_fit_warning(&fit) {
+                println!("{w}");
+            }
         }
         Cmd::Serve { params, port } => serve::serve(&params, port)?,
     }

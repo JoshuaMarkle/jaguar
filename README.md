@@ -15,6 +15,10 @@ cargo build --release
 ./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json
 ```
 
+* Concrete strength: fitted from the team's lab breaks in `data/mix_tests.csv`; `jaguar mix` shows the
+  fit, see `docs/MIX_DATA.md`
+* Hull shape optimization: add `[shape_search]` to canoe.toml to search the hull shape too
+  (`examples/shape_opt.toml`, `docs/SHAPE_PLAN.md`)
 * Parameters: `canoe.toml` (see `examples/canoe.toml`)
 * Hull: `jaguar-hull/1` JSON offset table (see `docs/SPEC.md`)
 * Result: `jaguar-result/1` JSON

@@ -16,7 +16,7 @@ graph LR
 
 | Wave | Task | Owns | Acceptance |
 |---|---|---|---|
-| - | **Status** | | T1-T7 DONE (T6 landed inside commit a287e63). Next: T8 perf is already met (693 candidates ~50 ms CLI); v2 items below need approval. |
+| - | **Status** | | Shape optimization (docs/SHAPE_PLAN.md): T12 physics, T13 shapeopt, T14 web in progress; T15 report+docs DONE (mix fit/edge note, hull/GM/drag/shape lines, `jaguar mix`, docs/MIX_DATA.md). Lab CSV strength fit DONE (src/mix.rs). T1-T7 DONE (T6 landed inside commit a287e63). Next: T8 perf is already met (693 candidates ~50 ms CLI); v2 items below need approval. |
 | 0 | **T1** params + hull format + Michlet import | `params.rs` `hull.rs` | DONE (unit tests) |
 | 1 | **T2** section properties | `section.rs` | unit tests: rectangle-ish box section vs hand calc; positive A, I everywhere off the tips |
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |
@@ -59,7 +59,6 @@ weight for all candidates (canvas, no chart library). If `winner` is null, say N
 ## v2 candidates (need user approval before starting)
 - Seating search (old: SLSQP over 40 arrangements) - moves hogging ~40%.
 - Kupfer-Gerstle biaxial check (old: `structural.py::kupfer_*`).
-- Parametric hull generator (old: `hull_generator.py`, 7 Michlet shape factors) so hull shape becomes
-  a search variable, not just wall/depth.
+- (approved, in progress: docs/SHAPE_PLAN.md) hull shape as a search variable.
 - Richardson extrapolation of D/C over station refinement.
-- Lab CSV -> strength fit (replaces the placeholder slope/intercept).
+- (DONE) Lab CSV -> strength fit, see docs/MIX_DATA.md.
