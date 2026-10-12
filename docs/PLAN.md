@@ -16,7 +16,7 @@ graph LR
 
 | Wave | Task | Owns | Acceptance |
 |---|---|---|---|
-| - | **Status** | | Shape optimization (docs/SHAPE_PLAN.md): T12 physics, T13 shapeopt, T14 web in progress; T15 report+docs DONE (mix fit/edge note, hull/GM/drag/shape lines, `jaguar mix`, docs/MIX_DATA.md). Lab CSV strength fit DONE (src/mix.rs). T1-T7 DONE (T6 landed inside commit a287e63). Next: T8 perf is already met (693 candidates ~50 ms CLI); v2 items below need approval. |
+| - | **Status** | | T1-T15 DONE. Shape optimization (docs/SHAPE_PLAN.md) shipped: GM gate + Michell/ITTC drag (T12), outer shape search (T13), web shape mode (T14), report/`jaguar mix`/docs (T15); strength from lab CSV (src/mix.rs). Open: knee punching uses the full paddler on one knee (governs nearly every design); crew_cg_in and gm_min_in are assumptions; only 3 lab points. |
 | 0 | **T1** params + hull format + Michlet import | `params.rs` `hull.rs` | DONE (unit tests) |
 | 1 | **T2** section properties | `section.rs` | unit tests: rectangle-ish box section vs hand calc; positive A, I everywhere off the tips |
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |

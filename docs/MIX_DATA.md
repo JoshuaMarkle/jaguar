@@ -13,7 +13,7 @@ does not matter, extra columns are ignored):
 |---|---|
 | `mix` | name of the mix / cylinder, free text |
 | `cured_days` | age at the break (informational) |
-| `density_pcf` | wet density of the cylinder, pcf |
+| `density_pcf` | wet density of the cylinder, pcf (the raw sheet's "Wet Density" column; the "final target" row's 60 pcf is also in that column). Hull weight uses the same density, so if your mold-day concrete is lighter once dry, reported weights are conservative. |
 | `split_tensile_psi` | measured split-cylinder tensile strength, psi ("7,191" style commas ok) |
 | `fraction_of_final` | share of final strength reached at test age (see below) |
 | `note` | anything else |
@@ -56,3 +56,11 @@ M3 A,7,48.2,120,0.6,set 2026-10-20
 
 then run `jaguar mix` to see the new fit and `jaguar run` again. Bad numbers stop the run with an
 error naming the row; nothing is silently skipped.
+
+## Raw sheet notes
+
+`data/raw/Splitting_Tensile_Testing.csv` is the team's original export, kept unchanged. Its
+unlabeled trailing columns (203 / 3.70 and 5 / 0.083 on the last rows) look like spreadsheet
+side calculations and are not used. Its third row has only a wet density (60) and a strength
+(300): per the team, that is a final (28-day) strength, so it is entered with
+`fraction_of_final = 1.0`.
