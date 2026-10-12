@@ -29,7 +29,6 @@ fn assert_rel(name: &str, got: f64, want: f64, tol: f64) {
 
 /// T3: hull weight and draft from equilibrium.
 #[test]
-#[ignore = "enable when T2+T3 land"]
 fn golden_weight_and_draft() {
     let (hull, cases, tol) = golden();
     for c in &cases {
@@ -47,7 +46,6 @@ fn golden_weight_and_draft() {
 
 /// T4: governing bending D/C.
 #[test]
-#[ignore = "enable when T2+T3+T4 land"]
 fn golden_bending_dc() {
     let (hull, cases, tol) = golden();
     for c in &cases {

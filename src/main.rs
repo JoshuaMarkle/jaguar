@@ -33,10 +33,10 @@ enum Cmd {
         #[arg(short, long, default_value = "hull.json")]
         out: PathBuf,
     },
-    /// Serve a result in the browser at http://127.0.0.1:PORT (optional).
+    /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
-        #[arg(default_value = "result.json")]
-        result: PathBuf,
+        #[arg(default_value = "canoe.toml")]
+        params: PathBuf,
         #[arg(short, long, default_value_t = 8000)]
         port: u16,
     },
@@ -72,7 +72,7 @@ fn main() -> Result<()> {
             hull.save(&out)?;
             println!("wrote {} ({} x {})", out.display(), hull.x.len(), hull.z.len());
         }
-        Cmd::Serve { result, port } => serve::serve(&result, port)?,
+        Cmd::Serve { params, port } => serve::serve(&params, port)?,
     }
     Ok(())
 }

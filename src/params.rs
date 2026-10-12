@@ -82,12 +82,16 @@ impl Params {
     pub fn load(path: &Path) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
-        let mut p: Params =
-            toml::from_str(&text).map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
-        if p.hull.file.is_relative()
-            && let Some(dir) = path.parent()
-        {
-            p.hull.file = dir.join(&p.hull.file);
+        let base = path.parent().unwrap_or(Path::new(""));
+        Self::parse(&text, base).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))
+    }
+
+    /// Parse and validate TOML text (e.g. submitted from the web page).
+    /// A relative `hull.file` is resolved against `base_dir`.
+    pub fn parse(text: &str, base_dir: &Path) -> Result<Self> {
+        let mut p: Params = toml::from_str(text).map_err(|e| anyhow::anyhow!("parsing: {e}"))?;
+        if p.hull.file.is_relative() {
+            p.hull.file = base_dir.join(&p.hull.file);
         }
         p.validate()?;
         Ok(p)

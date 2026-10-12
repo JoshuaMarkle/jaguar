@@ -56,7 +56,30 @@ pub struct RunResult {
 
 pub const RESULT_FORMAT: &str = "jaguar-result/1";
 
+/// Progress events, emitted in order. The web server streams these to the
+/// browser; the CLI ignores them. Must be cheap and thread-safe to call.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum Progress {
+    /// Search started with `total` candidates.
+    Started { total: usize },
+    /// One candidate finished (any order, from any thread). `done` counts up to `total`.
+    Candidate { done: usize, total: usize, candidate: Candidate },
+    /// Winner is being re-checked at `stations`.
+    Verifying { stations: usize },
+}
+
+/// CLI entry: no progress reporting.
 pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
-    let _ = (params, hull);
+    run_with_progress(params, hull, &|_| {})
+}
+
+/// Same result as [`run`] (byte-identical JSON), plus progress events.
+pub fn run_with_progress(
+    params: &Params,
+    hull: &Hull,
+    on_progress: &(dyn Fn(Progress) + Sync),
+) -> Result<RunResult> {
+    let _ = (params, hull, on_progress);
     todo!("T5: grid search + verify; see module docs")
 }

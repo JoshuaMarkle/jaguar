@@ -10,6 +10,6 @@ golden:           ## include not-yet-ported golden tests
 run:
 	cargo run --release -q -- run examples/canoe.toml
 serve:
-	cargo run --release -q -- serve result.json
+	cargo run --release -q -- serve examples/canoe.toml
 hooks:            ## install the pre-commit hook
 	git config core.hooksPath .githooks
