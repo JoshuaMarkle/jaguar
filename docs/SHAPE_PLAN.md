@@ -61,3 +61,19 @@ Reported per winner: length, beam, draft, all shape factors, weight, drag, GM, e
   with the same settings, with GM >= gm_min and freeboard >= 6 in.
 * Same toml twice -> byte-identical result.json.
 * drag objective winner is longer/slenderer than the weight objective winner.
+
+## Drag model status (measured 2026-10-12, off1 hull at design draft)
+
+| speed m/s | wave N (Rust) | wave N (old Python) | friction N (Rust) |
+|---|---|---|---|
+| 1.5 | 2.6 | 3.8 | 12.3 |
+| 2.5 | 10.7 | 14.5 | 31.3 |
+| 3.5 | 33.6 | 33.5 | 58.0 |
+
+* Wave: Rust is grid-converged (<1% vs a 4x finer theta grid). The old Python kernel undersamples
+  short transverse waves at low speed, which is where the two differ. Michlet's own out.mlt has
+  Rw = 0 (wave drag was not computed in that run), so there is no external reference yet.
+* Wetted surface: Rust 3.52 m^2 vs Michlet's S = 3.19 m^2 (+10%), so friction is ~10% high
+  and conservative. The old Python's 1.84 m^2 ignores girth slope and is not a valid reference.
+* Use drag to RANK shapes (all shapes get the same model), not as an absolute race prediction.
+  To validate: run Michlet with wave drag on for one hull and compare.
