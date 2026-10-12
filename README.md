@@ -1,27 +1,23 @@
 # JAGUAR
 
 Finds the lightest concrete canoe wall (thickness, mix density, mold depth) for a given hull that
-survives the crew. Terminal first. Browser view optional.
+survives the crew, and can optionally search the hull shape too. Terminal first. Browser view optional.
 
 ```bash
 cargo build --release
 ./target/release/jaguar check examples/canoe.toml
 ./target/release/jaguar run   examples/canoe.toml      # -> result.json
 ./target/release/jaguar serve examples/canoe.toml     # optional web UI: http://127.0.0.1:8000
-                                                       # (view canoe, edit params, Run, watch live)
 
-# example hulls: canoe (real), sleek, beamy, barge (bad on purpose); see docs/HULLS.md
-# bring your own hull from Godzilla/Michlet, or generate one: jaguar gen-hull shape.toml
+# example hulls: canoe (real), sleek, beamy, barge (bad on purpose). See docs/HULLS.md
+# bring your own hull from Michlet, or generate one: jaguar gen-hull shape.toml
 ./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json
 ```
 
-* Concrete strength: fitted from the team's lab breaks in `data/mix_tests.csv`; `jaguar mix` shows the
-  fit, see `docs/MIX_DATA.md`
-* Hull shape optimization: add `[shape_search]` to canoe.toml to search the hull shape too
-  (`examples/shape_opt.toml`, `docs/SHAPE_PLAN.md`)
-* Parameters: `canoe.toml` (see `examples/canoe.toml`)
-* Hull: `jaguar-hull/1` JSON offset table (see `docs/SPEC.md`)
-* Result: `jaguar-result/1` JSON
+* Parameters: `canoe.toml` (see `examples/canoe.toml`). Full contract: `docs/SPEC.md`
+* Concrete strength: fitted from the team's lab breaks in `data/mix_tests.csv`. Run `jaguar mix` to
+  see the fit (`docs/MIX_DATA.md`)
+* Hull shape search: add `[shape_search]` to canoe.toml (`examples/shape_opt.toml`,
+  `docs/SHAPE_SEARCH.md`)
 
-Status: rewrite in progress, see `docs/PLAN.md`. Contributors and agents: read `AGENTS.md`.
-The previous application lives in `old/` for reference.
+Contributors and agents: read `AGENTS.md`. Open work: `docs/PLAN.md`.

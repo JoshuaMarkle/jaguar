@@ -1,8 +1,6 @@
 //! Golden tests: the Rust pipeline must reproduce the deleted Python prototype
 //! (`docs/reference/prototype_optimize.py`) on `tests/golden/bending_v0.json`.
-//!
-//! These are `#[ignore]` until PLAN tasks T2-T4 land. The task that makes one
-//! pass removes its `#[ignore]`. Run them with `make golden`.
+//! Never loosen a tolerance to make one pass: find the bug.
 
 use jaguar::equilibrium::{self, CrewLoad};
 use jaguar::hull::{Grid, Hull};
@@ -27,7 +25,7 @@ fn assert_rel(name: &str, got: f64, want: f64, tol: f64) {
     assert!(rel <= tol, "{name}: got {got}, want {want} (rel err {rel:.2e} > {tol})");
 }
 
-/// T3: hull weight and draft from equilibrium.
+/// Hull weight and draft from equilibrium.
 #[test]
 fn golden_weight_and_draft() {
     let (hull, cases, tol) = golden();
@@ -45,7 +43,7 @@ fn golden_weight_and_draft() {
     }
 }
 
-/// T4: governing bending D/C.
+/// Governing bending D/C.
 #[test]
 fn golden_bending_dc() {
     let (hull, cases, tol) = golden();
@@ -99,7 +97,7 @@ fn crew(i: &Value) -> Vec<CrewLoad> {
         .collect()
 }
 
-/// T1 (done): Grid::build reproduces prototype build() at depth 14, 161 stations.
+/// Grid::build reproduces prototype build() at depth 14, 161 stations.
 #[test]
 fn golden_grid_matches_prototype() {
     let g: Value =

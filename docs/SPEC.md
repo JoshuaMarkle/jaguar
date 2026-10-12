@@ -1,4 +1,4 @@
-# JAGUAR spec (v1)
+# JAGUAR spec
 
 ## Question answered
 Given a hull shape, a crew, and a concrete strength fit: **what is the lightest uniform wall
@@ -41,7 +41,7 @@ section cuts, spreadsheets) can produce; the optimizer only needs linear interpo
 resampling to any station count is O(n) with no geometry library; the browser can mesh it directly.
 Topsides above `draft_design` are extruded vertically to the mold depth, which is a search variable.
 
-## Physics (v1, matches the prototype)
+## Physics (steps 1-4 bending are pinned to the Python prototype by tests/golden.rs)
 1. **Grid**: resample to `stations` evenly spaced x; append 10 waterlines from draft+0.1 to depth,
    half-breadth = top waterline value.
 2. **Section** per station: thin shell of thickness t on both sides + keel strip: A, zbar, I.
@@ -65,7 +65,7 @@ Topsides above `draft_design` are extruded vertically to the mold depth, which i
 6. **Gates**: candidate passes iff D/C <= dc_search, freeboard >= freeboard_min_in and
    GM_T >= gm_min_in, for every load case. **Objective** `objective.kind`: `weight` = lightest
    passing; `drag` = lowest wave (Michell) + friction (ITTC-57) resistance at `speed_mps`. Verified iff its D/C at 2n-1 stations <= dc_verify.
-7. **Shape search** (optional `[shape_search]`, `src/shapeopt.rs`, `docs/SHAPE_PLAN.md`): outer
+7. **Shape search** (optional `[shape_search]`, `src/shapeopt.rs`, `docs/SHAPE_SEARCH.md`): outer
    deterministic Latin hypercube + pattern search over Michlet Series 7 shape factors within
    bounds; each shape runs the wall search above; best objective wins.
 
@@ -80,7 +80,7 @@ depth ascending). Terminal output is a short summary; the JSON is the record.
 Default example (9 t x 11 rho x 7 D = 693 candidates, 161 stations) in **< 1 s** release build on a
 laptop. The Python prototype takes ~30 s for the same 693 candidates.
 
-## Out of scope for v1 (do not build)
+## Out of scope (do not build)
 Race simulation, Godzilla/Fortran runs, GUI, mix database (one CSV is enough), PDF/LaTeX reports,
 multizone pours, Kupfer biaxial envelope, torsion, seating search,
-STEP/STL export. Candidates for v2 are listed in `docs/PLAN.md`; each needs the user's approval.
+STEP/STL export. Ideas for later are listed in `docs/PLAN.md`. Each needs the user's approval.

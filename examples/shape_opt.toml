@@ -56,7 +56,7 @@ gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself).
 kind = "weight"           # "weight" = lightest hull, "drag" = least water resistance
 speed_mps = 2.5           # race speed for the drag objective
 
-# Optimize the hull SHAPE too (docs/SHAPE_PLAN.md). Each [min, max]; min == max holds it fixed.
+# Optimize the hull SHAPE too (docs/SHAPE_SEARCH.md). Each [min, max]; min == max holds it fixed.
 # Bounds follow ASCE-ish limits: 18-22 ft long, practical beam/draft for a 2-person canoe.
 [shape_search]
 length_in     = [216.0, 264.0]

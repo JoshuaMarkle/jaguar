@@ -1,6 +1,6 @@
-# Hull shape optimization plan
+# Hull shape search
 
-Goal: when `[shape_search]` is in canoe.toml, JAGUAR picks the hull SHAPE as well as the wall
+With `[shape_search]` in canoe.toml (and no `hull.file`), JAGUAR picks the hull SHAPE as well as the wall
 (thickness, mix density, mold depth). The user is a programmer, not a hull designer, so the
 search must be bounded by things that make a canoe physically sensible, and every number it
 reports must come from a check, never a guess.
@@ -33,8 +33,8 @@ hull it is given, so all strength/freeboard logic stays in one place.
 
 1. **Latin hypercube** of `samples` shapes inside the bounds (seeded PRNG implemented in the
    file, e.g. SplitMix64; no new crates). Parameters with min == max are held fixed.
-2. Evaluate all in parallel (rayon over shapes; the inner search runs serially per shape to
-   avoid nested parallelism thrash: add `optimize::run_serial` or a flag).
+2. Evaluate all in parallel (rayon over shapes; the inner search runs serially per shape,
+   `optimize::run_inner(.., parallel = false, ..)`, to avoid nested parallelism thrash).
 3. **Pattern search refinement**, `refine_rounds` rounds: around the current best K=4 shapes,
    try +/- step on each free parameter (step starts at 1/8 of the range, halves when no
    improvement), clamp to bounds, skip already-seen shapes.
@@ -45,16 +45,7 @@ hull it is given, so all strength/freeboard logic stays in one place.
 
 Reported per winner: length, beam, draft, all shape factors, weight, drag, GM, every check.
 
-## Tasks (parallel agents)
-
-| Task | Owns | Delivers |
-|---|---|---|
-| T12 physics | `equilibrium.rs` (GM), `resistance.rs`, `optimize.rs::evaluate` gm/drag fill + gates | GM_T and drag per candidate, gate `gm >= gm_min`; objective kind=drag ranks by drag |
-| T13 shapeopt | `shapeopt.rs`, `optimize::run_params` dispatch, `examples/shape_opt.toml`, `tests/shapeopt.rs` | outer search above |
-| T14 web | `serve.rs`, `web/index.html` | form for [stability]/[objective]/[shape_search] (toggle "optimize hull shape"), mix data shown, winner shows L, B, shape, drag, GM; 3D view draws `winner_hull` |
-| T15 report+docs | `report.rs`, `main.rs`, docs | terminal winner shows L x B x T, drag, GM, shape factors, mix fit line and mix-data-edge note |
-
-## Acceptance
+## Acceptance (pinned by `tests/shapeopt.rs` and `docs/HULLS.md`)
 
 * `jaguar run examples/shape_opt.toml` finishes in < 60 s release, returns a VERIFIED winner whose
   shape is inside the bounds and lighter (weight objective) than every fixed example hull run

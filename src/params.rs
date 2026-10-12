@@ -26,7 +26,7 @@ pub struct Params {
     /// Knee punching-shear model (see docs/PUNCHING.md).
     pub punching: Punching,
     /// Present = optimize the hull SHAPE too (hull.file must then be absent).
-    /// See docs/SHAPE_PLAN.md.
+    /// See docs/SHAPE_SEARCH.md.
     #[serde(default)]
     pub shape_search: Option<ShapeSearch>,
 }

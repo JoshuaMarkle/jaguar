@@ -1,4 +1,4 @@
-//! T17: strength_model = "tested_mixes" designs only at tested mixes.
+//! strength_model = "tested_mixes" designs only at tested mixes.
 use jaguar::hull::Hull;
 use jaguar::optimize;
 use jaguar::params::{Params, StrengthModel};

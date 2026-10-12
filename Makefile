@@ -1,12 +1,10 @@
-.PHONY: check fmt golden run serve hooks
+.PHONY: check fmt run serve hooks
 check:            ## fmt + lint + tests (run before every commit)
 	cargo fmt --check
 	cargo clippy --all-targets -q -- -D warnings
 	cargo test -q
 fmt:
 	cargo fmt
-golden:           ## include not-yet-ported golden tests
-	cargo test -q -- --include-ignored
 run:
 	cargo run --release -q -- run examples/canoe.toml
 serve:

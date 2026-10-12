@@ -1,11 +1,11 @@
-//! T10: every example hull loads, every example run produces a winner, and
+//! Every example hull loads, every example run produces a winner, and
 //! the deliberately bad barge hull costs more concrete than the real ones.
 use jaguar::{hull::Hull, optimize, params::Params};
 use std::path::Path;
 
 fn winner_weight(toml: &str) -> f64 {
     let mut p = Params::load(Path::new(toml)).unwrap();
-    // Weight comparison only: the GM gate (T12) rejects the off1 hull at
+    // Weight comparison only: the GM gate rejects the off1 hull at
     // gm_min_in = 2 (its loaded GM is < 1 in), so it is disabled here.
     p.stability.gm_min_in = f64::NEG_INFINITY;
     let hull = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
