@@ -7,7 +7,8 @@ survives the crew. Terminal first. Browser view optional.
 cargo build --release
 ./target/release/jaguar check examples/canoe.toml
 ./target/release/jaguar run   examples/canoe.toml      # -> result.json
-./target/release/jaguar serve result.json              # optional: http://127.0.0.1:8000
+./target/release/jaguar serve examples/canoe.toml     # optional web UI: http://127.0.0.1:8000
+                                                       # (view canoe, edit params, Run, watch live)
 
 # bring your own hull from Godzilla/Michlet
 ./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json

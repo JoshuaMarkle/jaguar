@@ -9,7 +9,7 @@ Given a hull shape, a crew, and a concrete strength fit: **what is the lightest 
 jaguar check  [canoe.toml]                     validate inputs, print hull summary
 jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no verified design, 1 error
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
-jaguar serve  [result.json] [-p 8000]          optional read-only browser view
+jaguar serve  [canoe.toml] [-p 8000]           optional web UI: 3D canoe, edit params, run + watch live
 ```
 
 ## Inputs

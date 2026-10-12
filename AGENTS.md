@@ -5,19 +5,19 @@ Rewrite in progress. Read this file fully, then `docs/PLAN.md` for your task.
 ## What this is
 A terminal program that finds the **lightest concrete canoe wall** (thickness, mix density, mold depth)
 for a given hull that does not crack under the crew. That is the whole product. Visualization is an
-optional `jaguar serve` that reads `result.json`. Nothing else (no races, no GUI, no mix lab, no PDFs,
+optional `jaguar serve canoe.toml` web UI (view the canoe, start a run, watch it live). Nothing else (no races, no GUI, no mix lab, no PDFs,
 no Godzilla runs). If a feature is not in `docs/SPEC.md`, do not add it.
 
 ## Layout
 ```
 src/params.rs       canoe.toml -> Params (the only input)         DONE
 src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid      DONE
-src/section.rs      shell A, zbar, I per station                  T2
-src/equilibrium.rs  float + trim, V(x), M(x)                      T3
-src/check.rs        bending D/C, freeboard                        T4
-src/optimize.rs     grid search, verify at 2n-1                   T5
-src/report.rs       terminal summary                              T6
-src/serve.rs + web/ optional localhost viewer                     T7
+src/section.rs      shell A, zbar, I per station                  DONE
+src/equilibrium.rs  float + trim, V(x), M(x)                      DONE
+src/check.rs        bending D/C, freeboard                        DONE
+src/optimize.rs     grid search, verify at 2n-1, progress events  DONE
+src/report.rs       terminal summary                              DONE
+src/serve.rs + web/ optional localhost web UI (API in serve.rs)   DONE
 src/main.rs         CLI: run | check | import-michlet | serve
 tests/golden.rs     must match the Python prototype (oracle)
 old/                legacy app. READ-ONLY reference. Never edit, never import.
@@ -31,7 +31,7 @@ make hooks     # once per clone: enables the pre-commit hook (runs make check, b
 make check     # fmt + clippy -D warnings + tests. MUST pass before every commit.
 make golden    # include #[ignore]d golden tests (shows what is left to port)
 make run       # cargo run --release -- run examples/canoe.toml
-make serve     # view result.json at http://127.0.0.1:8000
+make serve     # web UI at http://127.0.0.1:8000
 ```
 
 ## Rules

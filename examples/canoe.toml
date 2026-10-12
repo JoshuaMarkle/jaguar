@@ -3,7 +3,7 @@
 #
 #   jaguar check examples/canoe.toml     # validate only
 #   jaguar run   examples/canoe.toml     # optimize -> result.json
-#   jaguar serve result.json             # optional browser view
+#   jaguar serve examples/canoe.toml     # optional web UI
 
 [hull]
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file

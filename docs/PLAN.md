@@ -16,6 +16,7 @@ graph LR
 
 | Wave | Task | Owns | Acceptance |
 |---|---|---|---|
+| - | **Status** | | T1-T7 DONE (T6 landed inside commit a287e63). Next: T8 perf is already met (693 candidates ~50 ms CLI); v2 items below need approval. |
 | 0 | **T1** params + hull format + Michlet import | `params.rs` `hull.rs` | DONE (unit tests) |
 | 1 | **T2** section properties | `section.rs` | unit tests: rectangle-ish box section vs hand calc; positive A, I everywhere off the tips |
 | 1 | **T7a** web viewer, static | `web/index.html` | renders `tests/golden/off1_hull.json` + a hand-written sample result; no build step |
@@ -23,7 +24,7 @@ graph LR
 | 3 | **T4** checks | `check.rs` | `golden_bending_dc` un-ignored and passing; capacity <= 0 gives fail (test) |
 | 4 | **T5** optimizer | `optimize.rs` | `jaguar run examples/canoe.toml` finds a verified winner (expected, from the prototype physics: t=0.25 in, 70 pcf, depth 12 in, ~84.8 lb, D/C ~0.786, verify ~0.783, min freeboard ~6.42 in); two runs give identical result.json (test) |
 | 5 | **T6** report | `report.rs` | summary <= 40 lines, shows winner, VERIFIED flag, grid-edge warning |
-| 5 | **T7b** serve | `serve.rs` | `jaguar serve` serves `/`, `/result.json`, `/hull.json`; refresh picks up a new run |
+| 5 | **T7b** serve | `serve.rs` | API per `serve.rs` docs; Run from browser streams live candidates. DONE (verified in headless Chromium) |
 | 5 | **T8** performance | `section.rs` `equilibrium.rs` (perf only) | default example < 1 s release; golden still passes; add `benches/` or a timed test |
 
 ## Contract proven
