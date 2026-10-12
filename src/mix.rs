@@ -171,8 +171,13 @@ impl StrengthFit {
     pub fn load(path: &Path, flex_over_split: f64) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading mix data {}", path.display()))?;
-        let points = parse_csv(&text).with_context(|| format!("parsing {}", path.display()))?;
-        Self::fit(points, flex_over_split).with_context(|| format!("fitting {}", path.display()))
+        Self::parse(&text, flex_over_split).with_context(|| format!("loading {}", path.display()))
+    }
+
+    /// Parse CSV text (same format as [`Self::load`]) and fit.
+    pub fn parse(text: &str, flex_over_split: f64) -> Result<Self> {
+        let points = parse_csv(text).context("parsing")?;
+        Self::fit(points, flex_over_split).context("fitting")
     }
 }
 

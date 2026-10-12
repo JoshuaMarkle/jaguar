@@ -137,19 +137,22 @@ pub struct Stability {
 }
 
 /// What "best" means.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectiveKind {
     /// Lightest hull (wall weight) that passes every gate.
     Weight,
     /// Lowest total water resistance (wave + friction) at `speed_mps`, loaded,
     /// among designs that pass every gate. Needs `[shape_search]` to matter.
+    /// Default when `objective.kind` is omitted.
+    #[default]
     Drag,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Objective {
+    #[serde(default)]
     pub kind: ObjectiveKind,
     /// Race speed for the drag objective, m/s (2-person sprint ~2.5).
     pub speed_mps: f64,
@@ -355,6 +358,13 @@ mod tests {
     fn example_toml_loads() {
         let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
         assert_eq!(p.load_cases.len(), 1);
+    }
+
+    #[test]
+    fn objective_kind_defaults_to_drag() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap().replace("kind = \"drag\"", "");
+        let p = Params::parse(&text, Path::new("examples")).unwrap();
+        assert_eq!(p.objective.kind, ObjectiveKind::Drag);
     }
 
     #[test]

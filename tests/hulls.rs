@@ -8,6 +8,7 @@ fn winner_weight(toml: &str) -> f64 {
     // Weight comparison only: the GM gate rejects the off1 hull at
     // gm_min_in = 2 (its loaded GM is < 1 in), so it is disabled here.
     p.stability.gm_min_in = f64::NEG_INFINITY;
+    p.objective.kind = jaguar::params::ObjectiveKind::Weight;
     let hull = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
     let r = optimize::run(&p, &hull).unwrap();
     // All four example hulls carry the 2M crew with margin, so a missing

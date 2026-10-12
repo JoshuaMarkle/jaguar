@@ -13,8 +13,12 @@ jaguar mix    [data/mix_tests.csv]             print lab points and the strength
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
 jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg]
-jaguar serve  [canoe.toml] [-p 8000]           web UI: 3D canoe, edit params, run + watch live
+jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
+`serve`: the form is the only editor. Each edit is autosaved (validated, absolute paths) to
+`--prefs`, default `$XDG_CONFIG_HOME/jaguar/prefs.toml` else `~/.config/jaguar/prefs.toml`, and
+restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and edits the lab CSV
+(saved over `material.mix_data` after it parses and fits, previous kept as `.bak`). HTTP API: `src/serve.rs`.
 
 ## Inputs
 
@@ -66,7 +70,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
    GM_T >= `gm_min_in` for every load case. Thicknesses below `thickness_min_buildable_in` are
    never tried.
-7. **Objective** (`objective.kind`): `weight` = lightest passing; `drag` = lowest Michell wave +
+7. **Objective** (`objective.kind`, default `drag` when omitted): `weight` = lightest passing; `drag` = lowest Michell wave +
    ITTC-57 friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction).
 8. **Verify**: the winner is re-run at 2n-1 stations. It is VERIFIED iff D/C there <= `dc_verify`
