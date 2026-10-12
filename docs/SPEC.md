@@ -12,8 +12,12 @@ jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no v
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
-jaguar serve  [canoe.toml] [-p 8000]           web UI: 3D canoe, edit params, run + watch live
+jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
+`serve`: the form is the only editor. Each edit is autosaved (validated, absolute paths) to
+`--prefs`, default `$XDG_CONFIG_HOME/jaguar/prefs.toml` else `~/.config/jaguar/prefs.toml`, and
+restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and edits the lab CSV
+(saved over `material.mix_data` after it parses and fits, previous kept as `.bak`). HTTP API: `src/serve.rs`.
 
 ## Inputs
 

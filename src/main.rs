@@ -60,6 +60,10 @@ enum Cmd {
         params: PathBuf,
         #[arg(short, long, default_value_t = 8000)]
         port: u16,
+        /// Autosaved UI settings file (default $XDG_CONFIG_HOME/jaguar/prefs.toml,
+        /// else ~/.config/jaguar/prefs.toml).
+        #[arg(long)]
+        prefs: Option<PathBuf>,
     },
 }
 
@@ -183,7 +187,7 @@ fn main() -> Result<()> {
                 println!("{w}");
             }
         }
-        Cmd::Serve { params, port } => serve::serve(&params, port)?,
+        Cmd::Serve { params, port, prefs } => serve::serve(&params, port, prefs)?,
     }
     Ok(())
 }

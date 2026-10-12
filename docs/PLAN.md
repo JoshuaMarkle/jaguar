@@ -2,11 +2,6 @@
 
 ## Open work
 
-- **NEXT: web UI cleanup** (`web/index.html`, `src/serve.rs`, `examples/canoe.toml`):
-  * remove the raw TOML and generated-TOML views from the served site (the form is the only editor);
-  * default `objective.kind` to `"drag"`;
-  * auto-save input prefs (the canoe.toml the form builds) to a fixed spot on every edit and load it
-    on reopen, so settings survive closing the browser/server.
 - **Knee load test**: load a cast panel of the design wall with a knee-sized block until it fails.
   Punching sets the mix for every hull (docs/PUNCHING.md), so this input moves the answer most.
 - **More lab mixes**: the strength fit rests on 3 points. Light mixes that are strong in punching

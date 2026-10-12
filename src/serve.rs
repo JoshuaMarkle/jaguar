@@ -7,8 +7,18 @@
 //!
 //! HTTP API (all JSON unless noted; this is the contract with web/index.html):
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
-//! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file
-//!   made relative to the CLI canoe.toml dir>, "dir": "<that dir>"} (UI prefills its form)
+//! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file and
+//!   mix_data made relative to the CLI canoe.toml dir when inside it>, "dir": "<that dir>",
+//!   "source": "prefs"|"file"} (UI prefills its form). Read fresh each call: the saved
+//!   prefs file when it exists and parses, else the CLI canoe.toml.
+//! * `POST /api/prefs`     body = canoe.toml text (the form, sent ~500 ms after each edit).
+//!   Validated with `Params::parse(text, <CLI canoe.toml dir>)`; 400 {"error"} if invalid
+//!   (nothing written), else the parsed params are written with ABSOLUTE paths (so they
+//!   work from any cwd) to the prefs file atomically (tmp + rename), 200 {"ok":true}.
+//!   Prefs file: `jaguar serve --prefs <path>`, else `$XDG_CONFIG_HOME/jaguar/prefs.toml`,
+//!   else `~/.config/jaguar/prefs.toml`. Also makes these params current for `/api/mix`.
+//! * `DELETE /api/prefs`   removes the prefs file (missing is fine), 200 {"ok":true};
+//!   `/api/params` then returns the CLI canoe.toml again ("Reset to canoe.toml").
 //! * `GET  /api/hulls`     -> [{"file": "off1_hull.json", "name": ..., "length": in,
 //!   "notes": hull.source}] for every *.json in the CLI canoe.toml's dir whose
 //!   "format" is jaguar-hull/1 (sorted by file name). Feeds the hull picker.
@@ -27,6 +37,11 @@
 //! * `GET  /api/mix`       -> the mix::StrengthFit (lab points, fit line, tested
 //!   range) for the most recently submitted params (startup params before any run).
 //!   500 {"error"} if the mix data cannot be loaded or fitted.
+//! * `POST /api/mix`       body = mix CSV text (docs/MIX_DATA.md format). Validated with
+//!   `StrengthFit::parse` (same loader as runs); 400 {"error"} if it does not parse or fit.
+//!   Else the current params' `material.mix_data` is copied to `<file>.bak` and replaced
+//!   atomically (tmp + rename); 200 with the new StrengthFit plus "csv": the saved text.
+//!   `GET /api/mix` also returns "csv": the raw file text (feeds the editable table).
 //! * `GET  /api/result`    -> the last jaguar-result/1, 404 if none yet.
 //!   Also written to `result.json` next to the canoe.toml when a run finishes.
 //!
@@ -64,9 +79,9 @@ struct Shared {
 /// Request handler, independent of the socket so it can be unit tested.
 struct App {
     toml_text: String,
-    /// Params as loaded at startup, hull.file relative to `base_dir` (for the form).
-    params_json: serde_json::Value,
     base_dir: PathBuf,
+    /// Saved form settings (see `POST /api/prefs`).
+    prefs_path: PathBuf,
     /// Params as loaded at startup (absolute paths).
     params: Params,
     result_path: PathBuf,
@@ -84,21 +99,15 @@ fn err_reply(status: u16, msg: impl std::fmt::Display) -> Reply {
 }
 
 impl App {
-    fn new(params_path: &Path) -> Result<App> {
+    fn new(params_path: &Path, prefs_path: PathBuf) -> Result<App> {
         let toml_text = std::fs::read_to_string(params_path)
             .with_context(|| format!("reading {}", params_path.display()))?;
-        let params = Params::load(params_path)?;
         let base_dir = params_path.parent().unwrap_or(Path::new("")).to_path_buf();
-        let mut rel = params.clone();
-        if let Some(f) = &rel.hull.file
-            && let Ok(r) = f.strip_prefix(&base_dir)
-        {
-            rel.hull.file = Some(r.to_path_buf());
-        }
-        if let Ok(r) = rel.material.mix_data.strip_prefix(&base_dir) {
-            rel.material.mix_data = r.to_path_buf();
-        }
-        let params_json = serde_json::to_value(&rel)?;
+        // Saved prefs win over the file when they still parse.
+        let params = match load_prefs(&prefs_path, &base_dir) {
+            Some((_, p)) => p,
+            None => Params::load(params_path)?,
+        };
         let startup = params.clone();
         let result_path = base_dir.join("result.json");
         let shared = Shared {
@@ -108,8 +117,8 @@ impl App {
         };
         Ok(App {
             toml_text,
-            params_json,
             base_dir,
+            prefs_path,
             params: startup,
             result_path,
             shared: Arc::new(Mutex::new(shared)),
@@ -126,14 +135,16 @@ impl App {
             ("GET", "/") | ("GET", "/index.html") => {
                 (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
             }
-            ("GET", "/api/params") => json_reply(
-                200,
-                serde_json::json!({
-                    "toml": self.toml_text,
-                    "params": self.params_json,
-                    "dir": self.base_dir.display().to_string(),
-                }),
-            ),
+            ("GET", "/api/params") => self.get_params(),
+            ("POST", "/api/prefs") => self.save_prefs(body),
+            ("DELETE", "/api/prefs") => match std::fs::remove_file(&self.prefs_path) {
+                Ok(()) => json_reply(200, serde_json::json!({ "ok": true })),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    json_reply(200, serde_json::json!({ "ok": true }))
+                }
+                Err(e) => err_reply(500, format!("removing {}: {e}", self.prefs_path.display())),
+            },
+            ("POST", "/api/mix") => self.save_mix(body),
             ("GET", "/api/hulls") => self.hulls(),
             ("GET", "/api/hull") => {
                 let requested = query.split('&').find_map(|kv| kv.strip_prefix("file="));
@@ -151,9 +162,13 @@ impl App {
             }
             ("GET", "/api/status") => self.status(query),
             ("GET", "/api/mix") => {
-                let p = self.lock().params.clone().unwrap_or_else(|| self.params.clone());
-                match optimize::strength(&p).and_then(|f| Ok(serde_json::to_string(&f)?)) {
-                    Ok(s) => (200, "application/json", s),
+                let p = self.current();
+                let csv = std::fs::read_to_string(&p.material.mix_data);
+                match optimize::strength(&p).and_then(|f| Ok(serde_json::to_value(&f)?)) {
+                    Ok(mut v) => {
+                        v["csv"] = serde_json::Value::String(csv.unwrap_or_default());
+                        json_reply(200, v)
+                    }
                     Err(e) => err_reply(500, format!("{e:#}")),
                 }
             }
@@ -164,10 +179,96 @@ impl App {
             ("POST", "/api/run") => self.start_run(body),
             (
                 _,
-                "/" | "/index.html" | "/api/params" | "/api/hulls" | "/api/hull" | "/api/status" | "/api/mix"
-                | "/api/result" | "/api/run",
+                "/" | "/index.html" | "/api/params" | "/api/prefs" | "/api/hulls" | "/api/hull"
+                | "/api/status" | "/api/mix" | "/api/result" | "/api/run",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
+        }
+    }
+
+    /// Params of the most recent run or prefs save, else the startup params.
+    fn current(&self) -> Params {
+        self.lock().params.clone().unwrap_or_else(|| self.params.clone())
+    }
+
+    fn get_params(&self) -> Reply {
+        let (source, toml_text, params) = match load_prefs(&self.prefs_path, &self.base_dir) {
+            Some((t, p)) => ("prefs", t, p),
+            None => match Params::parse(&self.toml_text, &self.base_dir) {
+                Ok(p) => ("file", self.toml_text.clone(), p),
+                Err(e) => return err_reply(500, format!("{e:#}")),
+            },
+        };
+        let mut rel = params;
+        if let Some(f) = &rel.hull.file
+            && let Ok(r) = f.strip_prefix(&self.base_dir)
+        {
+            rel.hull.file = Some(r.to_path_buf());
+        }
+        if let Ok(r) = rel.material.mix_data.strip_prefix(&self.base_dir) {
+            rel.material.mix_data = r.to_path_buf();
+        }
+        match serde_json::to_value(&rel) {
+            Ok(pj) => json_reply(
+                200,
+                serde_json::json!({
+                    "toml": toml_text,
+                    "params": pj,
+                    "dir": self.base_dir.display().to_string(),
+                    "source": source,
+                }),
+            ),
+            Err(e) => err_reply(500, e),
+        }
+    }
+
+    fn save_prefs(&self, body: &str) -> Reply {
+        let params = match Params::parse(body, &self.base_dir) {
+            Ok(p) => p,
+            Err(e) => return err_reply(400, format!("{e:#}")),
+        };
+        let mut abs = params.clone();
+        if let Some(f) = &abs.hull.file {
+            abs.hull.file = Some(absolute(f));
+        }
+        abs.material.mix_data = absolute(&abs.material.mix_data);
+        let text = match toml::to_string(&abs) {
+            Ok(t) => format!("# JAGUAR web UI settings (autosaved). Delete to reset.\n{t}"),
+            Err(e) => return err_reply(500, e),
+        };
+        if let Err(e) = write_atomic(&self.prefs_path, &text) {
+            return err_reply(500, format!("{e:#}"));
+        }
+        let mut s = self.lock();
+        if s.state != "running" {
+            s.params = Some(params);
+        }
+        json_reply(200, serde_json::json!({ "ok": true }))
+    }
+
+    fn save_mix(&self, body: &str) -> Reply {
+        let p = self.current();
+        let fit = match crate::mix::StrengthFit::parse(body, p.material.flex_over_split) {
+            Ok(f) => f,
+            Err(e) => return err_reply(400, format!("{e:#}")),
+        };
+        let path = &p.material.mix_data;
+        let mut bak = path.clone().into_os_string();
+        bak.push(".bak");
+        if path.exists()
+            && let Err(e) = std::fs::copy(path, &bak)
+        {
+            return err_reply(500, format!("backing up {}: {e}", path.display()));
+        }
+        if let Err(e) = write_atomic(path, body) {
+            return err_reply(500, format!("{e:#}"));
+        }
+        match serde_json::to_value(&fit) {
+            Ok(mut v) => {
+                v["csv"] = serde_json::Value::String(body.to_string());
+                json_reply(200, v)
+            }
+            Err(e) => err_reply(500, e),
         }
     }
 
@@ -242,6 +343,41 @@ impl App {
         std::thread::spawn(move || run_job(params, shared, out));
         json_reply(202, serde_json::json!({ "ok": true }))
     }
+}
+
+/// Saved prefs (text, params) if the file exists and parses, else None.
+fn load_prefs(path: &Path, base_dir: &Path) -> Option<(String, Params)> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let p = Params::parse(&text, base_dir).ok()?;
+    Some((text, p))
+}
+
+/// Absolute form of `p` (cwd-joined if relative, `..` resolved when it exists).
+fn absolute(p: &Path) -> PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()))
+}
+
+/// Write via a temp file in the same dir and rename, creating parent dirs.
+fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("renaming to {}", path.display()))?;
+    Ok(())
+}
+
+/// Default prefs location: `$XDG_CONFIG_HOME/jaguar/prefs.toml`, else
+/// `~/.config/jaguar/prefs.toml`. Err if neither variable is set.
+pub fn default_prefs_path() -> Result<PathBuf> {
+    let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let dir = env("XDG_CONFIG_HOME")
+        .or_else(|| env("HOME").map(|h| h.join(".config")))
+        .context("no XDG_CONFIG_HOME or HOME: pass --prefs <path>")?;
+    Ok(dir.join("jaguar").join("prefs.toml"))
 }
 
 /// Percent-decode a query value and accept it only as a bare file name in the dir.
@@ -324,11 +460,15 @@ fn serve_on(server: tiny_http::Server, app: App) {
     }
 }
 
-pub fn serve(params_path: &Path, port: u16) -> Result<()> {
-    let app = App::new(params_path)?;
+pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()> {
+    let prefs = match prefs {
+        Some(p) => p,
+        None => default_prefs_path()?,
+    };
+    let app = App::new(params_path, prefs.clone())?;
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
-    println!("JAGUAR serving http://127.0.0.1:{port}/  (Ctrl-C to stop)");
+    println!("JAGUAR serving http://127.0.0.1:{port}/  (prefs {}, Ctrl-C to stop)", prefs.display());
     serve_on(server, app);
     Ok(())
 }
@@ -338,8 +478,101 @@ mod tests {
     use super::*;
     use std::io::{Read as _, Write as _};
 
+    /// Fresh temp dir per call (tests run in parallel).
+    fn tmpdir() -> PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let d = std::env::temp_dir().join(format!("jaguar_serve_{}_{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn app_with_prefs(prefs: PathBuf) -> App {
+        App::new(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml")), prefs).unwrap()
+    }
+
     fn app() -> App {
-        App::new(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml"))).unwrap()
+        app_with_prefs(tmpdir().join("prefs.toml"))
+    }
+
+    fn params_of(a: &App) -> serde_json::Value {
+        serde_json::from_str(&a.handle("GET", "/api/params", "").2).unwrap()
+    }
+
+    #[test]
+    fn prefs_save_reject_reload_reset() {
+        let dir = tmpdir();
+        let prefs = dir.join("sub").join("prefs.toml");
+        let a = app_with_prefs(prefs.clone());
+        assert_eq!(params_of(&a)["source"], "file");
+        // Invalid: 400, nothing written.
+        let (st, _, body) = a.handle("POST", "/api/prefs", "bogus = 1");
+        assert_eq!(st, 400, "{body}");
+        assert!(body.contains("error"));
+        assert!(!prefs.exists());
+        // Valid (relative paths, as the form sends): saved with absolute paths.
+        let edited = a.toml_text.replace("stations = 161", "stations = 41");
+        assert_ne!(edited, a.toml_text);
+        let (st, _, body) = a.handle("POST", "/api/prefs", &edited);
+        assert_eq!(st, 200, "{body}");
+        let saved = std::fs::read_to_string(&prefs).unwrap();
+        let sp: Params =
+            toml::from_str(saved.lines().skip(1).collect::<Vec<_>>().join("\n").as_str()).unwrap();
+        assert!(sp.hull.file.unwrap().is_absolute());
+        assert!(sp.material.mix_data.is_absolute());
+        let v = params_of(&a);
+        assert_eq!(v["source"], "prefs");
+        assert_eq!(v["params"]["hull"]["stations"], 41);
+        assert_eq!(v["params"]["hull"]["file"], "off1_hull.json");
+        // A server restarted from another cwd still restores them.
+        let b = app_with_prefs(prefs.clone());
+        assert_eq!(params_of(&b)["params"]["hull"]["stations"], 41);
+        assert_eq!(b.params.hull.stations, 41);
+        // Invalid edit keeps the last good prefs.
+        assert_eq!(a.handle("POST", "/api/prefs", "[hull]\nstations = 3\n").0, 400);
+        assert_eq!(params_of(&a)["params"]["hull"]["stations"], 41);
+        // Reset.
+        assert_eq!(a.handle("DELETE", "/api/prefs", "").0, 200);
+        assert!(!prefs.exists());
+        let v = params_of(&a);
+        assert_eq!(v["source"], "file");
+        assert_eq!(v["params"]["hull"]["stations"], 161);
+        assert_eq!(a.handle("DELETE", "/api/prefs", "").0, 200, "reset twice is fine");
+        // A corrupt prefs file is ignored.
+        std::fs::write(&prefs, "garbage").unwrap();
+        assert_eq!(params_of(&a)["source"], "file");
+    }
+
+    #[test]
+    fn mix_post_validates_backs_up_and_refits() {
+        let a = app();
+        let dir = tmpdir();
+        let csv = dir.join("mix.csv");
+        let orig =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/mix_tests.csv")).unwrap();
+        std::fs::write(&csv, &orig).unwrap();
+        let mut p = a.params.clone();
+        p.material.mix_data = csv.clone();
+        a.lock().params = Some(p);
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/mix", "").2).unwrap();
+        assert_eq!(v["csv"], orig.as_str());
+        // Unfittable data: 400, file untouched, no backup.
+        let one = "mix,density_pcf,split_tensile_psi,fraction_of_final\nA,60,300,1\n";
+        assert_eq!(a.handle("POST", "/api/mix", one).0, 400);
+        assert_eq!(a.handle("POST", "/api/mix", "nonsense").0, 400);
+        assert_eq!(std::fs::read_to_string(&csv).unwrap(), orig);
+        assert!(!dir.join("mix.csv.bak").exists());
+        // Valid: saved, previous kept as .bak, new fit returned and served.
+        let new = "mix,density_pcf,split_tensile_psi,fraction_of_final\nA,50,200,1\nB,60,300,1\n";
+        let (st, _, body) = a.handle("POST", "/api/mix", new);
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!((v["split_slope_psi_per_pcf"].as_f64().unwrap() - 10.0).abs() < 1e-9);
+        assert_eq!(std::fs::read_to_string(&csv).unwrap(), new);
+        assert_eq!(std::fs::read_to_string(dir.join("mix.csv.bak")).unwrap(), orig);
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/mix", "").2).unwrap();
+        assert_eq!(v["points"].as_array().unwrap().len(), 2);
     }
 
     #[test]
@@ -387,7 +620,8 @@ mod tests {
         assert!(!v["points"].as_array().unwrap().is_empty());
         assert!(v["split_slope_psi_per_pcf"].as_f64().unwrap().is_finite());
         assert!(v["density_min_pcf"].as_f64().unwrap() <= v["density_max_pcf"].as_f64().unwrap());
-        assert_eq!(a.handle("POST", "/api/mix", "").0, 405);
+        assert_eq!(a.handle("PUT", "/api/mix", "").0, 405);
+        assert_eq!(a.handle("PUT", "/api/prefs", "").0, 405);
         // A missing mix file is an error, never a made-up fit.
         let mut p = a.params.clone();
         p.material.mix_data = PathBuf::from("/nonexistent/mix.csv");

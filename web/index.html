@@ -99,6 +99,8 @@
   .badge.warn { background: var(--warning); border-color: var(--warning); color: var(--ink); }
   .badge.error { background: var(--error); border-color: var(--error); color: var(--canvas); }
   .t-error { color: var(--error); }
+  .prefbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: var(--s2) var(--s4); border-bottom: 1px solid var(--hair-soft); }
+  #prefnote.bad { color: var(--error); }
   .group { margin-top: var(--s2); color: var(--muted); }
 
   .tbl { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; margin-top: var(--s1); }
@@ -139,6 +141,7 @@
 <div id="left">
   <div id="head"><b>Jaguar</b><span>lightest wall that does not crack</span></div>
   <div id="scroll">
+    <div class="prefbar"><span id="prefnote" class="hint"></span><button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset to canoe.toml</button></div>
     <form id="form" onsubmit="return false"></form>
     <details class="sec keep" id="sec-winner" open><summary>Result</summary><div class="body" id="winner"></div></details>
     <details class="sec keep" id="sec-mix" open><summary>Mix data</summary><div class="body" id="mix">loading</div></details>
@@ -387,6 +390,26 @@ function formToml() {
   }
   return out.join('\n');
 }
+
+// ---------- autosaved prefs: every form edit is POSTed (debounced) to /api/prefs ----------
+let prefTimer = null;
+function schedulePrefs() { clearTimeout(prefTimer); prefTimer = setTimeout(savePrefs, 500); }
+async function savePrefs() {
+  const n = $('prefnote');
+  let text;
+  try { text = formToml(); } catch (e) { n.className = 'hint bad'; n.textContent = 'not saved: ' + e.message; return; }
+  const r = await fetch('/api/prefs', { method: 'POST', body: text });
+  if (r.ok) { n.className = 'hint'; n.textContent = 'settings saved'; }
+  else { n.className = 'hint bad'; n.textContent = 'not saved: ' + ((await r.json()).error || r.status); }
+}
+$('form').addEventListener('input', schedulePrefs);
+$('form').addEventListener('change', schedulePrefs);
+$('form').addEventListener('click', e => { if (e.target.tagName === 'BUTTON') schedulePrefs(); });
+$('resetprefs').onclick = async () => {
+  clearTimeout(prefTimer);
+  const r = await fetch('/api/prefs', { method: 'DELETE' });
+  if (r.ok) location.reload(); else $('err').textContent = 'reset: ' + ((await r.json()).error || r.status);
+};
 
 // ---------- 3D ----------
 const view = $('view');
@@ -814,6 +837,7 @@ $('run').onclick = async () => {
   buildForm();
   const hulls = await (await fetch('/api/hulls')).json();
   fillForm(p.params, hulls);
+  $('prefnote').textContent = p.source === 'prefs' ? 'restored saved settings' : 'from canoe.toml';
   buildTabs(); resize();
   loadMix();
   await loadHull();
