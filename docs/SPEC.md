@@ -113,7 +113,12 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   `OPEN_SHELL` surface model for the mold surface. Verified: opens as one valid solid in
   OpenCASCADE (gmsh 4.15, the kernel FreeCAD uses) with matching volume and bounding box.
 * **STL** (binary): the same triangles, watertight for a wall.
-* The inner face is the mold line offset inward by t. At the bow and stern, where that offset
+* The keel line is smooth along x: its height at each table station is fitted below the lowest
+  non-zero waterline (parabolic section through the two lowest offsets), then interpolated with a
+  monotone cubic, not snapped to waterlines.
+* The inner face is the mold line offset inward by t, point for point (mitred), with the offset
+  stretched where the hull tapers along x so the wall is t thick normal to the surface (off1 at
+  t = 0.375: within 1% over the middle 80% of the length). At the bow and stern, where that offset
   closes, the ends are solid concrete closed by a bulkhead. The solid is about 8% lighter than the
   analysis weight on off1: the analysis also counts the zero-breadth waterlines of the rockered ends
   as wall (conservative).

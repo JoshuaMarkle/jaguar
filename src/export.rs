@@ -106,22 +106,72 @@ fn resample(p: &[(f64, f64)], n: usize) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Starboard half girth of one station, sheer -> centreline keel point, consecutive duplicates
-/// removed. `None` if the station has no offsets (all zero).
-fn half_girth(y: &[f64], z: &[f64]) -> Option<Vec<(f64, f64)>> {
+/// Keel height of one offsets column (half-breadths `y` at waterlines `z`), not snapped to a
+/// waterline: below the lowest non-zero offset the section is taken as `z = zk + c y^2` through
+/// the two lowest non-zero offsets, clamped between the last zero waterline and the first non-zero
+/// one. A flat bottom (offset at the first waterline) keeps `z[0]`. `None` if all zero.
+fn keel_z(y: &[f64], z: &[f64]) -> Option<f64> {
     let first = y.iter().position(|&v| v > 1e-9)?;
-    let k0 = first.saturating_sub(1);
-    let mut p: Vec<(f64, f64)> =
-        (k0..y.len()).rev().map(|k| (if k == k0 && y[k] <= 1e-9 { 0.0 } else { y[k] }, z[k])).collect();
-    if y[k0] > 1e-9 {
-        p.push((0.0, z[k0]));
+    if first == 0 {
+        return Some(z[0]);
     }
+    let (y1, z1) = (y[first], z[first]);
+    let fit = y.get(first + 1).filter(|&&y2| y2 > y1 + 1e-9).map(|&y2| {
+        let z2 = z[first + 1];
+        (z1 * y2 * y2 - z2 * y1 * y1) / (y2 * y2 - y1 * y1)
+    });
+    Some(fit.unwrap_or(z[first - 1]).clamp(z[first - 1], z1))
+}
+
+/// Monotone cubic (Fritsch-Carlson PCHIP) through `(xs, ys)`, evaluated at `x` (clamped). Smooth
+/// keel line along x with no overshoot below the table keel.
+fn pchip(xs: &[f64], ys: &[f64], x: f64) -> f64 {
+    let n = xs.len();
+    if n == 1 {
+        return ys[0];
+    }
+    let h: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+    let d: Vec<f64> = (0..n - 1).map(|i| (ys[i + 1] - ys[i]) / h[i]).collect();
+    let mut m = vec![0.0; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..n - 1 {
+        if d[i - 1] * d[i] > 0.0 {
+            let (w1, w2) = (2.0 * h[i] + h[i - 1], h[i] + 2.0 * h[i - 1]);
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
+        }
+    }
+    let x = x.clamp(xs[0], xs[n - 1]);
+    let i = xs.partition_point(|&v| v <= x).clamp(1, n - 1) - 1;
+    let t = (x - xs[i]) / h[i];
+    let (t2, t3) = (t * t, t * t * t);
+    ys[i] * (2.0 * t3 - 3.0 * t2 + 1.0)
+        + h[i] * m[i] * (t3 - 2.0 * t2 + t)
+        + ys[i + 1] * (-2.0 * t3 + 3.0 * t2)
+        + h[i] * m[i + 1] * (t3 - t2)
+}
+
+/// Starboard half girth of one station, sheer -> centreline keel point at height `zk`, consecutive duplicates removed. `None` if the
+/// station has no offsets (all zero).
+fn half_girth(y: &[f64], z: &[f64], zk: f64) -> Option<Vec<(f64, f64)>> {
+    let first = y.iter().position(|&v| v > 1e-9)?;
+    // Between table stations the grid blends offsets linearly, so a small offset can appear
+    // below the smooth keel; waterlines at or below the keel are dropped.
+    let zk = zk.max(z[0]);
+    let mut p: Vec<(f64, f64)> = (first..y.len())
+        .rev()
+        .filter(|&k| z[k] > zk + 1e-6 || k + 1 == y.len())
+        .map(|k| (y[k], z[k]))
+        .collect();
+    p.push((0.0, zk.min(p.last().unwrap().1)));
     p.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-12 && (a.1 - b.1).abs() < 1e-12);
     Some(p)
 }
 
 /// Inward offset by `t` of a resampled starboard half girth (last point on the centreline).
-fn offset_inward(p: &[(f64, f64)], t: f64, z_top: f64) -> Vec<(f64, f64)> {
+/// `scale[j]` stretches the in-plane offset at point j (1 / cos of the surface normal's tilt out
+/// of the section plane) so the 3D normal wall thickness is t where the hull tapers along x.
+fn offset_inward(p: &[(f64, f64)], t: f64, z_top: f64, scale: &[f64]) -> Vec<(f64, f64)> {
     let n = p.len();
     let seg_n = |a: (f64, f64), b: (f64, f64)| -> Option<(f64, f64)> {
         let (dy, dz) = (b.0 - a.0, b.1 - a.1);
@@ -154,7 +204,7 @@ fn offset_inward(p: &[(f64, f64)], t: f64, z_top: f64) -> Vec<(f64, f64)> {
             }
             let (uy, uz) = (sy / l, sz / l);
             let c = ns.iter().map(|v| v.0 * uy + v.1 * uz).fold(1.0, f64::min);
-            let m = (t / c.max(1e-9)).min(2.0 * t);
+            let m = (t * scale[j] / c.max(1e-9)).min(2.0 * t);
             ((y + m * uy).max(0.0), (z + m * uz).min(z_top))
         })
         .collect()
@@ -170,8 +220,12 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     }
     let grid = Grid::build_flared(hull, spec.depth_in, spec.stations, spec.flare_deg);
     let z_top = *grid.z.last().unwrap();
+    // Keel line: fitted at the table stations that have offsets, then a monotone cubic along x.
+    let (kx, kz): (Vec<f64>, Vec<f64>) =
+        hull.x.iter().zip(&hull.half_breadth).filter_map(|(&x, y)| Some((x, keel_z(y, &hull.z)?))).unzip();
+    ensure!(!kx.is_empty(), "hull has no offsets");
     let halves: Vec<Option<Vec<(f64, f64)>>> =
-        (0..grid.nx()).map(|i| half_girth(grid.row(i), &grid.z)).collect();
+        (0..grid.nx()).map(|i| half_girth(grid.row(i), &grid.z, pchip(&kx, &kz, grid.x[i]))).collect();
     let Some(first) = halves.iter().position(Option::is_some) else { bail!("hull has no offsets") };
     let last = halves.iter().rposition(Option::is_some).unwrap();
     ensure!(halves[first..=last].iter().all(Option::is_some), "hull has an empty station mid-length");
@@ -226,14 +280,33 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
                 if r == 0 || r == nr - 1 {
                     return None;
                 }
-                let q = offset_inward(half, t, z_top);
+                let scale: Vec<f64> = (0..half.len())
+                    .map(|j| {
+                        let (ja, jb) = (j.saturating_sub(1), (j + 1).min(half.len() - 1));
+                        let (gy, gz) = (half[jb].0 - half[ja].0, half[jb].1 - half[ja].1);
+                        let (pa, pb) = (&rows[r - 1], &rows[r + 1]);
+                        let tx = [pb.0 - pa.0, pb.1[j].0 - pa.1[j].0, pb.1[j].1 - pa.1[j].1];
+                        let n = cross([0.0, gy, gz], tx);
+                        let l = norm(n);
+                        if l < 1e-12 { 1.0 } else { (1.0 / (1.0 - (n[0] / l).powi(2)).sqrt()).min(1.5) }
+                    })
+                    .collect();
+                let q = offset_inward(half, t, z_top, &scale);
                 // Points pushed onto/through the centreline (V keel narrower than the wall) are
                 // dropped; the inner girth then runs straight to its centreline point.
+                // Every inner point is the mitred offset of its own outer point, so each inner
+                // facet is parallel to its outer one at distance t (re-resampling the inner girth
+                // by arc length would cut its corners and thicken the wall at the bilge).
+                // Only the tail pushed onto the centreline is respread along its last segment.
                 let (keel, sides) = q.split_last().unwrap();
-                let mut inner: Vec<(f64, f64)> = sides.iter().copied().filter(|p| p.0 > 1e-6).collect();
-                inner.push(*keel);
-                let ok = inner.len() >= 3 && keel.1 < z_top - 1e-6 && inner[0].0 > 1e-6;
-                ok.then(|| resample(&inner, half.len()))
+                let kept = sides.iter().take_while(|p| p.0 > 1e-6).count();
+                let ok = kept >= 2 && keel.1 < z_top - 1e-6;
+                ok.then(|| {
+                    let mut inner = q[..kept].to_vec();
+                    let tail = resample(&[q[kept - 1], *keel], q.len() - kept + 1);
+                    inner.extend_from_slice(&tail[1..]);
+                    inner
+                })
             })
             .collect();
         // The hollow part is the longest run of stations with a valid offset U (ties: first);
@@ -624,7 +697,7 @@ mod tests {
     fn offset_of_box_section_is_t_inside() {
         // half box: side x=5 from z=10 to 0, bottom to centreline
         let p = resample(&[(5.0, 10.0), (5.0, 0.0), (0.0, 0.0)], 31);
-        let q = offset_inward(&p, 0.5, 10.0);
+        let q = offset_inward(&p, 0.5, 10.0, &[1.0; 31]);
         assert!((q[0].0 - 4.5).abs() < 1e-9 && (q[0].1 - 10.0).abs() < 1e-9);
         assert!((q[30].0).abs() < 1e-9 && (q[30].1 - 0.5).abs() < 1e-9);
     }
