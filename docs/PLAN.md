@@ -31,8 +31,6 @@ answer more trustworthy first.
 - **A10. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered ends
   as wall (about 8% heavier than the exported solid on off1). Decide whether to match the export,
   then re-run examples.
-- **A11. Air pockets in the STEP/STL export**: bulkheads at `air_pocket_in` from each tip, so the mold
-  shop sees where the foam/sealed volume goes.
 
 ## B. Physics additions (need the user's approval and a SPEC update)
 
@@ -78,7 +76,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |
-| Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); export (A11) open |
+| Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |
 | Race simulator / ML path | open, out of scope (C3) |
 

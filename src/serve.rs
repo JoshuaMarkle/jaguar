@@ -198,8 +198,15 @@ impl App {
         let Some(result) = self.lock().result.clone() else {
             return fail(err_reply(404, "no result yet: run first"));
         };
-        let built = export::from_result(&result, 161, 41)
-            .and_then(|(hull, spec)| Ok((export::build_mesh(&hull, &spec)?, hull.name)));
+        // Bulkheads need a station spacing below the air pocket length (short pockets on
+        // beamy hulls), so refine past 161 when the pocket asks for it.
+        let built = export::from_result(&result, 161, 41).and_then(|(hull, mut spec)| {
+            if let Some(l) = spec.pocket_in.filter(|l| *l > 0.0) {
+                let need = (hull.length / (0.5 * l)).ceil() as usize + 1;
+                spec.stations = spec.stations.max(need.min(4001));
+            }
+            Ok((export::build_mesh(&hull, &spec)?, hull.name))
+        });
         let (mesh, name) = match built {
             Ok(v) => v,
             Err(e) => return fail(err_reply(409, format!("{e:#}"))),
@@ -815,6 +822,11 @@ mod tests {
         let n = u32::from_le_bytes(body[80..84].try_into().unwrap()) as usize;
         assert_eq!(body.len(), 84 + 50 * n);
         assert_eq!(a.export("format=obj").0, 400);
+        // A pocket shorter than the 161-station spacing (1.5 in) still exports: stations refine.
+        let mut short: serde_json::Value = serde_json::to_value(&result).unwrap();
+        short["winner"]["candidate"]["air_pocket_in"] = serde_json::json!(1.2);
+        a.lock().result = Some(short.to_string());
+        assert_eq!(a.export("format=stl").0, 200);
         let mut no_winner: serde_json::Value = serde_json::to_value(&result).unwrap();
         no_winner["winner"] = serde_json::Value::Null;
         a.lock().result = Some(no_winner.to_string());
