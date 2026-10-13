@@ -24,7 +24,11 @@
 //! * a fitted strength <= 0 => that check fails (capacity <= 0 => D/C = inf).
 //! * densities outside the tested range are EXTRAPOLATION: the fit is reported
 //!   with its range, and the search clamps density to
-//!   `[min tested - extrapolate_pcf, max tested + extrapolate_pcf]` (split range).
+//!   [`StrengthFit::trusted_range`]: the intersection over the split line and
+//!   every measured line of `[min tested - extrapolate_pcf, max tested +
+//!   extrapolate_pcf]`, never below the lightest test of a line whose slope
+//!   is negative (a warning, not an error: inside its tested range the line
+//!   only interpolates real breaks).
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -297,8 +301,52 @@ impl StrengthFit {
             .collect()
     }
 
+    /// The lines the checks read in fit mode, labelled: split (always; it
+    /// sets the fit range and any derived property), then each measured line.
+    fn active_fits(&self) -> Vec<(&'static str, PropertyFit)> {
+        let split = PropertyFit {
+            n: self.points.len(),
+            slope_psi_per_pcf: self.split_slope_psi_per_pcf,
+            intercept_psi: self.split_intercept_psi,
+            rms_residual_psi: self.rms_residual_psi,
+            density_min_pcf: self.density_min_pcf,
+            density_max_pcf: self.density_max_pcf,
+        };
+        let mut v = vec![("strength", split)];
+        for prop in Property::ALL {
+            if let Some(f) = self.measured(prop) {
+                v.push((prop.label(), f.clone()));
+            }
+        }
+        v
+    }
+
+    /// Densities with lab data behind EVERY active line (split and each
+    /// measured one): the intersection of their tested ranges, `(lo, hi)`.
+    /// Empty (`lo > hi`) when the lines were tested at disjoint densities.
+    pub fn tested_range(&self) -> (f64, f64) {
+        self.active_fits().iter().fold((f64::NEG_INFINITY, f64::INFINITY), |(lo, hi), (_, f)| {
+            (lo.max(f.density_min_pcf), hi.min(f.density_max_pcf))
+        })
+    }
+
+    /// Densities the fit-mode search may use, `(lo, hi)`: the intersection
+    /// over every active line of its tested range widened by `extrapolate_pcf`.
+    /// A line with a negative slope (strength FALLING with density: scatter,
+    /// not concrete) is not extrapolated below its lightest test, where it
+    /// would predict more strength than any cylinder showed; heavier is
+    /// conservative and allowed. Empty (`lo > hi`) is possible.
+    pub fn trusted_range(&self, extrapolate_pcf: f64) -> (f64, f64) {
+        let e = extrapolate_pcf;
+        self.active_fits().iter().fold((f64::NEG_INFINITY, f64::INFINITY), |(lo, hi), (_, f)| {
+            let below = if f.slope_psi_per_pcf < 0.0 { 0.0 } else { e };
+            (lo.max(f.density_min_pcf - below), hi.min(f.density_max_pcf + e))
+        })
+    }
+
     /// Weak-fit warnings: one per fitted property (split, and each measured
-    /// one) with fewer than 5 points or rms scatter above 15% of the mean.
+    /// one) with fewer than 5 points or rms scatter above 15% of the mean, and
+    /// one per line with a negative slope.
     pub fn weak_fit_warnings(&self) -> Vec<String> {
         let split: Vec<f64> = self.points.iter().map(|p| p.final_psi).collect();
         let mut fits = vec![("strength", split, self.rms_residual_psi)];
@@ -309,6 +357,15 @@ impl StrengthFit {
             }
         }
         let mut out = vec![];
+        for (name, f) in self.active_fits() {
+            if f.slope_psi_per_pcf < 0.0 {
+                out.push(format!(
+                    "WARNING {name} fit has a negative slope ({:.1} psi/pcf, strength falls with density); \
+                     not extrapolated below {:.1} pcf; add lab tests",
+                    f.slope_psi_per_pcf, f.density_min_pcf
+                ));
+            }
+        }
         for (name, ys, rms) in fits {
             let n = ys.len();
             let mean = ys.iter().sum::<f64>() / n as f64;
@@ -688,6 +745,27 @@ mod tests {
         assert!(
             w[1].starts_with("WARNING flexural fit is weak") && w[2].starts_with("WARNING f'c fit is weak")
         );
+    }
+
+    #[test]
+    fn trusted_range_intersects_active_fits() {
+        // Split tested 50..60; flexural only 54..58 (rising): range is flexural's +/- 4.
+        let t = format!("{HDR}A,50,200,1,,\nB,54,240,1,250,\nC,58,280,1,290,\nD,60,300,1,,\n");
+        let fit = StrengthFit::parse(&t, 1.0).unwrap();
+        assert_eq!(fit.tested_range(), (54.0, 58.0));
+        assert_eq!(fit.trusted_range(4.0), (50.0, 62.0));
+        assert_eq!(fit.trusted_range(1.0), (53.0, 59.0));
+        // f'c falling with density (scatter): no extrapolation below its lightest test.
+        let t = format!("{HDR}A,50,200,1,,\nB,54,240,1,,1500\nC,58,280,1,,1300\nD,60,300,1,,\n");
+        let fit = StrengthFit::parse(&t, 1.0).unwrap();
+        assert_eq!(fit.trusted_range(4.0), (54.0, 62.0));
+        assert_eq!(fit.trusted_range(1.0), (54.0, 59.0));
+        let w = fit.weak_fit_warnings();
+        assert!(w.iter().any(|w| w.starts_with("WARNING f'c fit has a negative slope")), "{w:?}");
+        // Flexural and f'c tested at disjoint densities: empty.
+        let t = format!("{HDR}A,50,200,1,300,\nB,51,210,1,310,\nC,59,290,1,,2000\nD,60,300,1,,2100\n");
+        let (lo, hi) = StrengthFit::parse(&t, 1.0).unwrap().trusted_range(2.0);
+        assert!(lo > hi, "{lo} {hi}");
     }
 
     #[test]

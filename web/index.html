@@ -962,7 +962,9 @@ function showWinner() {
     ${kv('Governing case', esc(c.governing_case || '?'))}
     ${checksTable(v)}
     ${win.on_grid_edge ? '<div class="note-box warn">Winner is on the search grid edge. Widen the search range.</div>' : ''}
-    ${win.at_mix_data_edge ? '<div class="note-box warn">Density is the lightest mix the lab data supports. Test lighter mixes to go lower.</div>' : ''}
+    ${win.at_mix_data_edge ? ((win.search_space || [])[1] || {}).at_bound === 'max'
+      ? '<div class="note-box warn">Density is the heaviest mix the lab data supports. Test heavier, stronger mixes to go higher.</div>'
+      : '<div class="note-box warn">Density is the lightest mix the lab data supports. Test lighter mixes to go lower.</div>' : ''}
     ${shapeRows}`;
 }
 

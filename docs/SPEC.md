@@ -61,7 +61,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
    optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (per-mix means
    under tested_mixes), else flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
-   Densities are searched only within `density_extrapolation_pcf` of the tested range, or only at
+   Densities are searched only within `density_extrapolation_pcf` of the tested range of every
+   fitted line (split and each measured one; none below the lightest test of a line with a
+   negative slope), or only at
    tested mixes with `strength_model = "tested_mixes"`. `material.method = "asd"` (default): service
    loads, every capacity divided by `factor_of_safety`. `"lrfd"`: each load case is re-solved for
    1.2D+1.6L and 0.9D+1.6L (D = self weight, L = crew x dynamic factor, buoyancy balancing the

@@ -314,18 +314,19 @@ pub fn strength(params: &Params) -> Result<StrengthFit> {
 }
 
 /// Densities from search.density_pcf clipped to the trusted fit range
-/// [min tested - extrapolation, max tested + extrapolation]. Err if empty.
+/// ([`StrengthFit::trusted_range`]: every active strength line's tested range
+/// +/- extrapolation, intersected). Err if empty.
 pub fn densities(params: &Params, fit: &StrengthFit) -> Result<Vec<f64>> {
     let e = params.material.density_extrapolation_pcf;
-    let (lo, hi) = (fit.density_min_pcf - e, fit.density_max_pcf + e);
+    let (lo, hi) = fit.trusted_range(e);
+    let (tlo, thi) = fit.tested_range();
     let v: Vec<f64> =
         range(params.search.density_pcf).into_iter().filter(|&r| r >= lo - 1e-9 && r <= hi + 1e-9).collect();
     anyhow::ensure!(
         !v.is_empty(),
-        "no searched density lies within the mix data range {lo:.1}..{hi:.1} pcf (tested {:.1}..{:.1} \
-         +/- density_extrapolation_pcf {e}); widen search.density_pcf or add lab data",
-        fit.density_min_pcf,
-        fit.density_max_pcf
+        "no searched density lies within the mix data range {lo:.1}..{hi:.1} pcf (tested by every fitted \
+         strength line: {tlo:.1}..{thi:.1}, +/- density_extrapolation_pcf {e}, none below the lightest \
+         test of a negative-slope line); widen search.density_pcf or add lab data"
     );
     Ok(v)
 }
