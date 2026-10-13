@@ -75,6 +75,8 @@ fn golden_bending_dc() {
             density_min_pcf: 0.0,
             density_max_pcf: 0.0,
             flex_over_split: 1.0,
+            flexural_fit: None,
+            compressive_fit: None,
         };
         let pu = jaguar::params::Punching {
             method: jaguar::params::PunchingMethod::Aci22_6,
@@ -133,6 +135,8 @@ fn ref_fit(i: &Value) -> StrengthFit {
         density_min_pcf: 0.0,
         density_max_pcf: 0.0,
         flex_over_split: f(i, "flex_over_split"),
+        flexural_fit: None,
+        compressive_fit: None,
     }
 }
 

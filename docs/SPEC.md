@@ -56,7 +56,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    Also gives loaded freeboard (D minus local draft, min over stations) and transverse GM_T
    (crew CG at `stability.crew_cg_in`).
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
-   vs density from the lab CSV. Flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
+   vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
+   optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (per-mix means
+   under tested_mixes), else flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
    Densities are searched only within `density_extrapolation_pcf` of the tested range, or only at
    tested mixes with `strength_model = "tested_mixes"`. `material.method = "asd"` (default): service
    loads, every capacity divided by `factor_of_safety`. `"lrfd"`: each load case is re-solved for
@@ -99,7 +101,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    rocker in, lateral moment, rejection reason) is in result.json.
 
 ## Output: `jaguar-result/1` (JSON)
-`{format, params, strength (mix fit + points), winner_hull (shape runs) | null, candidates: [...],
+`{format, params, strength (mix fit + points; `flexural_fit` / `compressive_fit` only when
+measured), winner_hull (shape runs) | null, candidates: [...],
 winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge,
 mix_provenance, search_space, diagrams, cases} | null}`. `mix_provenance`: the winner density is
 `tested` (a tested mix within 0.05 pcf, or the tested mix itself) or `predicted` (fit line only),

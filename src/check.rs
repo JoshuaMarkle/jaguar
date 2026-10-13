@@ -340,6 +340,8 @@ mod tests {
             density_min_pcf: 50.0,
             density_max_pcf: 70.0,
             flex_over_split: 1.0,
+            flexural_fit: None,
+            compressive_fit: None,
         }
     }
 

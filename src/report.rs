@@ -43,7 +43,11 @@ pub fn mix_fit_line(f: &crate::mix::StrengthFit) -> String {
         f.density_min_pcf,
         f.density_max_pcf,
         f.rms_residual_psi
-    )
+    ) + &crate::mix::Property::ALL
+        .iter()
+        .filter(|&&p| f.measured(p).is_some())
+        .map(|p| format!("; {} measured", p.label()))
+        .collect::<String>()
 }
 
 /// Strength-model header: the fit line, or (tested_mixes) up to 3 lines of mixes.

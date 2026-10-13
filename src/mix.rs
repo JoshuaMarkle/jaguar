@@ -1,26 +1,30 @@
 //! Concrete strength from the team's lab data (`data/mix_tests.csv`).
 //!
-//! The file lists split-cylinder tensile breaks. Each row has a density, a
-//! measured split tensile strength, and `fraction_of_final`: the share of final
-//! (design) strength the specimen had reached when broken. The team's 7-day
-//! breaks are at 60% of final, so the final strength is `measured / fraction`.
+//! The file lists cylinder breaks. Each row has a density, a measured split
+//! tensile strength, optionally a measured flexural strength (`flexural_psi`)
+//! and/or compressive strength (`compressive_psi`), and `fraction_of_final`:
+//! the share of final (design) strength the specimen had reached when broken.
+//! The team's 7-day breaks are at 60% of final, so every final strength is
+//! `measured / fraction`.
 //!
 //! From the final split tensile strengths we fit, by least squares,
-//! `f_sp_final(rho) = slope * rho + intercept`, and derive every strength the
-//! checks need (all psi, before the factor of safety):
+//! `f_sp_final(rho) = slope * rho + intercept`. Each other property the checks
+//! need (all psi, before the factor of safety) comes from its own measured
+//! least-squares line when the CSV has that property at >= 2 distinct
+//! densities, else it is derived from the split line:
 //! * flexural tension (modulus of rupture), used for bending tension:
-//!   `f_r = flex_over_split * f_sp`. Default ratio 1.0, which is conservative
-//!   (ACI 318 relations give f_r about 7.5/6.7 = 1.12 f_sp).
+//!   derived `f_r = flex_over_split * f_sp`. Default ratio 1.0, which is
+//!   conservative (ACI 318 relations give f_r about 7.5/6.7 = 1.12 f_sp).
 //! * compressive strength, used for compression, shear and punching:
-//!   from ACI 318 `f_ct = 6.7 sqrt(f'c)` (normal weight, so lambda is not
-//!   double-counted later), `f'c = (f_sp / 6.7)^2`.
+//!   derived from ACI 318 `f_ct = 6.7 sqrt(f'c)` (normal weight, so lambda is
+//!   not double-counted later), `f'c = (f_sp / 6.7)^2`.
 //!
 //! Rules (fail, never fabricate):
-//! * fewer than 2 rows, or all at one density => error (no slope).
+//! * fewer than 2 split rows, or all at one density => error (no slope).
 //! * a fitted strength <= 0 => that check fails (capacity <= 0 => D/C = inf).
 //! * densities outside the tested range are EXTRAPOLATION: the fit is reported
 //!   with its range, and the search clamps density to
-//!   `[min tested - extrapolate_pcf, max tested + extrapolate_pcf]`.
+//!   `[min tested - extrapolate_pcf, max tested + extrapolate_pcf]` (split range).
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -39,6 +43,23 @@ pub struct MixPoint {
     /// Tested-mix group this row belongs to: the `mix_id` column when given
     /// and non-empty, else [`mix_group`] of `mix` ("M2 A" -> "M2").
     pub group: String,
+    /// Measured flexural strength at test age, psi (blank cell => None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flexural_psi: Option<f64>,
+    /// Measured compressive strength at test age, psi (blank cell => None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressive_psi: Option<f64>,
+}
+
+impl MixPoint {
+    /// Final flexural strength, psi, when measured.
+    pub fn flexural_final_psi(&self) -> Option<f64> {
+        self.flexural_psi.map(|v| v / self.fraction_of_final)
+    }
+    /// Final compressive strength, psi, when measured.
+    pub fn compressive_final_psi(&self) -> Option<f64> {
+        self.compressive_psi.map(|v| v / self.fraction_of_final)
+    }
 }
 
 /// One tested mix: all rows sharing a group name.
@@ -53,6 +74,12 @@ pub struct TestedMix {
     pub split_mean_psi: f64,
     /// Lowest FINAL split tensile strength of the rows, psi (reported only).
     pub split_min_psi: f64,
+    /// Mean FINAL flexural strength of the rows that measured it, psi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flexural_mean_psi: Option<f64>,
+    /// Mean FINAL compressive strength of the rows that measured it, psi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressive_mean_psi: Option<f64>,
 }
 
 /// A density within this of a tested mix's mean density counts as tested, pcf.
@@ -104,7 +131,82 @@ pub fn mix_group(mix: &str) -> String {
     m.to_string()
 }
 
-/// Linear fit of FINAL split tensile strength vs density, plus derived strengths.
+/// Least-squares line of one measured FINAL strength vs density.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PropertyFit {
+    /// Rows that measured this property.
+    pub n: usize,
+    pub slope_psi_per_pcf: f64,
+    pub intercept_psi: f64,
+    /// Root-mean-square residual of the fit, psi.
+    pub rms_residual_psi: f64,
+    pub density_min_pcf: f64,
+    pub density_max_pcf: f64,
+}
+
+impl PropertyFit {
+    /// Fitted final strength at density `rho`, psi.
+    pub fn at(&self, rho: f64) -> f64 {
+        self.slope_psi_per_pcf * rho + self.intercept_psi
+    }
+
+    /// Least squares through `(density, final psi)`. Err with fewer than 2 rows
+    /// or all at one density.
+    fn fit(xy: &[(f64, f64)]) -> Result<Self> {
+        ensure!(xy.len() >= 2, "need at least 2 rows to fit strength vs density");
+        let n = xy.len() as f64;
+        let mx = xy.iter().map(|p| p.0).sum::<f64>() / n;
+        let my = xy.iter().map(|p| p.1).sum::<f64>() / n;
+        let sxx: f64 = xy.iter().map(|p| (p.0 - mx).powi(2)).sum();
+        ensure!(sxx > 1e-9, "all rows are at one density: cannot fit a slope");
+        let sxy: f64 = xy.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+        let slope = sxy / sxx;
+        let icpt = my - slope * mx;
+        let rms = (xy.iter().map(|p| (p.1 - (slope * p.0 + icpt)).powi(2)).sum::<f64>() / n).sqrt();
+        Ok(PropertyFit {
+            n: xy.len(),
+            slope_psi_per_pcf: slope,
+            intercept_psi: icpt,
+            rms_residual_psi: rms,
+            density_min_pcf: xy.iter().map(|p| p.0).fold(f64::INFINITY, f64::min),
+            density_max_pcf: xy.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max),
+        })
+    }
+}
+
+/// A strength property with an optional measured column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Property {
+    Flexural,
+    Compressive,
+}
+
+impl Property {
+    pub const ALL: [Property; 2] = [Property::Flexural, Property::Compressive];
+    /// CSV column name.
+    pub fn column(self) -> &'static str {
+        match self {
+            Property::Flexural => "flexural_psi",
+            Property::Compressive => "compressive_psi",
+        }
+    }
+    /// Human label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Property::Flexural => "flexural",
+            Property::Compressive => "f'c",
+        }
+    }
+    fn final_psi(self, p: &MixPoint) -> Option<f64> {
+        match self {
+            Property::Flexural => p.flexural_final_psi(),
+            Property::Compressive => p.compressive_final_psi(),
+        }
+    }
+}
+
+/// Linear fit of FINAL split tensile strength vs density, optional measured
+/// flexural / compressive fits, and the strengths the checks use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StrengthFit {
     pub points: Vec<MixPoint>,
@@ -114,8 +216,14 @@ pub struct StrengthFit {
     pub rms_residual_psi: f64,
     pub density_min_pcf: f64,
     pub density_max_pcf: f64,
-    /// Modulus of rupture / split tensile.
+    /// Modulus of rupture / split tensile (used only when flexural is derived).
     pub flex_over_split: f64,
+    /// Measured flexural line; None => flexural is derived from split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flexural_fit: Option<PropertyFit>,
+    /// Measured compressive line; None => f'c is derived from split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressive_fit: Option<PropertyFit>,
 }
 
 impl StrengthFit {
@@ -123,23 +231,109 @@ impl StrengthFit {
     pub fn split_psi(&self, rho: f64) -> f64 {
         self.split_slope_psi_per_pcf * rho + self.split_intercept_psi
     }
-    /// Flexural tensile strength (bending tension capacity before FS), psi.
+    /// Flexural tensile strength (bending tension capacity before FS), psi:
+    /// the measured line when there is one, else `flex_over_split * split`.
     pub fn flexural_psi(&self, rho: f64) -> f64 {
-        self.flex_over_split * self.split_psi(rho)
+        match &self.flexural_fit {
+            Some(f) => f.at(rho),
+            None => self.flex_over_split * self.split_psi(rho),
+        }
     }
-    /// Compressive strength f'c from ACI f_ct = 6.7 sqrt(f'c), psi. <= 0 if
-    /// the split strength is <= 0 (the check then fails).
+    /// Compressive strength f'c, psi: the measured line when there is one,
+    /// else from ACI f_ct = 6.7 sqrt(f'c). <= 0 if the governing strength is
+    /// <= 0 (the check then fails).
     pub fn fc_psi(&self, rho: f64) -> f64 {
+        if let Some(f) = &self.compressive_fit {
+            return f.at(rho);
+        }
         let s = self.split_psi(rho);
         if s <= 0.0 { s } else { (s / 6.7).powi(2) }
     }
 
+    /// Measured fit of `prop`, if any.
+    pub fn measured(&self, prop: Property) -> Option<&PropertyFit> {
+        match prop {
+            Property::Flexural => self.flexural_fit.as_ref(),
+            Property::Compressive => self.compressive_fit.as_ref(),
+        }
+    }
+
+    /// "measured" or "derived": where `prop` comes from.
+    pub fn source(&self, prop: Property) -> &'static str {
+        if self.measured(prop).is_some() { "measured" } else { "derived" }
+    }
+
+    /// One line per property saying where it comes from.
+    pub fn source_lines(&self) -> Vec<String> {
+        Property::ALL
+            .iter()
+            .map(|&prop| {
+                let rows = self.points.iter().filter(|p| prop.final_psi(p).is_some()).count();
+                match self.measured(prop) {
+                    Some(f) => format!(
+                        "{}: measured, final = {:.2}*rho {:+.1} psi from {} tests ({:.1}-{:.1} pcf), rms {:.1} psi",
+                        prop.label(),
+                        f.slope_psi_per_pcf,
+                        f.intercept_psi,
+                        f.n,
+                        f.density_min_pcf,
+                        f.density_max_pcf,
+                        f.rms_residual_psi
+                    ),
+                    None => {
+                        let how = match prop {
+                            Property::Flexural => format!("{:.2} x split", self.flex_over_split),
+                            Property::Compressive => "(split / 6.7)^2".to_string(),
+                        };
+                        let why = if rows == 0 {
+                            format!("no {} data", prop.column())
+                        } else {
+                            format!("{rows} {} row(s) at one density: cannot fit", prop.column())
+                        };
+                        format!("{}: derived = {how} ({why})", prop.label())
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Weak-fit warnings: one per fitted property (split, and each measured
+    /// one) with fewer than 5 points or rms scatter above 15% of the mean.
+    pub fn weak_fit_warnings(&self) -> Vec<String> {
+        let split: Vec<f64> = self.points.iter().map(|p| p.final_psi).collect();
+        let mut fits = vec![("strength", split, self.rms_residual_psi)];
+        for prop in Property::ALL {
+            if let Some(f) = self.measured(prop) {
+                let ys = self.points.iter().filter_map(|p| prop.final_psi(p)).collect();
+                fits.push((prop.label(), ys, f.rms_residual_psi));
+            }
+        }
+        let mut out = vec![];
+        for (name, ys, rms) in fits {
+            let n = ys.len();
+            let mean = ys.iter().sum::<f64>() / n as f64;
+            let mut why = vec![];
+            if n < 5 {
+                why.push(format!("only {n} lab points (want >= 5)"));
+            }
+            if rms > 0.15 * mean {
+                why.push(format!("rms {rms:.0} psi is > 15% of mean {mean:.0} psi"));
+            }
+            if !why.is_empty() {
+                out.push(format!("WARNING {name} fit is weak: {}; add lab tests", why.join(", ")));
+            }
+        }
+        out
+    }
+
     /// Tested mixes (rows grouped by [`MixPoint::group`]), ordered by mean
-    /// density then name. Design strength of a mix = mean final split strength.
+    /// density then name. Design strength of a mix = mean final split strength;
+    /// flexural / compressive means are over the rows that measured them.
     pub fn tested_mixes(&self) -> Vec<TestedMix> {
         let mut names: Vec<&str> = self.points.iter().map(|p| p.group.as_str()).collect();
         names.sort();
         names.dedup();
+        let mean = |v: Vec<f64>| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
         let mut out: Vec<TestedMix> = names
             .into_iter()
             .map(|name| {
@@ -151,6 +345,10 @@ impl StrengthFit {
                     density_pcf: rows.iter().map(|p| p.density_pcf).sum::<f64>() / n as f64,
                     split_mean_psi: rows.iter().map(|p| p.final_psi).sum::<f64>() / n as f64,
                     split_min_psi: rows.iter().map(|p| p.final_psi).fold(f64::INFINITY, f64::min),
+                    flexural_mean_psi: mean(rows.iter().filter_map(|p| p.flexural_final_psi()).collect()),
+                    compressive_mean_psi: mean(
+                        rows.iter().filter_map(|p| p.compressive_final_psi()).collect(),
+                    ),
                 }
             })
             .collect();
@@ -158,12 +356,26 @@ impl StrengthFit {
         out
     }
 
-    /// Strength model for one tested mix: a flat line at the mix's mean final
-    /// split strength (so `split_psi`, `flexural_psi`, `fc_psi` give that mix's
-    /// values at any density), with the mix's own points and density.
+    /// Strength model for one tested mix: flat lines at the mix's mean final
+    /// split strength and, where the mix measured them, its mean flexural and
+    /// compressive strengths (others derived from its split mean as in fit
+    /// mode), with the mix's own points and density.
     pub fn for_mix(&self, m: &TestedMix) -> StrengthFit {
+        let points: Vec<MixPoint> = self.points.iter().filter(|p| p.group == m.name).cloned().collect();
+        let flat = |prop: Property, v: Option<f64>| {
+            v.map(|v| PropertyFit {
+                n: points.iter().filter(|p| prop.final_psi(p).is_some()).count(),
+                slope_psi_per_pcf: 0.0,
+                intercept_psi: v,
+                rms_residual_psi: 0.0,
+                density_min_pcf: m.density_pcf,
+                density_max_pcf: m.density_pcf,
+            })
+        };
         StrengthFit {
-            points: self.points.iter().filter(|p| p.group == m.name).cloned().collect(),
+            flexural_fit: flat(Property::Flexural, m.flexural_mean_psi),
+            compressive_fit: flat(Property::Compressive, m.compressive_mean_psi),
+            points,
             split_slope_psi_per_pcf: 0.0,
             split_intercept_psi: m.split_mean_psi,
             rms_residual_psi: 0.0,
@@ -207,30 +419,28 @@ impl StrengthFit {
         Ok(MixProvenance { density_pcf: rho, status, nearest, reach_pcf: reach })
     }
 
-    /// Least-squares fit through the given points.
+    /// Least-squares fit through the given points: split always (error if it
+    /// cannot be fitted), flexural / compressive where >= 2 distinct densities
+    /// measured them.
     pub fn fit(points: Vec<MixPoint>, flex_over_split: f64) -> Result<Self> {
         ensure!(points.len() >= 2, "need at least 2 mix test rows to fit strength vs density");
         ensure!(flex_over_split > 0.0, "flex_over_split must be > 0");
-        let n = points.len() as f64;
-        let mx = points.iter().map(|p| p.density_pcf).sum::<f64>() / n;
-        let my = points.iter().map(|p| p.final_psi).sum::<f64>() / n;
-        let sxx: f64 = points.iter().map(|p| (p.density_pcf - mx).powi(2)).sum();
-        ensure!(sxx > 1e-9, "all mix tests are at one density: cannot fit a slope");
-        let sxy: f64 = points.iter().map(|p| (p.density_pcf - mx) * (p.final_psi - my)).sum();
-        let slope = sxy / sxx;
-        let icpt = my - slope * mx;
-        let rms =
-            (points.iter().map(|p| (p.final_psi - (slope * p.density_pcf + icpt)).powi(2)).sum::<f64>() / n)
-                .sqrt();
-        let dmin = points.iter().map(|p| p.density_pcf).fold(f64::INFINITY, f64::min);
-        let dmax = points.iter().map(|p| p.density_pcf).fold(f64::NEG_INFINITY, f64::max);
+        let split: Vec<(f64, f64)> = points.iter().map(|p| (p.density_pcf, p.final_psi)).collect();
+        let s = PropertyFit::fit(&split).context("split tensile")?;
+        let measured = |prop: Property| {
+            let xy: Vec<(f64, f64)> =
+                points.iter().filter_map(|p| prop.final_psi(p).map(|y| (p.density_pcf, y))).collect();
+            PropertyFit::fit(&xy).ok()
+        };
         Ok(StrengthFit {
+            flexural_fit: measured(Property::Flexural),
+            compressive_fit: measured(Property::Compressive),
             points,
-            split_slope_psi_per_pcf: slope,
-            split_intercept_psi: icpt,
-            rms_residual_psi: rms,
-            density_min_pcf: dmin,
-            density_max_pcf: dmax,
+            split_slope_psi_per_pcf: s.slope_psi_per_pcf,
+            split_intercept_psi: s.intercept_psi,
+            rms_residual_psi: s.rms_residual_psi,
+            density_min_pcf: s.density_min_pcf,
+            density_max_pcf: s.density_max_pcf,
             flex_over_split,
         })
     }
@@ -250,28 +460,34 @@ impl StrengthFit {
 }
 
 /// Parse the mix CSV: `#` comment lines, one header line, then rows with
-/// columns `mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note`
+/// columns `mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note`,
+/// optional `flexural_psi` / `compressive_psi` columns (cells may be blank),
 /// and an optional `mix_id` column that overrides the tested-mix grouping.
 /// Columns are found by header name, so order may change and extra columns
 /// are ignored. Quoted fields and thousands separators ("7,191") are handled.
 pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'));
     let header = split_csv(lines.next().context("empty mix file")?);
-    let col = |name: &str| {
-        header
-            .iter()
-            .position(|h| h.trim().eq_ignore_ascii_case(name))
-            .with_context(|| format!("missing column '{name}'"))
-    };
+    let find = |name: &str| header.iter().position(|h| h.trim().eq_ignore_ascii_case(name));
+    let col = |name: &str| find(name).with_context(|| format!("missing column '{name}'"));
     let (ci_mix, ci_rho, ci_psi, ci_frac) =
         (col("mix")?, col("density_pcf")?, col("split_tensile_psi")?, col("fraction_of_final")?);
-    let ci_id = header.iter().position(|h| h.trim().eq_ignore_ascii_case("mix_id"));
+    let ci_id = find("mix_id");
+    let (ci_flex, ci_fc) = (find(Property::Flexural.column()), find(Property::Compressive.column()));
     let mut out = vec![];
     for (ln, line) in lines.enumerate() {
         let f = split_csv(line);
+        let cell = |i: usize| f.get(i).map(|s| s.replace(',', "")).unwrap_or_default();
         let num = |i: usize, what: &str| -> Result<f64> {
-            let raw = f.get(i).map(|s| s.replace(',', "")).unwrap_or_default();
+            let raw = cell(i);
             raw.trim().parse::<f64>().with_context(|| format!("row {}: bad {what} '{raw}'", ln + 1))
+        };
+        // Optional strength: blank or missing cell => None, else must be > 0.
+        let opt = |ci: Option<usize>, what: &str| -> Result<Option<f64>> {
+            let Some(i) = ci.filter(|&i| !cell(i).trim().is_empty()) else { return Ok(None) };
+            let v = num(i, what)?;
+            ensure!(v > 0.0, "row {}: {what} must be > 0 (or blank), got {v}", ln + 1);
+            Ok(Some(v))
         };
         let (rho, psi, frac) = (
             num(ci_rho, "density_pcf")?,
@@ -290,6 +506,8 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
             measured_psi: psi,
             fraction_of_final: frac,
             final_psi: psi / frac,
+            flexural_psi: opt(ci_flex, "flexural_psi")?,
+            compressive_psi: opt(ci_fc, "compressive_psi")?,
         });
     }
     Ok(out)
@@ -326,6 +544,9 @@ mod tests {
         // f'c from ACI split relation.
         let s = fit.split_psi(60.0);
         assert!((fit.fc_psi(60.0) - (s / 6.7).powi(2)).abs() < 1e-9);
+        // No measured flexural / compressive columns: both derived.
+        assert_eq!(fit.source(Property::Flexural), "derived");
+        assert_eq!(fit.source(Property::Compressive), "derived");
     }
 
     #[test]
@@ -411,5 +632,109 @@ mod tests {
         let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
         assert!(fit.split_psi(20.0) < 0.0);
         assert!(fit.fc_psi(20.0) <= 0.0);
+    }
+
+    const HDR: &str = "mix,density_pcf,split_tensile_psi,fraction_of_final,flexural_psi,compressive_psi\n";
+
+    #[test]
+    fn optional_columns_parse_blank_and_present() {
+        let t = format!("{HDR}A 1,50,200,0.5,150,\nA 2,52,210,1,,\"2,400\"\nB,60,300,1\n");
+        let p = parse_csv(&t).unwrap();
+        assert_eq!(p[0].flexural_psi, Some(150.0));
+        assert_eq!(p[0].flexural_final_psi(), Some(300.0));
+        assert_eq!(p[0].compressive_psi, None);
+        assert_eq!(p[1].flexural_psi, None);
+        assert_eq!(p[1].compressive_final_psi(), Some(2400.0));
+        // Short row: missing trailing cells are blank.
+        assert_eq!((p[2].flexural_psi, p[2].compressive_psi), (None, None));
+        // Present but bad or non-positive values are errors, not blanks.
+        assert!(parse_csv(&format!("{HDR}A,50,200,1,abc,\n")).is_err());
+        assert!(parse_csv(&format!("{HDR}A,50,200,1,0,\n")).is_err());
+        assert!(parse_csv(&format!("{HDR}A,50,200,1,,-5\n")).is_err());
+        // Without the columns nothing is serialized for them.
+        let q = parse_csv("mix,density_pcf,split_tensile_psi,fraction_of_final\nA,50,200,1\n").unwrap();
+        assert!(!serde_json::to_string(&q[0]).unwrap().contains("flexural"));
+    }
+
+    #[test]
+    fn measured_fit_used_when_present() {
+        // Flexural at two densities (one row scaled by fraction), f'c at three.
+        let t =
+            format!("{HDR}A,50,200,1,120,1500\nB,55,250,0.5,140,900\nC,60,300,1,,2500\nD,60,310,1,400,\n");
+        let fit = StrengthFit::parse(&t, 1.0).unwrap();
+        let fl = fit.flexural_fit.as_ref().unwrap();
+        // Final flexural: (50,120), (55,280), (60,400) -> least squares.
+        assert_eq!(fl.n, 3);
+        assert!((fl.slope_psi_per_pcf - 28.0).abs() < 1e-9, "{}", fl.slope_psi_per_pcf);
+        assert!((fit.flexural_psi(55.0) - 800.0 / 3.0).abs() < 1e-9);
+        let fc = fit.compressive_fit.as_ref().unwrap();
+        assert_eq!(fc.n, 3); // (50,1500), (55,1800), (60,2500)
+        assert!((fc.slope_psi_per_pcf - 100.0).abs() < 1e-9);
+        assert!((fit.fc_psi(55.0) - 1933.0 - 1.0 / 3.0).abs() < 1e-9);
+        assert_eq!(fit.source(Property::Flexural), "measured");
+        assert_eq!(fit.source(Property::Compressive), "measured");
+        // Split fit is unaffected by the extra columns.
+        let base = StrengthFit::parse(
+            "mix,density_pcf,split_tensile_psi,fraction_of_final\nA,50,200,1\nB,55,250,0.5\nC,60,300,1\nD,60,310,1\n",
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(base.split_slope_psi_per_pcf, fit.split_slope_psi_per_pcf);
+        assert_eq!(base.split_intercept_psi, fit.split_intercept_psi);
+        assert!(fit.source_lines()[0].starts_with("flexural: measured"));
+        // Each measured property is judged on its own (3 points < 5).
+        let w = fit.weak_fit_warnings();
+        assert_eq!(w.len(), 3, "{w:?}");
+        assert!(
+            w[1].starts_with("WARNING flexural fit is weak") && w[2].starts_with("WARNING f'c fit is weak")
+        );
+    }
+
+    #[test]
+    fn falls_back_to_derived_without_two_densities() {
+        // Flexural only at one density, compressive at none: both derived.
+        let t = format!("{HDR}A,50,200,1,300,\nB,50,210,1,320,\nC,60,300,1,,\n");
+        let fit = StrengthFit::parse(&t, 1.1).unwrap();
+        assert!(fit.flexural_fit.is_none() && fit.compressive_fit.is_none());
+        let s = fit.split_psi(55.0);
+        assert!((fit.flexural_psi(55.0) - 1.1 * s).abs() < 1e-9);
+        assert!((fit.fc_psi(55.0) - (s / 6.7).powi(2)).abs() < 1e-9);
+        let lines = fit.source_lines();
+        assert!(lines[0].contains("derived") && lines[0].contains("2 flexural_psi row(s) at one density"));
+        assert!(lines[1].contains("no compressive_psi data"));
+        assert!(!serde_json::to_string(&fit).unwrap().contains("flexural_fit"));
+    }
+
+    #[test]
+    fn tested_mixes_use_per_mix_measured_means() {
+        // M1 measured flexural on one of its rows and f'c on both; M2 nothing.
+        let t = format!("{HDR}M1 A,50,200,0.5,100,1000\nM1 B,52,220,1,,1600\nM2 A,60,300,1,,\n");
+        let fit = StrengthFit::parse(&t, 1.0).unwrap();
+        let m = fit.tested_mixes();
+        assert_eq!(m[0].flexural_mean_psi, Some(200.0));
+        assert_eq!(m[0].compressive_mean_psi, Some(1800.0));
+        assert_eq!((m[1].flexural_mean_psi, m[1].compressive_mean_psi), (None, None));
+        let f1 = fit.for_mix(&m[0]);
+        assert_eq!(f1.flexural_psi(10.0), 200.0);
+        assert_eq!(f1.fc_psi(99.0), 1800.0);
+        assert_eq!(f1.flexural_fit.as_ref().unwrap().n, 1);
+        // M2 has no measurements: derived from its own split mean even though
+        // the whole-file f'c fit exists.
+        assert!(fit.compressive_fit.is_some());
+        let f2 = fit.for_mix(&m[1]);
+        assert_eq!(f2.source(Property::Compressive), "derived");
+        assert!((f2.fc_psi(60.0) - (300.0f64 / 6.7).powi(2)).abs() < 1e-9);
+        assert_eq!(f2.flexural_psi(60.0), 300.0);
+    }
+
+    #[test]
+    fn deterministic() {
+        let t = format!("{HDR}M1 A,50,200,0.5,100,1000\nM1 B,52,220,1,,1600\nM2 A,60,300,1,350,2900\n");
+        let a = serde_json::to_string(&StrengthFit::parse(&t, 1.0).unwrap()).unwrap();
+        let b = serde_json::to_string(&StrengthFit::parse(&t, 1.0).unwrap()).unwrap();
+        assert_eq!(a, b);
+        // Parses back (serve / result.json), measured fits included.
+        let back: StrengthFit = serde_json::from_str(&a).unwrap();
+        assert!(back.flexural_fit.is_some() && back.compressive_fit.is_some());
     }
 }
