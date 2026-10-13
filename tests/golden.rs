@@ -210,7 +210,8 @@ fn golden_lrfd_envelope_via_eval_case() {
         p.punching.knees = 2;
         p.punching.knee_split = 0.5;
         p.punching.pad_in = 0.5;
-        p.punching.d_over_t = 1.0;
+        (p.punching.layers, p.punching.mesh_after_layer, p.punching.mold) = (None, None, None);
+        p.punching.d_over_t = Some(1.0);
         let grid = Grid::build(&hull, f(i, "depth"), f(i, "stations") as usize);
         let sec = section::sections(&grid, f(i, "thickness"));
         let case = &p.load_cases[0];

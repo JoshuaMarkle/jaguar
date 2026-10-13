@@ -25,13 +25,6 @@ answer more trustworthy first.
 
 ## A. Improve what exists (no scope change, do in order)
 
-- **A1. Construction layers in punching.** `[punching] layers`, `mesh_after_layer`,
-  `mold = "male"|"female"` give d, replacing the guessed `d_over_t` (keep it as an override or
-  drop it; examples + SPEC either way). A female mold puts pass 1 on the outside, so the same mesh is
-  shallower from the knee face. Files: `params.rs`, `check.rs`, `docs/PUNCHING.md`, examples, web
-  form. Re-run examples, update HULLS.
-- **A2. ASCE race-case examples.** 2F, 2M, 3F, 3M, 4_coed `[[load_case]]` blocks in
-  `examples/canoe.toml` (team weights from section 0, placeholders until then). Update HULLS.
 - **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
   biaxial check. Add it so the D/C(x) plot shows every along-hull check.
 - **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
@@ -84,9 +77,9 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
 | Mix CSV import, editable table, row delete | done (T21) |
 | Density vs strength graph with fit | partial: only split tensile is measured (A9) |
-| Accurate punching shear | mostly done (T16); d is a guessed `d_over_t` (A1) |
-| Mixes separate from construction layers | open (A1, C1) |
-| Race cases 4/3/2 entered separately | engine done (`[[load_case]]`), examples use 2M only (A2) |
+| Accurate punching shear | done (T16, T47: d from casting passes and mold side) |
+| Mixes separate from construction layers | layers done (T47); multi-mix open (C1) |
+| Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |
 | Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41); biaxial not in D/C(x) (A6) |
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
