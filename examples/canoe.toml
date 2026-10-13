@@ -90,4 +90,5 @@ speed_mps = 2.5           # race speed for the drag objective
 #   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]
 #   Total:     [{ crew_lb = 350, weight = 0.675 }, { crew_lb = 525, weight = 0.10 }, { crew_lb = 700, weight = 0.225 }]
 # displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
-# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = turning proxy (docs/SHAPE_SEARCH.md)
+# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = steady-turn drag (docs/SHAPE_SEARCH.md)
+# turn_radius_in = 600.0  # turn radius for the turning drag, in (50 ft)

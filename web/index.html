@@ -228,7 +228,8 @@ const FIELDS = {
     ['gm_min_in', 'Min GM', 'in', 'Minimum metacentric height (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
   objective: [
     ['speed_mps', 'Race speed', 'm/s', 'Speed at which water resistance is computed for the drag objective. A 2-person sprint is about 2.5 m/s.', 'any', 0],
-    ['straight_weight', 'Straight-line share', '-', 'Drag objective with shape search only: share of the shape score that is straight-line drag (0..1). The rest goes to the turning proxy. 1 = drag only. Below 1 needs Optimize for = drag and Optimize hull shape on.', 'any', 0]],
+    ['straight_weight', 'Straight-line share', '-', 'Drag objective with shape search only: share of the shape score that is straight-line drag (0..1). The rest goes to the drag of holding a steady turn. 1 = drag only. Below 1 needs Optimize for = drag and Optimize hull shape on.', 'any', 0],
+    ['turn_radius_in', 'Turn radius', 'in', 'Radius of the buoy turn the turning drag is computed at (600 in = 50 ft). Used only when the straight-line share is below 1.', 'any', 0]],
   flotation: [
     ['air_pocket_max_in', 'Max air pocket', 'in', 'Longest sealed air pocket (flotation chamber) allowed at EACH end, measured in from the bow and from the stern. A design that needs a longer pocket to float swamped fails.', 'any', 0],
     ['swamp_factor', 'Swamp factor', '-', 'Swamped, the submerged wall plus both air pockets must displace at least this times the canoe weight (fresh water). 1.1 = 10% reserve.', 'any', 0]],
@@ -445,6 +446,7 @@ function fillForm(p, hulls) {
   $('flotation.on').checked = !!fp; setFlotation();
   for (const [k] of FIELDS.flotation) $(`flotation.${k}`).value = fp ? fp[k] : { air_pocket_max_in: 36, swamp_factor: 1.1 }[k];
   if (p.objective.straight_weight == null) p.objective.straight_weight = 1;
+  if (p.objective.turn_radius_in == null) p.objective.turn_radius_in = 600;
   const ds = p.objective.displacements;
   setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];

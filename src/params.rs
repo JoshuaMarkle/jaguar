@@ -258,14 +258,22 @@ pub struct Objective {
     #[serde(default)]
     pub displacements: Option<Vec<Displacement>>,
     /// Drag objective with `[shape_search]`: share of straight-line drag in
-    /// the shape score; the rest goes to the turning proxy
-    /// (docs/SHAPE_SEARCH.md). Default 1.0 = drag only.
+    /// the shape score; the rest goes to the steady-turn drag at
+    /// `turn_radius_in` (docs/SHAPE_SEARCH.md). Default 1.0 = drag only.
     #[serde(default = "one")]
     pub straight_weight: f64,
+    /// Radius of the buoy turn the turning score is computed at, in
+    /// (default 600 = 50 ft, about 2.5 hull lengths).
+    #[serde(default = "turn_radius")]
+    pub turn_radius_in: f64,
 }
 
 fn one() -> f64 {
     1.0
+}
+
+fn turn_radius() -> f64 {
+    600.0
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -510,6 +518,9 @@ impl Params {
                 bail!("objective.displacements weights must sum to 1, got {sum}");
             }
         }
+        if !(self.objective.turn_radius_in.is_finite() && self.objective.turn_radius_in > 0.0) {
+            bail!("objective.turn_radius_in must be > 0");
+        }
         let sw = self.objective.straight_weight;
         if !(0.0..=1.0).contains(&sw) {
             bail!("objective.straight_weight must be in [0, 1]");
@@ -583,6 +594,10 @@ mod tests {
         p.objective.kind = ObjectiveKind::Drag;
         p.validate().unwrap();
         p.objective.straight_weight = 1.5;
+        assert!(p.validate().is_err());
+        p.objective.straight_weight = 0.8;
+        assert_eq!(p.objective.turn_radius_in, 600.0, "default");
+        p.objective.turn_radius_in = 0.0;
         assert!(p.validate().is_err());
     }
 

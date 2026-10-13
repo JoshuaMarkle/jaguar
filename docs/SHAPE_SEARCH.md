@@ -36,8 +36,8 @@ stability logic lives in one place.
 
 A rejected shape keeps its inner result in `candidates` with `passes = false` and
 `error = "shape rejected: ..."`, scores +inf, and can never be the winner. Every shape carries
-`shape.metrics` (`entry_angle_deg`, `rocker_bow_in`, `rocker_stern_in`, `lateral_moment_in4`,
-`rejected`). `flare_deg` stays a fixed `[hull]` value, not a searched variable (it changes the grid
+`shape.metrics` (`entry_angle_deg`, `rocker_bow_in`, `rocker_stern_in`, `lateral_moment_in4` (the
+old turning proxy), `turn`, `rejected`). `flare_deg` stays a fixed `[hull]` value, not a searched variable (it changes the grid
 above the waterline, not the generator, so searching it would need a second outer axis).
 
 ## Drag objective options (`[objective]`)
@@ -48,18 +48,28 @@ above the waterline, not the generator, so searching it would need a second oute
   `examples/shape_opt.toml`: Regionals 350/700 at 75/25, Nationals 350/525/700 at 60/20/20,
   Total 67.5/10/22.5.
 * `straight_weight` (default 1.0): score = `sw * drag / drag_ref + (1 - sw) * turn / turn_ref`.
-  `turn` is a **proxy, not a turning model**: the second moment of the underwater lateral profile
-  about midships at design draft, integral of (draft - keel_z(x)) (x - L/2)^2 dx. More rocker
-  lifts the keel ends and shrinks it, so rocker is credited automatically. Refs are the drag and
-  moment of the fixed midpoint-of-bounds shape (deterministic, independent of sampling).
-  Lower = easier to turn by this proxy only; do not read it as a race prediction.
+  `turn` is the **steady-turn drag** at radius `turn_radius_in` (default 600 in = 50 ft) and
+  `speed_mps`, from a cross-flow (strip) model (Allen-Perkins cross-flow analogy, as in ship
+  manoeuvring models; Hoerner for Cd). Each strip of the underwater lateral profile T(x) (draft
+  minus keel height, so rocker counts) moves sideways at w(x) = U (x/R - beta), x from midships
+  toward the bow, and carries f = 0.5 rho Cd T |w| w, Cd = 1.0. The drift beta is solved so the
+  net lateral force is the centripetal force m U^2 / R (m = hull + crew). Then
+  `turn = integral 0.5 rho Cd T |w|^3 dx / U`, the power spent holding the turn divided by speed
+  (= steering moment / R + induced drag beta m U^2 / R). It is evaluated like the drag: at the level
+  draft of the inner winner's hull weight plus each `displacements` crew (weighted), else the
+  heaviest load case. U cancels from beta, so the ranking does not depend on `speed_mps`.
+  Refs are the straight drag and turn drag of the fixed midpoint-of-bounds shape at its design
+  draft (deterministic, independent of sampling). Neglected: the linear lift term, added mass,
+  waves, heel. Use it to rank shapes; `shape.metrics.turn` gives `drag_n`, `moment_nm` (yaw moment
+  the paddlers hold) and `drift_deg`.
 
 ## Algorithm (deterministic)
 
 1. **Latin hypercube** of `samples` shapes inside the bounds (seeded SplitMix64). Parameters with
    min == max are held fixed.
-2. Shapes are evaluated in parallel. Each inner search runs on one thread
-   (`optimize::run_inner(.., parallel = false, ..)`) to avoid nested parallelism.
+2. Shapes are evaluated in parallel on plain threads, each owning a private 1-thread rayon pool
+   for its inner searches (not `par_iter` + `install`: a blocked rayon worker steals other shapes
+   and nests their stacks until a debug build overflows).
 3. **Pattern search**, `refine_rounds` rounds: around the best 4 shapes, step +/- on each free
    parameter (step starts at range/8 and halves after a round without improvement), clamped to
    the bounds, skipping shapes already seen.

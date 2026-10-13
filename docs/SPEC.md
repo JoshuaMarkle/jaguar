@@ -92,7 +92,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    race prediction). Drag is taken at the heaviest load case's loaded draft, or, with
    `objective.displacements = [{crew_lb, weight}, ...]` (weights sum to 1), as the weighted sum of
    resistance at the level draft each (hull weight + crew_lb) floats at. `objective.straight_weight`
-   (default 1, needs drag + `[shape_search]`) blends in a turning proxy, see docs/SHAPE_SEARCH.md.
+   (default 1, needs drag + `[shape_search]`) blends in the steady-turn drag at `objective.turn_radius_in`
+   (default 600), see docs/SHAPE_SEARCH.md.
 8. **Verify**: the winner is re-run at 2n-1 stations. It is VERIFIED iff D/C there <= `dc_verify`
    (D/C drifts up 1-2% per station doubling, hence dc_search < dc_verify).
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern

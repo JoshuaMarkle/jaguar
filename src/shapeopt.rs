@@ -3,10 +3,11 @@
 //! For each candidate shape (a `hullgen::ShapeParams` inside the
 //! `[shape_search]` bounds), generate the hull (41 stations x 21 waterlines,
 //! named `opt-<index>`) and run the existing wall search on it serially
-//! (`optimize::run_inner`, the inner loop); shapes are evaluated in parallel.
-//! A shape's score is its inner winner's objective value: `hull_weight_lb`
-//! for `objective.kind = "weight"`, `drag_n` for `"drag"` (a winner without a
-//! drag value scores +inf). Shapes with no passing wall design score +inf.
+//! (`optimize::run_inner`, the inner loop); shapes are evaluated in parallel
+//! (`on_workers`). A shape's score is its inner winner's objective value:
+//! `hull_weight_lb` for `objective.kind = "weight"`, `drag_n` for `"drag"`
+//! (a winner without a drag value scores +inf), blended with the steady-turn
+//! drag when `straight_weight < 1`. Shapes with no passing wall design score +inf.
 //!
 //! Algorithm:
 //! 1. Latin hypercube of `samples` shapes (SplitMix64, seeded). min == max
@@ -23,16 +24,17 @@
 //! The final re-run only forwards `Verifying`.
 //!
 //! Deterministic: shapes are indexed in generation order and every ranking
-//! breaks ties by index, so rayon scheduling never changes the result.
+//! breaks ties by index, so thread scheduling never changes the result.
 
-use crate::hull::Hull;
-use crate::hullgen::{ShapeMetrics, ShapeParams, generate, metrics};
+use crate::hull::{Grid, Hull, linspace};
+use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
 use crate::optimize::{Candidate, Progress, RunResult, run_inner, run_with_progress};
 use crate::params::{ObjectiveKind, Params, ShapeSearch};
-use crate::resistance::resistance;
+use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
+use crate::units::{IN3_PER_FT3, WATER_PCF};
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 use std::collections::HashSet;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub const STATIONS: usize = 41;
@@ -98,6 +100,54 @@ fn free_dims(ss: &ShapeSearch) -> Vec<usize> {
     (0..10).filter(|&d| b[d].1[1] > b[d].1[0] && !(ss.symmetric && matches!(d, 6 | 7 | 9))).collect()
 }
 
+/// Steady turn of shape `s` floating level at `draft_in` with total weight
+/// `lb`, at `objective.speed_mps` and `objective.turn_radius_in`.
+fn turn_at(params: &Params, s: &ShapeParams, draft_in: f64, lb: f64) -> Result<Turn> {
+    let x = linspace(0.0, s.length_in, 401);
+    let depth: Vec<f64> = x.iter().map(|&v| (draft_in - keel_z(s, v)).max(0.0)).collect();
+    turn(&x, &depth, lb, params.objective.speed_mps, params.objective.turn_radius_in)
+}
+
+/// Steady turn of shape `s` (generated as `hull`) with wall weight `hull_lb`
+/// and mold depth `depth_in`, weighted like the drag objective: over
+/// `objective.displacements`, else the heaviest load case's crew. Each floats
+/// level where hull + crew displaces its weight (topsides built as the inner
+/// search builds them, flare included).
+pub fn loaded_turn(
+    params: &Params,
+    s: &ShapeParams,
+    hull: &Hull,
+    hull_lb: f64,
+    depth_in: f64,
+) -> Result<Turn> {
+    let loads: Vec<(f64, f64)> = match &params.objective.displacements {
+        Some(ds) => ds.iter().map(|d| (d.crew_lb, d.weight)).collect(),
+        None => {
+            let crew = params.load_cases.iter().map(|c| c.weights_lb.iter().sum::<f64>()).fold(0.0, f64::max);
+            vec![(crew, 1.0)]
+        }
+    };
+    let g = Grid::build_flared(hull, depth_in, STATIONS, params.hull.flare_deg);
+    let nz = g.nz();
+    let topsides = Hull {
+        name: "loaded".into(),
+        draft_design: g.z[nz - 1],
+        x: g.x.clone(),
+        z: g.z.clone(),
+        half_breadth: (0..g.nx()).map(|i| g.row(i).to_vec()).collect(),
+        ..hull.clone()
+    };
+    let mut sum = Turn { drag_n: 0.0, moment_nm: 0.0, drift_deg: 0.0 };
+    for (crew, w) in loads {
+        let lb = hull_lb + crew;
+        let t = turn_at(params, s, level_draft_in(&topsides, lb)?, lb)?;
+        sum.drag_n += w * t.drag_n;
+        sum.moment_nm += w * t.moment_nm;
+        sum.drift_deg += w * t.drift_deg;
+    }
+    Ok(sum)
+}
+
 /// Measured metrics plus the reason the shape breaks a [shape_search] constraint, if it does.
 pub fn shape_metrics(ss: &ShapeSearch, s: &ShapeParams) -> ShapeMetrics {
     let mut m = metrics(s);
@@ -144,12 +194,12 @@ struct Eval {
     rep: Candidate,
 }
 
-/// Normalizers for the straight/turning blend: drag (N) and lateral moment
-/// (in^4) of the fixed reference shape, the midpoint of the bounds.
+/// Normalizers for the straight/turning blend: straight drag and steady-turn
+/// drag (N) of the fixed reference shape, the midpoint of the bounds.
 #[derive(Clone, Copy)]
 pub struct Refs {
     drag_n: f64,
-    moment_in4: f64,
+    turn_n: f64,
 }
 
 fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
@@ -159,9 +209,11 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
     let drag_n = resistance(&hull, s.draft_in, params.objective.speed_mps)
         .context("drag of the reference (midpoint) shape")?
         .total_n;
-    let moment_in4 = metrics(&s).lateral_moment_in4;
-    anyhow::ensure!(drag_n > 0.0 && moment_in4 > 0.0, "reference shape has zero drag or lateral moment");
-    Ok(Refs { drag_n, moment_in4 })
+    let lb = displaced_volume_in3(&hull, s.draft_in) * WATER_PCF / IN3_PER_FT3;
+    let turn_n =
+        turn_at(params, &s, s.draft_in, lb).context("turn of the reference (midpoint) shape")?.drag_n;
+    anyhow::ensure!(drag_n > 0.0 && turn_n > 0.0, "reference shape has zero straight or turning drag");
+    Ok(Refs { drag_n, turn_n })
 }
 
 fn score_of(params: &Params, r: &RunResult, m: &ShapeMetrics, refs: Option<Refs>) -> f64 {
@@ -178,7 +230,8 @@ fn score_of(params: &Params, r: &RunResult, m: &ShapeMetrics, refs: Option<Refs>
                     None => d,
                     Some(rf) => {
                         let sw = params.objective.straight_weight;
-                        sw * d / rf.drag_n + (1.0 - sw) * m.lateral_moment_in4 / rf.moment_in4
+                        let t = m.turn.map_or(f64::INFINITY, |t| t.drag_n);
+                        sw * d / rf.drag_n + (1.0 - sw) * t / rf.turn_n
                     }
                 }
             }
@@ -213,10 +266,19 @@ fn eval_shape(
     index: usize,
 ) -> Result<Eval> {
     let hull = hull_for(v, index)?;
-    let r = run_inner(params, &hull, false, &|_| {})?;
+    // Called on a 1-thread pool (`on_workers`): "parallel" rayon calls run serially there.
+    let r = run_inner(params, &hull, true, &|_| {})?;
     let mut rep = representative(&r).context("inner search produced no candidates")?;
     let mut shape = to_shape(v);
-    let m = shape_metrics(ss, &shape);
+    let mut m = shape_metrics(ss, &shape);
+    match loaded_turn(params, &shape, &hull, rep.hull_weight_lb, rep.depth_in) {
+        Ok(t) => m.turn = Some(t),
+        Err(e) if refs.is_some() && m.rejected.is_none() => {
+            rep.passes = false;
+            rep.error = Some(format!("turn: {e:#}"));
+        }
+        Err(_) => {}
+    }
     let score = score_of(params, &r, &m, refs);
     if let Some(why) = &m.rejected {
         rep.passes = false;
@@ -225,6 +287,48 @@ fn eval_shape(
     shape.metrics = Some(m);
     rep.shape = Some(shape);
     Ok(Eval { score, rep })
+}
+
+/// `f(0..n)` spread over `rayon::current_num_threads()` plain threads, each
+/// owning one private 1-thread rayon pool for the inner search. Results in
+/// index order (deterministic).
+///
+/// Not `par_iter` + a per-shape pool: a rayon worker blocked in a cross-pool
+/// `install` steals other shapes from its own pool while it waits, nesting
+/// one shape's frames on another's until a debug build overflows the stack.
+/// Plain threads block cleanly.
+fn on_workers<T: Send>(n: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Result<Vec<T>> {
+    let threads = rayon::current_num_threads().clamp(1, n.max(1));
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<T>>> = (0..n).map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|sc| -> Result<()> {
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                sc.spawn(|| -> Result<()> {
+                    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
+                    pool.install(|| {
+                        loop {
+                            let i = next.fetch_add(1, Ordering::SeqCst);
+                            if i >= n {
+                                break;
+                            }
+                            let out = f(i);
+                            *slots[i].lock().expect("slot lock") = Some(out);
+                        }
+                    });
+                    Ok(())
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))?;
+        }
+        Ok(())
+    })?;
+    slots
+        .into_iter()
+        .map(|m| m.into_inner().expect("slot lock").context("shape worker skipped an index"))
+        .collect()
 }
 
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
@@ -251,20 +355,16 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
             let base = shapes.len();
             let total = base + batch.len();
             on_progress(Progress::Started { total });
-            let out: Vec<Result<Eval>> = batch
-                .par_iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    let index = base + i;
-                    on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
-                    let e = eval_shape(params, ss, refs, v, index);
-                    if let Ok(e) = &e {
-                        let k = done.fetch_add(1, Ordering::SeqCst) + 1;
-                        on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
-                    }
-                    e
-                })
-                .collect();
+            let out: Vec<Result<Eval>> = on_workers(batch.len(), &|i| {
+                let (v, index) = (&batch[i], base + i);
+                on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
+                let e = eval_shape(params, ss, refs, v, index);
+                if let Ok(e) = &e {
+                    let k = done.fetch_add(1, Ordering::SeqCst) + 1;
+                    on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
+                }
+                e
+            })?;
             for (v, e) in batch.into_iter().zip(out) {
                 evals.push(e?);
                 shapes.push(v);
@@ -309,8 +409,8 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
 
     let best = ranked(&evals)[0];
     let reps: Vec<Candidate> = evals.iter().map(|e| e.rep.clone()).collect();
-    let mut shape = to_shape(&shapes[best]);
-    shape.metrics = Some(shape_metrics(ss, &shape));
+    // Shape with its metrics (turn at the same inner winner the re-run finds).
+    let shape = reps[best].shape.clone().context("best shape lost its parameters")?;
     let hull = hull_for(&shapes[best], best)?;
     let forward = |p: Progress| {
         if matches!(p, Progress::Verifying { .. }) {

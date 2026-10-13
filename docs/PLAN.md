@@ -33,10 +33,8 @@ answer more trustworthy first.
   Can move hogging ~40%. Pays off only after punching is relieved (A1, C1).
 - **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
   dc_search / dc_verify margin.
-- **B7. Hoop stress from turning in the biaxial check** (k = V^2/gR, as in the ASCE report). Needs a
-  turn radius input; small effect while bending is at 0.3.
-- **B8. Turning model** to replace the lateral-profile proxy behind `straight_weight` (T32). Needed
-  before C3.
+- **B7. Hoop stress from turning in the biaxial check** (k = V^2/gR, as in the ASCE report). Can use
+  `objective.turn_radius_in`; small effect while bending is at 0.3.
 
 ## C. Scope changes (SPEC lists these as out of scope)
 
@@ -46,7 +44,7 @@ answer more trustworthy first.
   multi-pour side-view graph. Biggest expected weight win: only the knee zone needs the punching mix.
 - **C2. Re-sweep a fixed mold for new mixes** with C1: keep the hull and depth, redo wall and zones.
 - **C3. Race simulator**: optimal path per course, straight vs turning distance, time and turn angle,
-  to replace the 0.8 straight weight. Needs B8 first.
+  to replace the 0.8 straight weight (turn drag: T56).
 
 ## Team task list: status
 
@@ -59,7 +57,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Flare angle | done (`hull.flare_deg`) |
 | Buoyancy / self weight distributed | done (real submerged area, draft and trim solved) |
 | Displacement weighting 350/525/700 | done (T31). Presets in canoe.toml comments and the web form (T49) |
-| Straight 80 / turning 20 | partial (T32): turning is a proxy (B8) |
+| Straight 80 / turning 20 | done (T32, T56: steady-turn cross-flow drag at `turn_radius_in`); race path is C3 |
 | Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
 | Mix CSV import, editable table, row delete | done (T21) |
 | Density vs strength graph with fit | done (T54): split, flexural, f'c; measured fits solid, derived dashed |

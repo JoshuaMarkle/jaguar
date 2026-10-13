@@ -54,12 +54,28 @@ pub struct ShapeMetrics {
     /// bow / stern, in.
     pub rocker_bow_in: f64,
     pub rocker_stern_in: f64,
-    /// Turning-resistance proxy: second moment of the underwater lateral
-    /// profile about midships at design draft, integral of depth(x) (x - L/2)^2 dx, in^4.
+    /// Second moment of the underwater lateral profile about midships at
+    /// design draft, integral of depth(x) (x - L/2)^2 dx, in^4 (the old turning proxy).
     pub lateral_moment_in4: f64,
+    /// Steady turn at `objective.turn_radius_in` and design draft
+    /// (`resistance::turn`); filled by the shape search.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<Turn>,
     /// Why the shape search rejected this shape (a [shape_search] constraint), if it did.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rejected: Option<String>,
+}
+
+/// Steady turn of a slender hull (computed by `resistance::turn`).
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+pub struct Turn {
+    /// Extra resistance of holding the turn, N: cross-flow power / speed.
+    pub drag_n: f64,
+    /// Hydrodynamic yaw moment about midships resisting the turn, N m
+    /// (positive = the paddlers must steer into the turn).
+    pub moment_nm: f64,
+    /// Drift angle at midships (stern skids out), deg.
+    pub drift_deg: f64,
 }
 
 /// Where entry angle and rocker are measured, as a fraction of length from each end.
@@ -119,6 +135,7 @@ pub fn metrics(p: &ShapeParams) -> ShapeMetrics {
         rocker_bow_in: keel_z(p, xe),
         rocker_stern_in: keel_z(p, l - xe),
         lateral_moment_in4: m,
+        turn: None,
         rejected: None,
     }
 }

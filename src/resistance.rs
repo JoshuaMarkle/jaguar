@@ -19,6 +19,7 @@
 
 use crate::hull::Hull;
 use crate::hull::linspace;
+use crate::hullgen::Turn;
 use crate::params::Displacement;
 use crate::units::{IN3_PER_FT3, M_TO_IN, WATER_PCF};
 use anyhow::{Result, ensure};
@@ -98,6 +99,75 @@ pub fn weighted_resistance(
         sum += d.weight * resistance(hull, draft, speed_mps)?.total_n;
     }
     Ok(sum)
+}
+
+/// Cross-flow drag coefficient of a canoe section moving sideways (Hoerner,
+/// Fluid-Dynamic Drag ch. 3: about 1.0 for a shallow surface-piercing section,
+/// below the 2.0 of a flat plate in open water).
+pub const CD_CROSSFLOW: f64 = 1.0;
+/// lb (mass) -> kg.
+const KG_PER_LB: f64 = 0.453_592_37;
+
+/// Steady turn of radius `radius_in` at `speed_mps`, cross-flow (strip) model.
+/// `x_in` stations from the bow (strictly increasing),
+/// `depth_in` underwater lateral-profile depth at each (draft - keel height),
+/// `displacement_lb` the floating weight.
+///
+/// Each strip moves sideways at w(x) = U (x/R - beta), x from midships toward
+/// the bow, beta the drift angle (small angles). It carries the cross-flow
+/// force f = 0.5 rho Cd T(x) |w| w against w (Allen-Perkins cross-flow
+/// analogy, as in ship manoeuvring models). beta is solved so the net
+/// lateral force supplies the centripetal force m U^2 / R. Then
+/// moment = integral of x f dx, and drag = integral of 0.5 rho Cd T |w|^3 dx / U,
+/// the power the paddlers spend to hold the turn (= moment / R + beta m U^2 / R:
+/// steering plus induced drag). U cancels from beta, so drag scales as U^2.
+/// Neglected: the linear (potential-lift) term, added mass, wave effects.
+pub fn turn(
+    x_in: &[f64],
+    depth_in: &[f64],
+    displacement_lb: f64,
+    speed_mps: f64,
+    radius_in: f64,
+) -> Result<Turn> {
+    let n = x_in.len();
+    ensure!(n >= 3 && depth_in.len() == n, "turn: need >= 3 stations with a depth each");
+    ensure!(x_in.iter().chain(depth_in).all(|v| v.is_finite()), "turn: non-finite profile");
+    ensure!(depth_in.iter().all(|d| *d >= 0.0), "turn: negative profile depth");
+    ensure!(speed_mps.is_finite() && speed_mps > 0.0, "turn: speed must be > 0, got {speed_mps}");
+    ensure!(radius_in.is_finite() && radius_in > 0.0, "turn: radius must be > 0, got {radius_in}");
+    ensure!(displacement_lb.is_finite() && displacement_lb > 0.0, "turn: displacement must be > 0");
+    let s = 1.0 / M_TO_IN;
+    ensure!(x_in.windows(2).all(|p| p[1] > p[0]), "turn: stations must increase from the bow");
+    let mid = 0.5 * (x_in[0] + x_in[n - 1]);
+    // x from midships toward the bow, m.
+    let x: Vec<f64> = x_in.iter().map(|v| (mid - v) * s).collect();
+    let t: Vec<f64> = depth_in.iter().map(|v| v * s).collect();
+    let integrate = |f: &dyn Fn(f64) -> f64| -> f64 {
+        (1..n).map(|i| 0.5 * (t[i - 1] * f(x[i - 1]) + t[i] * f(x[i])) * (x[i - 1] - x[i])).sum()
+    };
+    ensure!(integrate(&|_| 1.0) > 0.0, "turn: no underwater lateral profile");
+    let (r, u) = (radius_in * s, speed_mps);
+    let k = 0.5 * RHO * CD_CROSSFLOW;
+    let m = displacement_lb * KG_PER_LB;
+    // Inward lateral force per U^2 minus the centripetal need; increasing in beta.
+    let excess = |b: f64| k * integrate(&|xx| (b - xx / r) * (xx / r - b).abs()) - m / r;
+    let (mut a, mut c) = (-1.0, 1.0);
+    while excess(a) > 0.0 {
+        a *= 2.0;
+    }
+    while excess(c) < 0.0 {
+        c *= 2.0;
+    }
+    for _ in 0..100 {
+        let b = 0.5 * (a + c);
+        if excess(b) < 0.0 { a = b } else { c = b }
+    }
+    let beta = 0.5 * (a + c);
+    let w = |xx: f64| u * (xx / r - beta);
+    let moment = k * integrate(&|xx| xx * w(xx) * w(xx).abs());
+    let drag = k * integrate(&|xx| w(xx).abs().powi(3)) / u;
+    ensure!(drag.is_finite() && moment.is_finite(), "turn: non-finite result");
+    Ok(Turn { drag_n: drag, moment_nm: moment, drift_deg: beta.to_degrees() })
 }
 
 /// Resample `hull` on the NX x NZ grid from keel to `draft_in` (bilinear).
@@ -279,6 +349,61 @@ mod tests {
             z: linspace(0.0, 12.0, 7),
             half_breadth: vec![vec![10.0; 7]; 11],
         }
+    }
+
+    fn rect(l: f64, t: f64, n: usize) -> (Vec<f64>, Vec<f64>) {
+        (linspace(0.0, l, n), vec![t; n])
+    }
+
+    #[test]
+    fn turn_of_a_rectangular_profile_by_hand() {
+        // Rectangle L x T, pivot a = beta R ahead of midships, h = L/2, all SI:
+        //   balance  k T (6 h^2 a + 2 a^3) / (3 R^2) = m / R
+        //   drag     k T U^2 ((h + a)^4 + (h - a)^4) / (4 R^3)
+        //   moment   k T U^2 / R^2 [((h - a)^4 + (h + a)^4) / 4 + a ((h - a)^3 - (h + a)^3) / 3]
+        let (l, t, r, u, lb) = (240.0, 6.0, 600.0, 2.5, 500.0);
+        let (x, d) = rect(l, t, 4001);
+        let tr = turn(&x, &d, lb, u, r).unwrap();
+        let (h, tm, rm) = (0.5 * l / M_TO_IN, t / M_TO_IN, r / M_TO_IN);
+        let (k, m) = (0.5 * RHO * CD_CROSSFLOW, lb * KG_PER_LB);
+        let rhs = 3.0 * m * rm / (k * tm);
+        let mut a: f64 = 1.0;
+        for _ in 0..50 {
+            a -= (6.0 * h * h * a + 2.0 * a.powi(3) - rhs) / (6.0 * h * h + 6.0 * a * a);
+        }
+        assert!(a > 0.0 && a < h, "pivot inside the hull: a = {a}");
+        let drag = k * tm * u * u * ((h + a).powi(4) + (h - a).powi(4)) / (4.0 * rm.powi(3));
+        let mom = k * tm * u * u / (rm * rm)
+            * (((h - a).powi(4) + (h + a).powi(4)) / 4.0 + a * ((h - a).powi(3) - (h + a).powi(3)) / 3.0);
+        let rel = |p: f64, q: f64| (p / q - 1.0).abs();
+        assert!(rel(tr.drift_deg, (a / rm).to_degrees()) < 1e-5, "{tr:?} a {a}");
+        assert!(rel(tr.drag_n, drag) < 1e-5 && rel(tr.moment_nm, mom) < 1e-5, "{tr:?} {drag} {mom}");
+        // Energy: drag = moment / R + beta m U^2 / R (steering + induced drag).
+        let beta = tr.drift_deg.to_radians();
+        assert!(rel(tr.drag_n, tr.moment_nm / rm + beta * m * u * u / rm) < 1e-9);
+    }
+
+    #[test]
+    fn turn_scales_and_fails_loudly() {
+        // Rockered profile: depth falls to zero at both ends.
+        let x = linspace(0.0, 240.0, 401);
+        let d: Vec<f64> = x.iter().map(|v| 6.0 * (1.0 - (v / 120.0 - 1.0).powi(4))).collect();
+        let a = turn(&x, &d, 500.0, 2.5, 600.0).unwrap();
+        // drag ~ U^2, drift independent of U.
+        let b = turn(&x, &d, 500.0, 5.0, 600.0).unwrap();
+        assert!((b.drag_n / a.drag_n - 4.0).abs() < 1e-9 && (b.drift_deg - a.drift_deg).abs() < 1e-9);
+        // Geometric similarity x2 (mass x8): drift same, drag x4, moment x8.
+        let x2: Vec<f64> = x.iter().map(|v| 2.0 * v).collect();
+        let d2: Vec<f64> = d.iter().map(|v| 2.0 * v).collect();
+        let c = turn(&x2, &d2, 4000.0, 2.5, 1200.0).unwrap();
+        assert!((c.drift_deg - a.drift_deg).abs() < 1e-9);
+        assert!((c.drag_n / a.drag_n - 4.0).abs() < 1e-9 && (c.moment_nm / a.moment_nm - 8.0).abs() < 1e-9);
+        // Tighter turn costs more; deterministic.
+        assert!(turn(&x, &d, 500.0, 2.5, 300.0).unwrap().drag_n > a.drag_n);
+        assert_eq!(turn(&x, &d, 500.0, 2.5, 600.0).unwrap(), a);
+        assert!(turn(&x, &vec![0.0; 401], 500.0, 2.5, 600.0).is_err());
+        assert!(turn(&x, &d, 500.0, 2.5, 0.0).is_err());
+        assert!(turn(&x, &d, 0.0, 2.5, 600.0).is_err());
     }
 
     #[test]

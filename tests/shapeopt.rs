@@ -140,31 +140,55 @@ fn entry_angle_and_rocker_reject_shapes() {
     assert!(r.candidates.iter().all(|c| c.error.as_ref().unwrap().contains("rocker")));
 }
 
+fn turn_drag(c: &jaguar::optimize::Candidate) -> f64 {
+    c.shape.as_ref().unwrap().metrics.as_ref().unwrap().turn.unwrap().drag_n
+}
+
 #[test]
-fn turning_weight_moves_toward_lower_lateral_moment() {
+fn turning_weight_moves_toward_lower_turn_drag() {
     let mut p = small(false);
     p.objective.kind = jaguar::params::ObjectiveKind::Drag;
     p.objective.straight_weight = 0.0;
     let b = jaguar::run(&p, &|_| {}).unwrap();
-    let mom = |r: &jaguar::optimize::RunResult| {
-        r.winner
-            .as_ref()
-            .unwrap()
-            .candidate
-            .shape
-            .as_ref()
-            .unwrap()
-            .metrics
-            .as_ref()
-            .unwrap()
-            .lateral_moment_in4
+    // Pure turning: winner has the least steady-turn drag of all passing shapes.
+    let least = b.candidates.iter().filter(|c| c.passes).map(turn_drag).fold(f64::INFINITY, f64::min);
+    let w = turn_drag(&b.winner.as_ref().unwrap().candidate);
+    assert!(w <= least + 1e-9, "{w} vs {least}");
+    // Every shape carries a computed turn.
+    assert!(b.candidates.iter().all(|c| turn_drag(c) > 0.0));
+}
+
+#[test]
+fn turn_drag_falls_with_rocker_and_rises_with_length() {
+    use jaguar::hullgen::ShapeParams;
+    let p = small(false);
+    let base = ShapeParams {
+        length_in: 240.0,
+        beam_in: 26.0,
+        draft_in: 6.0,
+        fore_wp: 0.8,
+        section: 0.4,
+        fore_rocker: 0.1,
+        aft_wp: 0.8,
+        aft_rocker: 0.1,
+        fore_len_frac: 0.4,
+        aft_len_frac: 0.4,
+        metrics: None,
     };
-    // Pure turning: winner has the least lateral moment of all passing shapes.
-    let least = b
-        .candidates
-        .iter()
-        .filter(|c| c.passes)
-        .map(|c| c.shape.as_ref().unwrap().metrics.as_ref().unwrap().lateral_moment_in4)
-        .fold(f64::INFINITY, f64::min);
-    assert!(mom(&b) <= least + 1e-9, "{} vs {least}", mom(&b));
+    // 90 lb wall, 12 in mold, heaviest crew (340 lb), each floating at its own level draft.
+    let td = |s: &ShapeParams| {
+        let h = jaguar::hullgen::generate(s, 41, 21, "t").unwrap();
+        jaguar::shapeopt::loaded_turn(&p, s, &h, 90.0, 12.0).unwrap().drag_n
+    };
+    let t0 = td(&base);
+    let rockered = ShapeParams { fore_rocker: 0.5, aft_rocker: 0.5, ..base.clone() };
+    assert!(td(&rockered) < t0, "rocker turns easier");
+    let long = ShapeParams { length_in: 264.0, ..base.clone() };
+    assert!(td(&long) > t0, "longer hull turns harder");
+    assert_eq!(td(&base), t0, "deterministic");
+    // One displacement at the heaviest crew = the default.
+    let mut q = small(false);
+    q.objective.displacements = Some(vec![jaguar::params::Displacement { crew_lb: 340.0, weight: 1.0 }]);
+    let h = jaguar::hullgen::generate(&base, 41, 21, "t").unwrap();
+    assert_eq!(jaguar::shapeopt::loaded_turn(&q, &base, &h, 90.0, 12.0).unwrap().drag_n, t0);
 }
