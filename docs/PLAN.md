@@ -32,9 +32,6 @@ answer more trustworthy first.
   form. Re-run examples, update HULLS.
 - **A2. ASCE race-case examples.** 2F, 2M, 3F, 3M, 4_coed `[[load_case]]` blocks in
   `examples/canoe.toml` (team weights from section 0, placeholders until then). Update HULLS.
-- **A3. Golden coverage for the new physics.** `tests/golden/reference.py` does not cover LRFD
-  (T46), the biaxial check (T45) or swamped flotation (T43): those are only tested against the Rust
-  itself. Add them to the independent Python reference and the golden JSON.
 - **A4. Web form for fields already in `Params`.** Missing: all of `[flotation]`
   (`air_pocket_max_in`, `swamp_factor`), shape-search steps (`draft_step_in`, `length_step_in`,
   `beam_step_in`), `rocker_in`, `min_entry_angle_deg`, `symmetric`, `objective.displacements`

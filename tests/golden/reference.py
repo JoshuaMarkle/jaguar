@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Golden reference for tests/golden.rs (needs numpy + scipy).
 
-Generated tests/golden/bending_v0.json and grid_v0.json. A minimal, independent
-implementation of grid, section, equilibrium and bending tension only, kept so the
-golden values can be regenerated and audited. Do not extend it.
+Generated tests/golden/*_v0.json. A minimal, independent implementation written
+from docs/SPEC.md (not from the Rust), kept so the golden values can be regenerated
+and audited (`python3 -I tests/golden/reference.py --regen`, from the repo root):
 
-    hull table -> shell section per station -> weight/buoyancy/crew -> M(x)
-    -> bending tension vs f_t/FS -> lightest passing design -> recheck at 2x stations
+    bending_v0:   hull table -> shell section per station -> weight/buoyancy/crew
+                  -> M(x) -> bending tension vs f_t/FS
+    strength_v0:  bending tension + compression, shell shear, Kupfer-Gerstle
+                  biaxial, under ASD (/FS) and LRFD (1.2D+1.6L, 0.9D+1.6L, phi 0.60)
+    flotation_v0: swamped-flotation air-pocket length (SPEC Physics 6)
+
+The CLI below runs the bending-only search (lightest passing design, recheck at
+2x stations). Punching is not covered here (docs/PUNCHING.md has hand checks).
 
 Units: inches, pounds, psi, pcf. The strength line below is a fixed test input,
 not real mix data.
@@ -74,15 +80,19 @@ def section(z, y, t):
     return A, zbar, I
 
 
-def moments(x, z, y, A, crew_lb, seats, dyn, rho_pcf):
-    """Free-free beam: hull weight + crew vs buoyancy at the equilibrium waterline."""
+def moments(x, z, y, A, crew_lb, seats, dyn, rho_pcf, dead=1.0, live=1.0):
+    """Free-free beam: hull weight + crew vs buoyancy at the equilibrium waterline.
+
+    dead, live: load factors on self weight and on crew (x dyn); buoyancy
+    balances the factored weight (LRFD combinations, SPEC Physics 4).
+    Returns (V, M, factored hull weight, draft)."""
     L = x[-1]
-    w_hull = A * rho_pcf / 1728.0                     # lb/in
+    w_hull = dead * A * rho_pcf / 1728.0              # lb/in
     cum = 2 * np.concatenate([np.zeros((len(x), 1)),
                               np.cumsum((y[:, 1:] + y[:, :-1]) / 2 * np.diff(z), axis=1)], axis=1)
     xc = L / 2
     W_hull = trapz(w_hull, x)
-    crew_w = np.asarray(crew_lb) * dyn
+    crew_w = np.asarray(crew_lb) * dyn * live
     W = W_hull + crew_w.sum()
     M_w = trapz(w_hull * (x - xc), x) + (crew_w * (np.asarray(seats) - xc)).sum()
 
@@ -106,19 +116,23 @@ def moments(x, z, y, A, crew_lb, seats, dyn, rho_pcf):
     theta = brentq(moment_res, -TH, TH, xtol=1e-9)
     p = [draft_for(theta), theta]
     q = buoy(p) - w_hull
-    for xi, wi in zip(seats, crew_w):                 # knee patch, not a point
-        q = q - np.where(np.abs(x - xi) <= KNEE_PATCH_IN / 2, wi / KNEE_PATCH_IN, 0.0)
     V = np.concatenate([[0], np.cumsum((q[1:] + q[:-1]) / 2 * np.diff(x))])
     M = np.concatenate([[0], np.cumsum((V[1:] + V[:-1]) / 2 * np.diff(x))])
+    for xi, wi in zip(seats, crew_w):                 # knee patch, not a point
+        # Uniform load wi/p on [xi - p/2, xi + p/2], integrated exactly from the bow
+        # (sampling it at nodes catches 1-3 nodes depending on spacing and seat).
+        u = np.clip(x - (xi - KNEE_PATCH_IN / 2), 0.0, KNEE_PATCH_IN)
+        V = V - wi * u / KNEE_PATCH_IN
+        M = M - wi * (u ** 2 / (2 * KNEE_PATCH_IN) + np.maximum(x - (xi + KNEE_PATCH_IN / 2), 0.0))
     if abs(V[-1]) > 1e-3 * W or abs(M[-1]) > 1e-3 * W * L:   # free-free beam must close
         raise RuntimeError(f"equilibrium broken: V_end={V[-1]:.2f} M_end={M[-1]:.1f}")
-    return M, W_hull, p[0]
+    return V, M, W_hull, p[0]
 
 
 def evaluate(L, T, y0, depth, n, t, rho, crew, seats, dyn):
     x, z, y = build(L, T, y0, depth, n)
     A, zbar, I = section(z, y, t)
-    M, W_hull, draft = moments(x, z, y, A, crew, seats, dyn, rho)
+    _, M, W_hull, draft = moments(x, z, y, A, crew, seats, dyn, rho)
     ok = I > 1e-3 * I.max()                           # skip the pointed tips
     c = np.where(M >= 0, zbar, depth - zbar)       # tension fibre: bottom when sagging (M > 0)
     sigma = np.abs(M[ok]) * c[ok] / I[ok]
@@ -128,19 +142,117 @@ def evaluate(L, T, y0, depth, n, t, rho, crew, seats, dyn):
                 x_gov=x[ok][sigma.argmax()], Mmax=np.abs(M).max())
 
 
-def regen(path="tests/golden/bending_v0.json", off1="tests/golden/michlet/off1.mlt",
-          out="tests/golden/michlet/out.mlt"):
-    """Recompute the outputs of every case in the golden JSON from its inputs."""
+def shear_q(z, y, t, zb):
+    """First moment about zb of the shell area below zb.
+
+    The keel strip 2*y0*t sits at z0. Side segment k carries 2*t*ds of area spread
+    evenly over its height, i.e. 2*t*ds/dz per unit z, so the part below zb adds
+    2*t*(ds/dz) * integral_{z_k}^{min(z_k+1, zb)} (zb - z) dz."""
+    q = 2 * y[0] * t * max(zb - z[0], 0.0)
+    for k in range(len(z) - 1):
+        z0, z1 = z[k], z[k + 1]
+        if z0 >= zb:
+            break
+        top = min(z1, zb)
+        per_z = 2 * t * np.hypot(y[k + 1] - y[k], z1 - z0) / (z1 - z0)
+        q += per_z * ((zb - z0) ** 2 - (zb - top) ** 2) / 2
+    return q
+
+
+def kupfer(sigma, tau, ft, fc):
+    """Kupfer-Gerstle tension-compression branch: D/C of one plane-stress state.
+
+    sigma: normal stress (tension +), tau: shear. Principal stresses s1 >= s2;
+    allowable s1 = ft * (1 - 0.8 |s2| / fc)."""
+    r = np.sqrt((sigma / 2) ** 2 + tau ** 2)
+    s1, s2 = sigma / 2 + r, sigma / 2 - r
+    cap = ft * (1 - 0.8 * abs(s2) / fc)
+    return np.inf if cap <= 0 else s1 / cap
+
+
+def strength(L, T, y0, i):
+    """SPEC Physics 4-5: every stress check but punching, per strength combination.
+
+    ASD: one combination at service loads, capacities / FS. LRFD: 1.2D+1.6L and
+    0.9D+1.6L (L = crew x dyn), capacities x 0.60; the higher D/C governs."""
+    depth, t, rho = i["depth"], i["thickness"], i["density"]
+    x, z, y = build(L, T, y0, depth, i["stations"])
+    A, zbar, I = section(z, y, t)
+    f_sp = i["ft_slope"] * rho + i["ft_icpt"]           # split tensile, psi
+    f_r = i["flex_over_split"] * f_sp                   # flexural
+    fc = (f_sp / 6.7) ** 2                              # ACI f_ct = 6.7 sqrt(f'c)
+    if i["method"] == "asd":
+        combos, k = [(1.0, 1.0)], 1 / i["fs"]
+    else:
+        combos, k = [(1.2, 1.6), (0.9, 1.6)], 0.60
+    ok = I > 1e-3 * I.max()
+    out = []
+    for dead, live in combos:
+        V, M, W, draft = moments(x, z, y, A, i["crew_lb"], i["seats_in"], i["dyn"], rho, dead, live)
+        st, sc, tau, kg = [], [], [], []
+        for j in np.flatnonzero(ok):
+            top, bot = depth - zbar[j], zbar[j]
+            ct, cc = (bot, top) if M[j] > 0 else (top, bot)   # sagging: bottom in tension
+            s_t, s_c = abs(M[j]) * ct / I[j], abs(M[j]) * cc / I[j]
+            ta = abs(V[j]) * shear_q(z, y[j], t, zbar[j]) / (I[j] * 2 * t)
+            st.append(s_t)
+            sc.append(s_c)
+            tau.append(ta)
+            kg.append(max(kupfer(s_t, ta, f_r * k, fc * k), kupfer(-s_c, ta, f_r * k, fc * k)))
+        dc = {"bending_tension": max(st) / (f_r * k),
+              "bending_compression": max(sc) / (0.85 * fc * k),
+              "shear": max(tau) / (2 * np.sqrt(fc) * k),
+              "biaxial": max(kg)}
+        out.append(dict(dead=dead, live=live, weight=float(W), draft=float(draft),
+                        Mmax=float(np.abs(M).max()), dc={n: float(v) for n, v in dc.items()}))
+    gov = max(range(len(out)), key=lambda c: max(out[c]["dc"].values()))
+    return {"combos": out, "governing": gov, "dc": max(out[gov]["dc"].values())}
+
+
+def flotation(L, T, y0, i):
+    """SPEC Physics 6: swamped, the wall volume plus two sealed end pockets (length
+    l from each tip, full hull interior up to D) displace >= swamp_factor x self
+    weight at 62.4 pcf.
+
+    Interior area per station = area enclosed by the outer mold line up to D minus
+    the shell (wall) area, so pocket air + pocket wall = the enclosed volume."""
+    depth, t, rho = i["depth"], i["thickness"], i["density"]
+    x, z, y = build(L, T, y0, depth, i["stations"])
+    A, _, _ = section(z, y, t)
+    wall = trapz(A, x)
+    W = wall * rho / 1728.0
+    need = max(i["swamp_factor"] * W * 1728.0 / WATER_PCF - wall, 0.0)
+    interior = np.maximum(2 * trapz(y, z, axis=1) - A, 0.0)
+
+    def end_volume(a, b):                  # integral of the linear interior area over [a, b]
+        xs = np.concatenate([[a], x[(x > a) & (x < b)], [b]])
+        return trapz(np.interp(xs, x, interior), xs)
+
+    vol = lambda l: end_volume(0.0, l) + end_volume(L - l, L)
+    if vol(L / 2) < need:
+        raise RuntimeError("pockets cannot float the canoe even filling the whole hull")
+    l = 0.0 if need == 0 else brentq(lambda l: vol(l) - need, 0.0, L / 2, xtol=1e-10)
+    return dict(wall_in3=float(wall), weight=float(W), pocket_in3=float(need), pocket_len_in=float(l))
+
+
+def regen(off1="tests/golden/michlet/off1.mlt", out="tests/golden/michlet/out.mlt"):
+    """Recompute the outputs of every case in every golden JSON from its inputs."""
     import json
-    d = json.load(open(path))
     L, T, y0 = read_hull(off1, out)
-    for c in d["cases"]:
-        i = c["inputs"]
+
+    def bending(i):
         r = evaluate(L, T, y0, i["depth"], i["stations"], i["thickness"], i["density"],
                      i["crew_lb"], i["seats_in"], i["dyn"])
-        c["outputs"] = {k: float(r[k]) for k in ("weight", "dc", "draft", "x_gov", "Mmax")}
-    json.dump(d, open(path, "w"), indent=1)
-    open(path, "a").write("\n")
+        return {k: float(r[k]) for k in ("weight", "dc", "draft", "x_gov", "Mmax")}
+
+    for name, fn in (("bending", bending), ("strength", lambda i: strength(L, T, y0, i)),
+                     ("flotation", lambda i: flotation(L, T, y0, i))):
+        path = f"tests/golden/{name}_v0.json"
+        d = json.load(open(path))
+        for c in d["cases"]:
+            c["outputs"] = fn(c["inputs"])
+        json.dump(d, open(path, "w"), indent=1)
+        open(path, "a").write("\n")
 
 
 def main():
