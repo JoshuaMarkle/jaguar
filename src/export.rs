@@ -13,6 +13,12 @@
 //!   would close on itself, the end is solid concrete: the inner surface stops at the first/last
 //!   station with a proper hollow, a planar bulkhead closes it there, and a flat top covers the
 //!   solid end. A rim closes the sheer. `None`: the outer mold surface only, as an open shell.
+//! * `pocket_in = Some(l)` (with a wall): the sealed bow/stern air pockets of the swamped-flotation
+//!   gate (`flotation.rs`: from each tip of the analysis grid, x0 and xn, inward l, interior up to
+//!   the mold depth). A solid bulkhead t thick closes the interior from x0 + l to x0 + l + t and
+//!   from xn - l - t to xn - l, fused into the wall (one solid). Rows are inserted at those four x,
+//!   linear between the neighbouring resampled stations. Err if a bulkhead would fall in the
+//!   solid end or the pockets overlap.
 //! * Coincident vertices are welded, zero-area and mirrored-duplicate facets removed, so a solid
 //!   is watertight (every edge used by exactly two facets, in opposite directions).
 //!
@@ -36,6 +42,9 @@ pub struct ExportSpec {
     pub stations: usize,
     /// Points around the full girth, sheer to sheer (odd, so one lies on the keel centreline).
     pub girth: usize,
+    /// Swamped-flotation air pocket length at EACH end, in (result `air_pocket_in`). With a
+    /// wall, a bulkhead t thick closes the hull interior inboard of each pocket. `None` or 0: none.
+    pub pocket_in: Option<f64>,
 }
 
 /// Triangle mesh, inches. `closed` = watertight solid.
@@ -156,11 +165,12 @@ fn pchip(xs: &[f64], ys: &[f64], x: f64) -> f64 {
 fn half_girth(y: &[f64], z: &[f64], zk: f64) -> Option<Vec<(f64, f64)>> {
     let first = y.iter().position(|&v| v > 1e-9)?;
     // Between table stations the grid blends offsets linearly, so a small offset can appear
-    // below the smooth keel; waterlines at or below the keel are dropped.
+    // below the smooth keel; waterlines below the keel are dropped. The lowest offset exactly at
+    // the keel height is a flat bottom: kept, so its chine is not cut into a V.
     let zk = zk.max(z[0]);
     let mut p: Vec<(f64, f64)> = (first..y.len())
         .rev()
-        .filter(|&k| z[k] > zk + 1e-6 || k + 1 == y.len())
+        .filter(|&k| z[k] > zk + 1e-6 || k + 1 == y.len() || (k == first && (z[k] - zk).abs() <= 1e-6))
         .map(|k| (y[k], z[k]))
         .collect();
     p.push((0.0, zk.min(p.last().unwrap().1)));
@@ -246,6 +256,36 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         };
         rows.push((grid.x[i], half));
     }
+    // Air pocket bulkheads: rows at the four bulkhead faces (bow inner/outer, stern inner/outer).
+    let mut cuts: Option<[usize; 4]> = None;
+    if let (Some(t), Some(l)) = (spec.thickness_in, spec.pocket_in) {
+        ensure!(l.is_finite() && l >= 0.0, "air pocket length must be >= 0, got {l}");
+        if l > 0.0 {
+            let (x0, xn) = (grid.x[0], *grid.x.last().unwrap());
+            let xs = [x0 + l, x0 + l + t, xn - l - t, xn - l];
+            ensure!(
+                xs[1] < xs[2],
+                "air pockets of {l} in plus t = {t} in bulkheads overlap on a {:.1} in hull",
+                xn - x0
+            );
+            for x in xs {
+                let k = rows.partition_point(|r| r.0 < x - 1e-6);
+                if k < rows.len() && (rows[k].0 - x).abs() <= 1e-6 {
+                    continue;
+                }
+                ensure!(k > 0 && k < rows.len(), "air pocket bulkhead at x = {x:.2} in is outside the hull");
+                let (a, b) = (&rows[k - 1], &rows[k]);
+                let s = (x - a.0) / (b.0 - a.0);
+                let half =
+                    a.1.iter()
+                        .zip(&b.1)
+                        .map(|(p, q)| (p.0 + s * (q.0 - p.0), p.1 + s * (q.1 - p.1)))
+                        .collect();
+                rows.insert(k, (x, half));
+            }
+            cuts = Some(xs.map(|x| rows.iter().position(|r| (r.0 - x).abs() <= 1e-6).unwrap()));
+        }
+    }
     let full = |half: &[(f64, f64)]| -> Vec<(f64, f64)> {
         half.iter().copied().chain(half.iter().rev().skip(1).map(|&(y, z)| (-y, z))).collect()
     };
@@ -327,39 +367,66 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             }
         }
         ensure!(best >= 2, "wall thickness {t} in leaves no hollow section: the hull would be solid");
+        // Cell r (rows r..r+1) is hollow inside [ra, rb] except across a pocket bulkhead.
+        let solid_cell = |r: usize| cuts.is_some_and(|c| (c[0] <= r && r < c[1]) || (c[2] <= r && r < c[3]));
+        if let Some(c) = cuts {
+            ensure!(
+                ra < c[0] && c[3] < rb,
+                "air pocket bulkhead at x = {:.2} / {:.2} in falls in the solid concrete end (hollow from \
+                 x = {:.2} to {:.2} in); export with more --stations or --no-pockets",
+                rows[c[0]].0,
+                rows[c[3]].0,
+                rows[ra].0,
+                rows[rb].0
+            );
+        }
+        let hollow_cell: Vec<bool> = (0..nr - 1).map(|r| r >= ra && r < rb && !solid_cell(r)).collect();
+        let hollow_row = |r: usize| (r > 0 && hollow_cell[r - 1]) || (r < nr - 1 && hollow_cell[r]);
         let mut inner = vec![usize::MAX; nr];
-        for r in ra..=rb {
+        for r in (0..nr).filter(|&r| hollow_row(r)) {
             inner[r] = push_row(rows[r].0, &full(inner_half[r].as_ref().unwrap()));
         }
-        for r in ra..rb {
-            for j in 0..m - 1 {
-                let (a, b) = (inner[r] + j, inner[r + 1] + j);
-                quad(&mut tris, a, a + 1, b + 1, b);
+        // Bulkheads: a planar face closing the inner U where a hollow run ends (fanned from its
+        // top centre c). Then each row's top edge, starboard -> port, with its y for the strip.
+        let mut side: Vec<Vec<(usize, f64)>> = vec![];
+        for r in 0..nr {
+            let (yo, mut s) = (rows[r].1[0].0, vec![]);
+            s.push((outer[r], yo));
+            if hollow_row(r) && !(r > 0 && hollow_cell[r - 1] && r < nr - 1 && hollow_cell[r]) {
+                let c = push_row(rows[r].0, &[(0.0, z_top)]);
+                for j in 0..m - 1 {
+                    tris.push([c as u32, (inner[r] + j) as u32, (inner[r] + j + 1) as u32]);
+                }
+                let yi = inner_half[r].as_ref().unwrap()[0].0;
+                s.extend([(inner[r], yi), (c, 0.0), (inner[r] + m - 1, -yi)]);
             }
-            for j in [0, m - 1] {
-                let (oa, ob, ia, ib) = (outer[r] + j, outer[r + 1] + j, inner[r] + j, inner[r + 1] + j);
-                quad(&mut tris, oa, ob, ib, ia);
-            }
+            s.push((outer[r] + m - 1, -yo));
+            side.push(s);
         }
-        // Solid ends: a planar bulkhead closing the inner U at ra / rb (fanned from its top
-        // centre c), and a flat top over the solid end, as a strip between the two sheer lines.
-        for (rc, step) in [(ra, -1i64), (rb, 1i64)] {
-            let c = push_row(rows[rc].0, &[(0.0, z_top)]);
-            for j in 0..m - 1 {
-                tris.push([c as u32, (inner[rc] + j) as u32, (inner[rc] + j + 1) as u32]);
-            }
-            let next = (rc as i64 + step) as usize;
-            // First strip cell: its row-rc side is split at the inner sheers and c.
-            let apex = outer[next] as u32;
-            let chain = [outer[rc], inner[rc], c, inner[rc] + m - 1, outer[rc] + m - 1, outer[next] + m - 1];
-            for k in 0..chain.len() - 1 {
-                tris.push([apex, chain[k] as u32, chain[k + 1] as u32]);
-            }
-            let mut r = next;
-            while (step < 0 && r > 0) || (step > 0 && r < nr - 1) {
-                let s = (r as i64 + step) as usize;
-                quad(&mut tris, outer[r], outer[s], outer[s] + m - 1, outer[r] + m - 1);
-                r = s;
+        for r in 0..nr - 1 {
+            if hollow_cell[r] {
+                for j in 0..m - 1 {
+                    let (a, b) = (inner[r] + j, inner[r + 1] + j);
+                    quad(&mut tris, a, a + 1, b + 1, b);
+                }
+                for j in [0, m - 1] {
+                    let (oa, ob, ia, ib) = (outer[r] + j, outer[r + 1] + j, inner[r] + j, inner[r + 1] + j);
+                    quad(&mut tris, oa, ob, ib, ia);
+                }
+            } else {
+                // Flat top over solid concrete (an end or a pocket bulkhead): zip the two rows' top
+                // edges together by y. Every facet has points on both rows, so none is degenerate.
+                let (a, b) = (&side[r], &side[r + 1]);
+                let (mut i, mut j) = (0, 0);
+                while i + 1 < a.len() || j + 1 < b.len() {
+                    if j + 1 == b.len() || (i + 1 < a.len() && a[i + 1].1 >= b[j + 1].1) {
+                        tris.push([a[i].0 as u32, a[i + 1].0 as u32, b[j].0 as u32]);
+                        i += 1;
+                    } else {
+                        tris.push([a[i].0 as u32, b[j + 1].0 as u32, b[j].0 as u32]);
+                        j += 1;
+                    }
+                }
             }
         }
     }
@@ -651,7 +718,8 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
 }
 
 /// Hull and export spec from a `jaguar-result/1` JSON: the winner's hull (generated shape, or
-/// params.hull.file), thickness, depth and the run's flare. Err if there is no winner.
+/// params.hull.file), thickness, depth, the run's flare and the winner's air pocket length (if
+/// `[flotation]` sized one). Err if there is no winner.
 pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, ExportSpec)> {
     let v: serde_json::Value = serde_json::from_str(text).context("parsing result JSON")?;
     ensure!(v["format"] == crate::optimize::RESULT_FORMAT, "not a jaguar-result/1 file");
@@ -672,6 +740,7 @@ pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, E
         flare_deg: v["params"]["hull"]["flare_deg"].as_f64().unwrap_or(0.0),
         stations,
         girth,
+        pocket_in: c["air_pocket_in"].as_f64(),
     };
     Ok((hull, spec))
 }
@@ -704,7 +773,14 @@ mod tests {
 
     #[test]
     fn surface_only_is_open() {
-        let spec = ExportSpec { depth_in: 12.0, thickness_in: None, flare_deg: 0.0, stations: 41, girth: 21 };
+        let spec = ExportSpec {
+            depth_in: 12.0,
+            thickness_in: None,
+            flare_deg: 0.0,
+            stations: 41,
+            girth: 21,
+            pocket_in: None,
+        };
         let m = build_mesh(&off1(), &spec).unwrap();
         assert!(!m.closed);
         let (lo, hi) = m.bbox();
@@ -715,8 +791,14 @@ mod tests {
     #[test]
     fn bad_specs_error() {
         let h = off1();
-        let ok =
-            ExportSpec { depth_in: 12.0, thickness_in: Some(0.375), flare_deg: 0.0, stations: 41, girth: 21 };
+        let ok = ExportSpec {
+            depth_in: 12.0,
+            thickness_in: Some(0.375),
+            flare_deg: 0.0,
+            stations: 41,
+            girth: 21,
+            pocket_in: None,
+        };
         assert!(build_mesh(&h, &ExportSpec { girth: 20, ..ok.clone() }).is_err());
         assert!(build_mesh(&h, &ExportSpec { depth_in: 0.0, ..ok.clone() }).is_err());
         assert!(build_mesh(&h, &ExportSpec { thickness_in: Some(-1.0), ..ok }).is_err());
