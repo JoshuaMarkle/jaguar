@@ -149,8 +149,65 @@ pub struct Punching {
     pub knee_spacing_in: f64,
     /// Knee pad thickness, in; spreads the contact (ASCE limit 0.5 in).
     pub pad_in: f64,
-    /// Effective depth to the mesh as a fraction of wall thickness (aci_22_6), e.g. 0.5.
-    pub d_over_t: f64,
+    /// Explicit override: effective depth to the mesh as a fraction of wall
+    /// thickness (aci_22_6). Mutually exclusive with the layer fields below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d_over_t: Option<f64>,
+    /// Equal-thickness casting passes (>= 2 so a mesh fits between two).
+    /// `layers`, `mesh_after_layer` and `mold` are given together or not at all;
+    /// all absent (and no `d_over_t`) means 2 layers, mesh after pass 1 (d = t/2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layers: Option<u32>,
+    /// The mesh is laid after pass k, 1 <= k < layers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_after_layer: Option<u32>,
+    /// Which mold face pass 1 is cast against (decides which face the mesh is measured from).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mold: Option<Mold>,
+}
+
+/// Mold type. Pass 1 is cast against the mold, so on a male mold pass 1 is the
+/// INSIDE face (the one the knee bears on), on a female mold the OUTSIDE.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Mold {
+    Male,
+    Female,
+}
+
+impl Punching {
+    /// Effective depth d / t for `aci_22_6`: distance from the loaded (inside,
+    /// knee) face to the mesh, over the wall thickness. Mesh after pass k of n
+    /// equal passes sits k t/n from the pass-1 face, so
+    /// male (pass 1 inside): d/t = k/n; female (pass 1 outside): d/t = (n-k)/n.
+    /// t = 0.375, n = 3, k = 2: male d = 0.25 in, female d = 0.125 in.
+    pub fn d_over_t(&self) -> Result<f64> {
+        let layer_fields = self.layers.is_some() || self.mesh_after_layer.is_some() || self.mold.is_some();
+        if let Some(r) = self.d_over_t {
+            if layer_fields {
+                bail!("punching: give either d_over_t or layers/mesh_after_layer/mold, not both");
+            }
+            if !(r > 0.0 && r <= 1.0) {
+                bail!("punching: need 0 < d_over_t <= 1, got {r}");
+            }
+            return Ok(r);
+        }
+        let (n, k, mold) = match (self.layers, self.mesh_after_layer, self.mold) {
+            (None, None, None) => (2, 1, Mold::Male),
+            (Some(n), Some(k), Some(m)) => (n, k, m),
+            _ => bail!("punching: layers, mesh_after_layer and mold must be given together"),
+        };
+        if n < 2 || k < 1 || k >= n {
+            bail!(
+                "punching: need layers >= 2 and 1 <= mesh_after_layer < layers, got layers = {n}, mesh_after_layer = {k}"
+            );
+        }
+        let from_pass1 = f64::from(k) / f64::from(n);
+        Ok(match mold {
+            Mold::Male => from_pass1,
+            Mold::Female => 1.0 - from_pass1,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
@@ -344,12 +401,10 @@ impl Params {
             || pu.knee_spacing_in.is_nan()
             || pu.knee_spacing_in < 0.0
             || !(0.0..=0.5).contains(&pu.pad_in)
-            || !(pu.d_over_t > 0.0 && pu.d_over_t <= 1.0)
         {
-            bail!(
-                "punching: need knees 1|2, knee_split 0.5..1, knee_spacing_in >= 0, pad_in 0..0.5, 0 < d_over_t <= 1"
-            );
+            bail!("punching: need knees 1|2, knee_split 0.5..1, knee_spacing_in >= 0, pad_in 0..0.5");
         }
+        pu.d_over_t()?;
         if self.load_cases.is_empty() {
             bail!("at least one [[load_case]] is required");
         }
@@ -491,7 +546,7 @@ mod tests {
     #[test]
     fn example_toml_loads() {
         let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
-        assert_eq!(p.load_cases.len(), 1);
+        assert_eq!(p.load_cases.len(), 2);
     }
 
     #[test]
@@ -540,6 +595,57 @@ mod tests {
         assert!(p.validate().is_err());
         p.shape_search.as_mut().unwrap().draft_step_in = Some(0.5);
         p.validate().unwrap();
+    }
+
+    fn layered(n: u32, k: u32, mold: Mold) -> Punching {
+        let mut pu = Params::load(Path::new("examples/canoe.toml")).unwrap().punching;
+        (pu.d_over_t, pu.layers, pu.mesh_after_layer, pu.mold) = (None, Some(n), Some(k), Some(mold));
+        pu
+    }
+
+    #[test]
+    fn mesh_depth_from_layers_and_mold() {
+        // data/review_asce_report_and_tasks.md item 5: t = 0.375, mesh after pass 2 of 3.
+        let t = 0.375;
+        assert!((layered(3, 2, Mold::Male).d_over_t().unwrap() * t - 0.25).abs() < 1e-12);
+        assert!((layered(3, 2, Mold::Female).d_over_t().unwrap() * t - 0.125).abs() < 1e-12);
+        assert!((layered(3, 1, Mold::Male).d_over_t().unwrap() - 1.0 / 3.0).abs() < 1e-12);
+        // 2 layers, mesh between: mid-wall either way; also the default when nothing is given.
+        assert_eq!(layered(2, 1, Mold::Female).d_over_t().unwrap(), 0.5);
+        let mut pu = layered(2, 1, Mold::Male);
+        (pu.layers, pu.mesh_after_layer, pu.mold) = (None, None, None);
+        assert_eq!(pu.d_over_t().unwrap(), 0.5);
+        pu.d_over_t = Some(0.7);
+        assert_eq!(pu.d_over_t().unwrap(), 0.7);
+    }
+
+    #[test]
+    fn mesh_depth_inputs_are_strict() {
+        let mut p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        let ok = layered(3, 2, Mold::Male);
+        p.punching = ok.clone();
+        p.validate().unwrap();
+        let bad = |f: &dyn Fn(&mut Punching)| {
+            let mut q = p.clone();
+            f(&mut q.punching);
+            q.validate().is_err()
+        };
+        assert!(bad(&|pu| pu.d_over_t = Some(0.5)), "d_over_t together with layers");
+        assert!(bad(&|pu| pu.mold = None), "layers without mold");
+        assert!(bad(&|pu| pu.mesh_after_layer = None), "layers without mesh_after_layer");
+        assert!(bad(&|pu| pu.mesh_after_layer = Some(3)), "mesh after the last pass");
+        assert!(bad(&|pu| pu.mesh_after_layer = Some(0)), "mesh before the first pass");
+        assert!(bad(&|pu| (pu.layers, pu.mesh_after_layer) = (Some(1), Some(1))), "one layer");
+        assert!(bad(
+            &|pu| (pu.layers, pu.mesh_after_layer, pu.mold, pu.d_over_t) = (None, None, None, Some(0.0))
+        ));
+        assert!(bad(
+            &|pu| (pu.layers, pu.mesh_after_layer, pu.mold, pu.d_over_t) = (None, None, None, Some(1.5))
+        ));
+        let text = std::fs::read_to_string("examples/canoe.toml")
+            .unwrap()
+            .replace("mold = \"male\"", "mold = \"wood\"");
+        assert!(Params::parse(&text, Path::new("examples")).is_err(), "unknown mold");
     }
 
     #[test]

@@ -70,7 +70,10 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    * bending compression vs 0.85 f'c
    * shell shear VQ/(I*2t) vs 2 sqrt(f'c)
    * knee punching for the heaviest paddler, ACI 318-19 Table 22.6.5.2 or plain Table 14.5.5.1,
-     one or two knees (docs/PUNCHING.md)
+     one or two knees (docs/PUNCHING.md). Effective depth d (knee/inside face to mesh) comes from
+     `[punching] layers`, `mesh_after_layer` (k) and `mold`: male d = k/layers t, female
+     d = (layers-k)/layers t. `d_over_t` is an explicit override and an error together with them;
+     with neither, 2 layers and mesh after 1 (d = t/2).
    * biaxial (Kupfer-Gerstle): per station, principal stresses of the bending fibre stress (both
      fibres) with the peak shell shear; sigma_1 <= f_t/FS (1 - 0.8 |sigma_2| / (f'c/FS))
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and

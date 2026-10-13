@@ -12,10 +12,29 @@ flare_deg = 0.0           # outward lean of the sides above the waterline, deg f
 
 # A design must pass EVERY load case. Seats are knee positions from the bow;
 # omit seats_in to space the paddlers evenly.
+# ASCE race crews. Weights other than 2M are PLACEHOLDERS: replace with team weights.
 [[load_case]]
 name = "2M"
 weights_lb = [175.0, 165.0]
 # seats_in = [80.0, 160.0]
+
+[[load_case]]
+name = "2F"
+weights_lb = [140.0, 130.0]     # placeholder: replace with team weights
+
+# 3M, 3F and 4_coed: ready to enable. Off with the current inputs because off1 then fails the
+# GM gate (3M GM -0.63, 3F 0.11, 4_coed -1.03 in < gm_min 0.25 at the assumed crew_cg_in = 12).
+# [[load_case]]
+# name = "3M"
+# weights_lb = [175.0, 165.0, 170.0]   # placeholder: replace with team weights
+#
+# [[load_case]]
+# name = "3F"
+# weights_lb = [140.0, 130.0, 135.0]   # placeholder: replace with team weights
+#
+# [[load_case]]
+# name = "4_coed"
+# weights_lb = [175.0, 140.0, 130.0, 165.0]   # placeholder: replace with team weights
 
 [material]
 strength_model = "fit"          # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
@@ -47,7 +66,12 @@ knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on
 knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
 knee_spacing_in = 8.0     # centre-to-centre knee spacing
 pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
-d_over_t = 0.5            # effective depth to the mesh / wall thickness
+layers = 2                # equal casting passes (mesh fits between two)
+mesh_after_layer = 1      # mesh laid after this pass (1..layers-1)
+mold = "male"             # "male": pass 1 is the inside (knee) face; "female": pass 1 is the outside
+                          # d = knee face to mesh: male k/layers * t, female (layers-k)/layers * t.
+                          # 3 passes, mesh after 2, t 0.375: male d 0.25, female d 0.125 in.
+                          # Or instead of these three: d_over_t = 0.5 (explicit override)
 
 [stability]
 crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)

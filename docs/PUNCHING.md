@@ -19,7 +19,8 @@ Both treat the knee (plus pad) as a round contact of diameter
 
 ### `method = "aci_22_6"`: Table 22.6.5.2 (reinforced two-way slab), the default
 
-* Effective depth `d = d_over_t * t` (mesh at mid-wall: `d_over_t = 0.5`).
+* Effective depth `d` = distance from the face the knee bears on (inside) to the mesh. See
+  "Mesh depth" below.
 * Critical section `d/2` outside the contact (22.6.4.1): perimeter
   `b0 = pi * (d_load + d)`.
 * Demand stress on that section (22.6.1.2): `v_u = P / (b0 * d)`.
@@ -45,6 +46,19 @@ Both treat the knee (plus pad) as a round contact of diameter
   from published ACI 318-19 / 318-25 excerpts; confidence high on the form, check
   the printed code before relying on it in the design paper.
 
+## Mesh depth: casting layers and mold side
+
+The wall is cast in `layers` equal passes with the mesh laid after pass `mesh_after_layer` = k.
+Pass 1 goes against the mold, so the mesh sits k t / layers from the mold face:
+
+* `mold = "male"`: pass 1 is the INSIDE face (the knee face): `d = k / layers * t`.
+* `mold = "female"`: pass 1 is the OUTSIDE face: `d = (layers - k) / layers * t`.
+
+t = 0.375 in, 3 passes, mesh after pass 2: male d = 0.250 in, female d = 0.125 in. On off1 that
+moves the winner from 92.6 lb (male, 51 pcf) to 156.2 lb (female, t 0.5 in, 61 pcf).
+`d_over_t` overrides all three (an error if given with them). Neither given = 2 passes, mesh
+after 1, d = t/2 on either mold; the examples spell that out.
+
 ## How many knees, and how the weight splits
 
 * `knees = 1`: the whole paddler (x dynamic factor 1.2) on one knee. Very conservative.
@@ -56,7 +70,7 @@ Both treat the knee (plus pad) as a round contact of diameter
 
 ## Worked example (examples/canoe.toml, 175 lb paddler, t = 0.375 in)
 
-P = 175 x 1.2 = 210 lb, d = 0.1875 in, b0 = pi (3 + 0.1875) = 10.01 in.
+P = 175 x 1.2 = 210 lb, d = 0.1875 in (2 passes, mesh after 1), b0 = pi (3 + 0.1875) = 10.01 in.
 
 | model | demand v_u (psi) | allowable (psi) | D/C |
 |---|---|---|---|
@@ -87,7 +101,8 @@ the mix and governs every example.
 
 * **Knee pad** (`pad_in`, ASCE allows up to 0.5 in): 0.5 in pad = 4 in contact,
   ~25% more perimeter, ~20% less demand.
-* **Mesh depth** (`d_over_t`): mesh nearer the outside face increases d.
+* **Mesh depth** (`layers`, `mesh_after_layer`, `mold`): mesh farther from the knee face
+  increases d. Which face pass 1 is cast against matters as much as which pass the mesh follows.
 * **A real test**: load a cast panel of the design wall with a knee-sized block
   until it fails. One test replaces every assumption on this page.
 * Hull curvature and the surrounding shell help (the check treats the bottom as
