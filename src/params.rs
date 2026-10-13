@@ -209,12 +209,30 @@ pub struct Punching {
     /// all absent (and no `d_over_t`) means 2 layers, mesh after pass 1 (d = t/2).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<u32>,
-    /// The mesh is laid after pass k, 1 <= k < layers.
+    /// A mesh is laid after pass k, 1 <= k < layers: one pass (`2`) or several
+    /// meshes (`[1, 2]`). Punching uses the mesh farthest from the knee face.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mesh_after_layer: Option<u32>,
+    pub mesh_after_layer: Option<MeshAfter>,
     /// Which mold face pass 1 is cast against (decides which face the mesh is measured from).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mold: Option<Mold>,
+}
+
+/// Passes a mesh is laid after: a single pass or a list (one entry per mesh).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum MeshAfter {
+    One(u32),
+    Many(Vec<u32>),
+}
+
+impl MeshAfter {
+    pub fn passes(&self) -> &[u32] {
+        match self {
+            MeshAfter::One(k) => std::slice::from_ref(k),
+            MeshAfter::Many(ks) => ks,
+        }
+    }
 }
 
 /// Mold type. Pass 1 is cast against the mold, so on a male mold pass 1 is the
@@ -232,6 +250,9 @@ impl Punching {
     /// equal passes sits k t/n from the pass-1 face, so
     /// male (pass 1 inside): d/t = k/n; female (pass 1 outside): d/t = (n-k)/n.
     /// t = 0.375, n = 3, k = 2: male d = 0.25 in, female d = 0.125 in.
+    /// Several meshes: the one farthest from the knee face (the tension face under
+    /// the knee) sets d, assuming it is strong in both directions. 3 passes,
+    /// meshes after 1 and 2: d = 2t/3 on either mold.
     pub fn d_over_t(&self) -> Result<f64> {
         let layer_fields = self.layers.is_some() || self.mesh_after_layer.is_some() || self.mold.is_some();
         if let Some(r) = self.d_over_t {
@@ -243,21 +264,33 @@ impl Punching {
             }
             return Ok(r);
         }
-        let (n, k, mold) = match (self.layers, self.mesh_after_layer, self.mold) {
-            (None, None, None) => (2, 1, Mold::Male),
-            (Some(n), Some(k), Some(m)) => (n, k, m),
+        let (n, ks, mold) = match (self.layers, &self.mesh_after_layer, self.mold) {
+            (None, None, None) => (2, &[1][..], Mold::Male),
+            (Some(n), Some(k), Some(m)) => (n, k.passes(), m),
             _ => bail!("punching: layers, mesh_after_layer and mold must be given together"),
         };
-        if n < 2 || k < 1 || k >= n {
+        if ks.is_empty() {
+            bail!("punching: mesh_after_layer needs at least one pass");
+        }
+        let mut sorted = ks.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != ks.len() {
+            bail!("punching: mesh_after_layer lists a pass twice: {ks:?}");
+        }
+        if n < 2 || ks.iter().any(|&k| k < 1 || k >= n) {
             bail!(
-                "punching: need layers >= 2 and 1 <= mesh_after_layer < layers, got layers = {n}, mesh_after_layer = {k}"
+                "punching: need layers >= 2 and 1 <= mesh_after_layer < layers, got layers = {n}, mesh_after_layer = {ks:?}"
             );
         }
-        let from_pass1 = f64::from(k) / f64::from(n);
-        Ok(match mold {
-            Mold::Male => from_pass1,
-            Mold::Female => 1.0 - from_pass1,
-        })
+        let depth = |k: u32| {
+            let from_pass1 = f64::from(k) / f64::from(n);
+            match mold {
+                Mold::Male => from_pass1,
+                Mold::Female => 1.0 - from_pass1,
+            }
+        };
+        Ok(ks.iter().map(|&k| depth(k)).fold(f64::NEG_INFINITY, f64::max))
     }
 }
 
@@ -694,9 +727,44 @@ mod tests {
     }
 
     fn layered(n: u32, k: u32, mold: Mold) -> Punching {
+        meshes(n, MeshAfter::One(k), mold)
+    }
+
+    fn meshes(n: u32, ks: MeshAfter, mold: Mold) -> Punching {
         let mut pu = Params::load(Path::new("examples/canoe.toml")).unwrap().punching;
-        (pu.d_over_t, pu.layers, pu.mesh_after_layer, pu.mold) = (None, Some(n), Some(k), Some(mold));
+        (pu.d_over_t, pu.layers, pu.mesh_after_layer, pu.mold) = (None, Some(n), Some(ks), Some(mold));
         pu
+    }
+
+    #[test]
+    fn two_meshes_use_the_one_farthest_from_the_knee() {
+        // 3 equal passes, a mesh after pass 1 and after pass 2: one mesh sits 2t/3
+        // from the knee face on either mold.
+        for mold in [Mold::Male, Mold::Female] {
+            let r = meshes(3, MeshAfter::Many(vec![1, 2]), mold).d_over_t().unwrap();
+            assert!((r - 2.0 / 3.0).abs() < 1e-12, "{mold:?}: {r}");
+        }
+        // Order does not matter; a one-entry list equals the single form.
+        let r = meshes(4, MeshAfter::Many(vec![3, 1]), Mold::Female).d_over_t().unwrap();
+        assert!((r - 0.75).abs() < 1e-12);
+        assert_eq!(
+            meshes(3, MeshAfter::Many(vec![2]), Mold::Male).d_over_t().unwrap(),
+            layered(3, 2, Mold::Male).d_over_t().unwrap()
+        );
+        // TOML: integer or list.
+        let base = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let with = |v: &str| {
+            base.replace("layers = 2 ", "layers = 3 ")
+                .replace("mesh_after_layer = 1 ", &format!("mesh_after_layer = {v} "))
+        };
+        let p = Params::parse(&with("[1, 2]"), Path::new("examples")).unwrap();
+        assert_eq!(p.punching.mesh_after_layer, Some(MeshAfter::Many(vec![1, 2])));
+        let p = Params::parse(&with("2"), Path::new("examples")).unwrap();
+        assert_eq!(p.punching.mesh_after_layer, Some(MeshAfter::One(2)));
+        assert!(Params::parse(&with("[1, 3]"), Path::new("examples")).is_err(), "mesh after the last pass");
+        assert!(Params::parse(&with("[2, 2]"), Path::new("examples")).is_err(), "same pass twice");
+        assert!(Params::parse(&with("[]"), Path::new("examples")).is_err(), "no mesh");
+        assert!(Params::parse(&with("\"2\""), Path::new("examples")).is_err(), "not a number");
     }
 
     #[test]
@@ -729,9 +797,12 @@ mod tests {
         assert!(bad(&|pu| pu.d_over_t = Some(0.5)), "d_over_t together with layers");
         assert!(bad(&|pu| pu.mold = None), "layers without mold");
         assert!(bad(&|pu| pu.mesh_after_layer = None), "layers without mesh_after_layer");
-        assert!(bad(&|pu| pu.mesh_after_layer = Some(3)), "mesh after the last pass");
-        assert!(bad(&|pu| pu.mesh_after_layer = Some(0)), "mesh before the first pass");
-        assert!(bad(&|pu| (pu.layers, pu.mesh_after_layer) = (Some(1), Some(1))), "one layer");
+        assert!(bad(&|pu| pu.mesh_after_layer = Some(MeshAfter::One(3))), "mesh after the last pass");
+        assert!(bad(&|pu| pu.mesh_after_layer = Some(MeshAfter::One(0))), "mesh before the first pass");
+        assert!(
+            bad(&|pu| (pu.layers, pu.mesh_after_layer) = (Some(1), Some(MeshAfter::One(1)))),
+            "one layer"
+        );
         assert!(bad(
             &|pu| (pu.layers, pu.mesh_after_layer, pu.mold, pu.d_over_t) = (None, None, None, Some(0.0))
         ));

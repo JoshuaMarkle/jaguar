@@ -286,9 +286,9 @@ const PUNCH = [
   ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
   ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
   ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
-  ['layers', 'Casting passes', '-', 'Number of equal-thickness layers the wall is cast in. The mesh goes between two of them.', 1, 2],
-  ['mesh_after_layer', 'Mesh after pass', '-', 'The mesh is laid after this pass (1 = after the first). Must be less than the number of passes.', 1, 1]];
-const PUNCH_INT = ['layers', 'mesh_after_layer'];
+  ['layers', 'Casting passes', '-', 'Number of equal-thickness layers the wall is cast in. The mesh goes between two of them.', 1, 2]];
+const PUNCH_INT = ['layers'];
+const MESH_T = 'Pass each mesh is laid after (1 = after the first), less than the number of passes. Several meshes: list them, e.g. "1, 2". Punching uses the mesh farthest from the knee face.';
 // [title, note shown muted next to it]
 const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], turning: ['Turning', 'side-wall stress in a turn'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
@@ -361,6 +361,7 @@ function buildForm() {
       row('punching.method', 'Method', pmt, '<select id="punching.method"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select>')
       + row('punching.knees', 'Knees per paddler', pkt, '<select id="punching.knees"><option value="1">1 (all weight on one knee)</option><option value="2">2 (weight shared)</option></select>')
       + PUNCH.map(f => numRow('punching', f)).join('')
+      + row('punching.mesh_after_layer', 'Mesh after pass', MESH_T, '<input id="punching.mesh_after_layer" placeholder="e.g. 1 or 1, 2">')
       + row('punching.mold', 'Mold', pmo, '<select id="punching.mold"><option value="male">male (pass 1 = inside face)</option><option value="female">female (pass 1 = outside face)</option></select>')
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
     + section('search', FIELDS.search.map(triRow).join(''))
@@ -448,6 +449,7 @@ function fillForm(p, hulls) {
   // No layer fields in the file = 2 passes, mesh after 1 (d = t/2), same as the engine default.
   const lay = { layers: pu.layers ?? 2, mesh_after_layer: pu.mesh_after_layer ?? 1 };
   for (const [k] of PUNCH) $(`punching.${k}`).value = k in lay ? lay[k] : pu[k];
+  $('punching.mesh_after_layer').value = [lay.mesh_after_layer].flat().join(', ');
   $('punching.mold').value = pu.mold || 'male';
   $('punching.d_over_t').value = pu.d_over_t ?? '';
   if (p.hull.flare_deg === undefined) p.hull.flare_deg = 0;
@@ -509,7 +511,12 @@ function formToml() {
   const dot = g('punching.d_over_t').trim();
   for (const [k] of PUNCH) if (!PUNCH_INT.includes(k)) out.push(`${k} = ${fl(g('punching.' + k))}`);
   if (dot !== '') out.push(`d_over_t = ${fl(dot)}`);
-  else out.push(`layers = ${int('punching.layers')}`, `mesh_after_layer = ${int('punching.mesh_after_layer')}`, `mold = ${tstr(g('punching.mold'))}`);
+  else {
+    const ks = g('punching.mesh_after_layer').split(',').map(v => v.trim());
+    if (ks.some(v => v === '' || !Number.isInteger(Number(v)) || Number(v) < 0)) throw new Error('punching.mesh_after_layer: not whole numbers: "' + g('punching.mesh_after_layer') + '"');
+    const mesh = ks.length === 1 ? ks[0] : `[${ks.join(', ')}]`;
+    out.push(`layers = ${int('punching.layers')}`, `mesh_after_layer = ${mesh}`, `mold = ${tstr(g('punching.mold'))}`);
+  }
   out.push('');
   if (shape) {
     out.push('[shape_search]');

@@ -58,6 +58,12 @@ t = 0.375 in, 3 passes, mesh after pass 2: male d = 0.250 in, female d = 0.125 i
 moves the winner from 93.3 lb (male, t 0.375 in, 55 pcf; punching D/C 0.71: lighter mixes fail
 GM at the 12 in depth freeboard needs, not punching) to 138.0 lb
 (female, t 0.5 in, 61 pcf; punching governs at D/C 0.93).
+Several meshes: `mesh_after_layer = [1, 2]`. Under the knee the outside face is in tension, so
+the mesh farthest from the knee face sets d (ACI: depth to the tension reinforcement). 3 equal
+passes with a mesh after 1 and 2 put one mesh 2t/3 from the knee face on either mold: d/t = 2/3.
+That assumes the mesh is strong both ways. One-direction mesh (fiberglass) laid crosswise:
+ACI averages d over the two directions, so give `d_over_t` = mean of the two mesh depths
+(0.5 for the 3-pass case).
 `d_over_t` overrides all three (an error if given with them). Neither given = 2 passes, mesh
 after 1, d = t/2 on either mold; the examples spell that out.
 

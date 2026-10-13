@@ -582,7 +582,8 @@ mod tests {
         let g = box_grid(3);
         let sec = crate::section::sections(&g, 0.375);
         let mut pu = pu1();
-        (pu.d_over_t, pu.layers, pu.mesh_after_layer) = (None, Some(3), Some(2));
+        (pu.d_over_t, pu.layers, pu.mesh_after_layer) =
+            (None, Some(3), Some(crate::params::MeshAfter::One(2)));
         let dc = |m| {
             let mut q = pu.clone();
             q.mold = Some(m);

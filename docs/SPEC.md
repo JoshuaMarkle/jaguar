@@ -87,7 +87,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    * knee punching for the heaviest paddler, ACI 318-19 Table 22.6.5.2 or plain Table 14.5.5.1,
      one or two knees (docs/PUNCHING.md). Effective depth d (knee/inside face to mesh) comes from
      `[punching] layers`, `mesh_after_layer` (k) and `mold`: male d = k/layers t, female
-     d = (layers-k)/layers t. `d_over_t` is an explicit override and an error together with them;
+     d = (layers-k)/layers t. `mesh_after_layer` may list several meshes (`[1, 2]`); the one
+     farthest from the knee face sets d. `d_over_t` is an explicit override and an error together with them;
      with neither, 2 layers and mesh after 1 (d = t/2).
    * biaxial (Kupfer-Gerstle): per station, principal stresses of the bending fibre stress (both
      fibres) with that station's shell shear and, with `[turning]` (`speed_mps`, `radius_in`), the
