@@ -105,15 +105,35 @@ fn hull_line(c: &Candidate) -> String {
     s
 }
 
-/// One winner line per load case: resolved seats (in from bow) and its D/C.
+/// One winner line per load case: seats bow to stern (knee x in from bow @
+/// paddler lb), their source, the +/- variance checked, and the D/C.
 fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
-    let seats: Vec<String> = k.seats_in.iter().map(|s| format!("{s:.0}")).collect();
+    let order: Vec<usize> = if k.crew_order.len() == k.seats_in.len() {
+        k.crew_order.clone()
+    } else {
+        (0..k.seats_in.len()).collect()
+    };
+    let seats: Vec<String> = order
+        .iter()
+        .map(|&j| match k.weights_lb.get(j) {
+            Some(w) => format!("{:.0}@{w:.0}", k.seats_in[j]),
+            None => format!("{:.0}", k.seats_in[j]),
+        })
+        .collect();
+    use crate::seats::SeatSource;
+    let src = match k.seat_source {
+        Some(SeatSource::Given) => " given",
+        Some(SeatSource::Even) => " even",
+        Some(SeatSource::Auto) => " auto",
+        None => "",
+    };
+    let var = if k.seat_variance_in > 0.0 { format!(" +/-{}", k.seat_variance_in) } else { String::new() };
     let state = match (&k.error, &k.verdict) {
         (Some(e), _) => format!("error: {}", e.chars().take(40).collect::<String>()),
         (None, Some(v)) => format!("D/C {:.3}  fb {:.2} in", v.dc, v.freeboard_in),
         (None, None) => "-".to_string(),
     };
-    format!("        case {:<12} seats [{}] in  {state}", k.name, seats.join(", "))
+    format!("        case {:<12} seats [{}] in{src}{var}  {state}", k.name, seats.join(", "))
 }
 
 /// Number with up to 4 decimals, trailing zeros dropped (0.0625, 58, 55.634).
@@ -466,7 +486,10 @@ mod tests {
             cases: vec![crate::optimize::CaseDiagrams {
                 name: "race".into(),
                 seats_in: vec![60.0, 180.0],
-                weights_lb: vec![160.0, 160.0],
+                weights_lb: vec![160.0, 150.0],
+                crew_order: vec![0, 1],
+                seat_source: Some(crate::seats::SeatSource::Auto),
+                seat_variance_in: 3.0,
                 ..Default::default()
             }],
         }
@@ -482,7 +505,7 @@ mod tests {
         show(&l);
         let s = l.join("\n");
         assert!(s.contains("VERIFIED at 81 stations (D/C 0.783)"));
-        assert!(s.contains("case race         seats [60, 180] in"), "{s}");
+        assert!(s.contains("case race         seats [60@160, 180@150] in auto +/-3  "), "{s}");
         assert!(!s.contains("NOT VERIFIED"));
         assert!(!s.contains("WARNING"));
         assert!(!s.contains("L in"));

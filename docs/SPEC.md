@@ -25,7 +25,7 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 ### `canoe.toml`
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
-`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`. Paths are relative to the toml.
+`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`, `[seats]`. Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
 ### `jaguar-hull/1` (hull geometry, JSON)
@@ -52,11 +52,20 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    girth follows the hull: waterline segments with zero half-breadth at both ends (below the
    rockered keel, the closed stem) are not wall. Same rule for the wetted surface in drag.
 3. **Equilibrium**: self weight w = A*rho/1728 lb/in. Crew = weight * `dynamic_load_factor`, each
-   paddler on a `knee_patch_in` patch at their seat (default seats L*(i+1)/(n+1)). Draft and trim
-   are solved by bracketing so fresh-water buoyancy (62.4 pcf) balances force and moment, then
+   paddler on a `knee_patch_in` patch at their seat. Draft and trim
+   are solved (Newton, bracketing fallback) so fresh-water buoyancy (62.4 pcf) balances force and moment, then
    q -> V -> M by integration. Free-free closure: |V(L)| <= 1e-3 W, |M(L)| <= 1e-3 W L.
    Also gives loaded freeboard (D minus local draft, min over stations) and transverse GM_T
    (crew CG at `stability.crew_cg_in`).
+   **Seats** (`src/seats.rs`): `seats_in` if given; else `[seats] auto = true` (default) picks knee
+   positions and crew order (every distinct order, <= 4 paddlers) minimizing the highest
+   seat-dependent utilization max(D/C without punching / dc_search, 1 - (fb - fb_min)/s,
+   1 - (GM - gm_min)/s), s = max(min, 1 in); knees >= `spacing_min_in` apart within
+   [`bow_clear_in`, L - `stern_clear_in`]. Solved once per (t, depth) at the middle density of the
+   axis and reused for every density and for verify. `auto = false`: evenly spaced L(i+1)/(k+1).
+   Every case is then checked at the nominal seats and all 2^k corners with each knee moved
+   +/- `variance_in` (default 3 in); the case verdict is the worst sample, freeboard and GM the
+   minimum. Search candidates stop sampling at the first sample that misses a gate.
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
    vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
    optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (per-mix means
@@ -88,7 +97,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
      profile (h = local waterline - keel), each side a cantilever from the keel:
      sigma_y = 3 p h^2 / t^2 (`check::hoop_psi`). Absent = sigma_y 0
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
-   GM_T >= `gm_min_in` for every load case, and, with `[flotation]`, the canoe floats swamped
+   GM_T >= `gm_min_in` for every load case (and seat sample), and, with `[flotation]`, the canoe floats swamped
    (`src/flotation.rs`): wall volume + sealed bow and stern air pockets (equal length l from each
    tip, full hull interior up to D = enclosed area minus wall area) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
    by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are
@@ -121,11 +130,14 @@ nearest). `search_space`: per searched variable (thickness, density, depth, then
 sits on (`min`/`max`) and `limit` when that bound is real (`buildable floor`, `mix data`,
 `tested mixes`). `on_grid_edge` = a wall variable on a bound with no limit; shape bounds are listed,
 not flagged. `diagrams` is the governing case at verification resolution. `cases` has one entry
-per `[[load_case]]` (input order): name, `seats_in` actually used (given or evenly spaced),
-weights, draft, trim, GM, freeboard, x, V, M, tension/compression/shear stress, waterline, and
+per `[[load_case]]` (input order): name, nominal `seats_in` (`weights_lb` order), `crew_order`
+(paddler indices bow to stern), `seat_source` (given/even/auto), `seat_variance_in`,
+`verdict_seats_in` (the sample the verdict comes from), weights, draft, trim (nominal seats), GM,
+freeboard (worst sample), x, V, M, tension/compression/shear stress, waterline, and
 per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at
-masked tip stations, same formulas as the checks), plus that case's verdict. A case whose equilibrium fails carries `error`
-and no numbers. The terminal prints one seats + D/C line per case under the winner, the mix provenance
+masked tip stations, same formulas as the checks; nominal seats), plus that case's verdict. A case whose equilibrium fails carries `error`
+and no numbers. The terminal prints one line per case under the winner (seats bow to stern as
+knee@lb, source, variance, D/C), the mix provenance
 line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
@@ -161,7 +173,7 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
 * `GET /api/export?format=step|stl` in the web UI exports the last run's winner (with pockets; stations refined below the pocket length).
 
 ## Performance
-`examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.1 s on a laptop (release).
+`examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.2 s on a laptop (release; about 2 CPU-s, mostly drag and the seat corners).
 Keep it under 1 s. `examples/shape_opt.toml` must stay under 60 s.
 
 ## Out of scope (do not build)

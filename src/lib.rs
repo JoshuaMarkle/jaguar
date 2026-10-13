@@ -28,6 +28,7 @@ pub mod optimize;
 pub mod params;
 pub mod report;
 pub mod resistance;
+pub mod seats;
 pub mod section;
 pub mod serve;
 pub mod shapeopt;

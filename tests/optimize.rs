@@ -1,6 +1,7 @@
 use jaguar::hull::Hull;
 use jaguar::optimize::{self, Progress};
 use jaguar::params::Params;
+use jaguar::seats::SeatSource;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -215,6 +216,8 @@ fn winner_carries_diagrams_matching_bending_check() {
 #[test]
 fn winner_has_diagrams_for_every_load_case() {
     let (mut p, h) = example();
+    // Even seats, nominal only: per-station D/C then equals the case verdict.
+    (p.seats.auto, p.seats.variance_in) = (false, 0.0);
     let mut c2 = p.load_cases[0].clone();
     c2.name = "seated".into();
     c2.seats_in = Some(vec![90.0, 170.0]);
@@ -232,6 +235,9 @@ fn winner_has_diagrams_for_every_load_case() {
             None => (0..n).map(|i| k.diagrams.x_in[0] + len * (i + 1) as f64 / (n + 1) as f64).collect(),
         };
         assert_eq!(k.seats_in, want);
+        assert_eq!(k.verdict_seats_in, want);
+        let src = if lc.seats_in.is_some() { SeatSource::Given } else { SeatSource::Even };
+        assert_eq!(k.seat_source, Some(src));
         let d = &k.diagrams;
         assert_eq!(d.x_in.len(), w.verify_stations);
         for v in [

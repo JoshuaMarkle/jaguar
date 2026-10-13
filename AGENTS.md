@@ -22,6 +22,7 @@ src/equilibrium.rs  float + trim, GM, V(x), M(x)
 src/flotation.rs    swamped flotation: bow/stern air pocket length
 src/resistance.rs   Michell wave + ITTC friction drag
 src/check.rs        bending/compression/shear/punching (docs/PUNCHING.md), freeboard
+src/seats.rs        auto seats + crew order, seat-variance samples
 src/optimize.rs     wall grid search, verify at 2n-1 stations, progress events
 src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt

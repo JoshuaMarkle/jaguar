@@ -1,7 +1,7 @@
 # Plan
 
 Open work only. Done tasks live in `git log` (`T<n>:` commits). Audited against the code on
-2026-10-13: all tests pass, examples re-run (`docs/HULLS.md` current), `canoe.toml` 0.09 s,
+2026-10-13: all tests pass, examples re-run (`docs/HULLS.md` current), `canoe.toml` 0.2 s,
 `shape_opt.toml` 20 s.
 
 Knee punching governs every design (D/C 0.90, bending 0.3, biaxial 0.32), so bending-only work will
@@ -28,9 +28,6 @@ answer more trustworthy first.
 
 ## B. Physics additions (need the user's approval and a SPEC update)
 
-- **B2. Auto seat solver.** Per case, seats that minimize the wall that passes, then the check
-  enveloped over +/- `seat_variance_in`; every seat ordering of the crew. Manual `seats_in` overrides.
-  Can move hogging ~40%. Pays off only after punching is relieved (A1, C1).
 - **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
   dc_search / dc_verify margin.
 
@@ -64,7 +61,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |
 | Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
 | LRFD 1.2 / 1.6 | done (T46) |
-| Auto seat solver + variance, manual override | manual done, auto open (B2) |
+| Auto seat solver + variance, manual override | done (T57, `[seats]`) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |

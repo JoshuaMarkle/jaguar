@@ -28,37 +28,63 @@ fn trapz(f: &[f64], x: &[f64]) -> f64 {
     (1..x.len()).map(|i| 0.5 * (f[i] + f[i - 1]) * (x[i] - x[i - 1])).sum()
 }
 
-fn brent(f: impl Fn(f64) -> Result<f64>, mut a: f64, mut b: f64, tol: f64) -> Result<f64> {
+/// Root of `f` in [a, b] to `tol` (Brent 1973: inverse quadratic /
+/// secant steps, bisection when they misbehave). Err if not bracketed.
+fn brent(f: impl Fn(f64) -> Result<f64>, a: f64, b: f64, tol: f64) -> Result<f64> {
+    let (mut a, mut b) = (a, b);
     let (mut fa, mut fb) = (f(a)?, f(b)?);
+    if fa == 0.0 {
+        return Ok(a);
+    }
     if fa * fb > 0.0 {
         bail!("root not bracketed");
     }
+    let (mut c, mut fc) = (b, fb);
+    let (mut d, mut e) = (b - a, b - a);
     for _ in 0..200 {
-        let m = 0.5 * (a + b);
-        let s = if fb != fa { b - fb * (b - a) / (fb - fa) } else { m };
-        let x = if (s - a) * (s - b) < 0.0 { s } else { m };
-        let fx = f(x)?;
-        if fx == 0.0 || (b - a).abs() < tol {
-            return Ok(x);
+        if (fb > 0.0) == (fc > 0.0) && fc != 0.0 {
+            (c, fc) = (a, fa);
+            d = b - a;
+            e = d;
         }
-        // keep bracket; fall back to bisection to guarantee shrink
-        let fm = f(m)?;
-        if fa * fx < 0.0 {
-            b = x;
-            fb = fx;
+        if fc.abs() < fb.abs() {
+            (a, fa) = (b, fb);
+            (b, fb) = (c, fc);
+            (c, fc) = (a, fa);
+        }
+        let tol1 = 2.0 * f64::EPSILON * b.abs() + 0.5 * tol;
+        let xm = 0.5 * (c - b);
+        if xm.abs() <= tol1 || fb == 0.0 {
+            return Ok(b);
+        }
+        if e.abs() >= tol1 && fa.abs() > fb.abs() {
+            let s = fb / fa;
+            let (mut p, mut q) = if a == c {
+                (2.0 * xm * s, 1.0 - s)
+            } else {
+                let (qq, r) = (fa / fc, fb / fc);
+                (s * (2.0 * xm * qq * (qq - r) - (b - a) * (r - 1.0)), (qq - 1.0) * (r - 1.0) * (s - 1.0))
+            };
+            if p > 0.0 {
+                q = -q;
+            }
+            p = p.abs();
+            if 2.0 * p < (3.0 * xm * q - (tol1 * q).abs()).min((e * q).abs()) {
+                e = d;
+                d = p / q;
+            } else {
+                d = xm;
+                e = d;
+            }
         } else {
-            a = x;
-            fa = fx;
+            d = xm;
+            e = d;
         }
-        if fa * fm < 0.0 && m < b && m > a {
-            b = m;
-            fb = fm;
-        } else if m > a && m < b {
-            a = m;
-            fa = fm;
-        }
+        (a, fa) = (b, fb);
+        b += if d.abs() > tol1 { d } else { tol1.copysign(xm) };
+        fb = f(b)?;
     }
-    Ok(0.5 * (a + b))
+    Ok(b)
 }
 
 pub fn solve(
@@ -115,11 +141,66 @@ pub fn solve(
         Ok((trapz(&b.iter().zip(x).map(|(b, xi)| b * (xi - xc)).collect::<Vec<_>>(), x) - mw) / (wtot * l))
     };
     let thmax = 0.5 * zt;
-    if mres(-thmax)? > 0.0 || mres(thmax)? < 0.0 {
-        bail!("trim balance not bracketed");
-    }
-    let th = brent(mres, -thmax, thmax, 1e-9)?;
-    let d0 = draft_for(th)?;
+    // Fast path: Newton on (draft, trim) with the Jacobian of the same
+    // piecewise-linear buoyancy. Accepted only if it converges inside the
+    // bracket box; otherwise the nested bracketing below decides (and gives
+    // the "sinks" / "not bracketed" errors).
+    let tw: Vec<f64> = (0..n).map(|i| 0.5 * (x[(i + 1).min(n - 1)] - x[i.saturating_sub(1)])).collect();
+    let newton = || -> Option<(f64, f64)> {
+        let c = WATER_PCF / IN3_PER_FT3;
+        let (mut d0, mut th) = (0.5 * zt, 0.0);
+        for _ in 0..50 {
+            let [mut f1, mut f2, mut j11, mut j12, mut j21, mut j22] = [0.0; 6];
+            for i in 0..n {
+                let r = x[i] - xc;
+                let d = d0 + th * r / l;
+                let dc = d.clamp(0.0, zt);
+                let k = z.partition_point(|&v| v <= dc).clamp(1, nz - 1);
+                let dz = z[k] - z[k - 1];
+                let t = (dc - z[k - 1]) / dz;
+                let s = cum[i * nz + k - 1] * (1.0 - t) + cum[i * nz + k] * t;
+                let g = if d > 0.0 && d < zt { (cum[i * nz + k] - cum[i * nz + k - 1]) / dz } else { 0.0 };
+                let (b, gb) = (tw[i] * s * c, tw[i] * g * c);
+                f1 += b;
+                f2 += b * r;
+                j11 += gb;
+                j12 += gb * r / l;
+                j21 += gb * r;
+                j22 += gb * r * r / l;
+            }
+            let (r1, r2) = (f1 - wtot, f2 - mw);
+            let det = j11 * j22 - j12 * j21;
+            if !(det.is_finite() && det != 0.0) {
+                return None;
+            }
+            let dd = (r1 * j22 - r2 * j12) / det;
+            let dt = (j11 * r2 - j21 * r1) / det;
+            // Halve a step that would leave the box (draft in (0, zt), |trim| < thmax).
+            let mut lam = 1.0;
+            while !(d0 - lam * dd > 0.0 && d0 - lam * dd < zt && (th - lam * dt).abs() < thmax) {
+                lam *= 0.5;
+                if lam < 1e-6 {
+                    return None;
+                }
+            }
+            d0 -= lam * dd;
+            th -= lam * dt;
+            if dd.abs() < 1e-12 && dt.abs() < 1e-10 {
+                return Some((d0, th));
+            }
+        }
+        None
+    };
+    let (d0, th) = match newton() {
+        Some(r) => r,
+        None => {
+            if mres(-thmax)? > 0.0 || mres(thmax)? < 0.0 {
+                bail!("trim balance not bracketed");
+            }
+            let th = brent(mres, -thmax, thmax, 1e-9)?;
+            (draft_for(th)?, th)
+        }
+    };
     // Distributed loads (buoyancy - self weight) integrate by trapezoid; crew
     // patches are added in closed form so they are exact at any station spacing.
     let q: Vec<f64> = buoy(d0, th).iter().zip(&w_hull).map(|(b, w)| b - w).collect();
@@ -196,7 +277,7 @@ fn metacentric_height(
 /// (Sampling the patch at nodes, as the golden reference script does, catches 2 or 3 nodes
 /// depending on seat position, losing up to a third of a paddler and breaking
 /// free-free closure for 3+ crew.)
-fn patch_vm(x: f64, xc: f64, w: f64) -> (f64, f64) {
+pub fn patch_vm(x: f64, xc: f64, w: f64) -> (f64, f64) {
     let a = xc - w / 2.0;
     if x <= a {
         (0.0, 0.0)

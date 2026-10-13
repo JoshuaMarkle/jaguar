@@ -36,6 +36,10 @@ pub struct Params {
     /// check (`check::hoop_psi`). Absent = no turning load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turning: Option<Turning>,
+    /// Seat placement for load cases without `seats_in` and the seat
+    /// tolerance every case is checked over (src/seats.rs). Absent = defaults.
+    #[serde(default)]
+    pub seats: Seats,
 }
 
 /// Steady turn for the biaxial check: lateral acceleration V^2 / R.
@@ -53,6 +57,31 @@ impl Turning {
     pub fn lateral_g(&self) -> f64 {
         let r_m = self.radius_in / crate::units::M_TO_IN;
         self.speed_mps * self.speed_mps / (crate::units::G_MPS2 * r_m)
+    }
+}
+
+/// Where paddlers kneel. Defaults: auto seats, 30 in apart, 36 in from
+/// each end, checked at +/- 3 in.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct Seats {
+    /// Cases without `seats_in`: true = choose seats and crew order with the
+    /// most margin on the seat-dependent gates (src/seats.rs); false = evenly spaced.
+    pub auto: bool,
+    /// Auto seats: minimum knee-to-knee spacing between paddlers, in.
+    pub spacing_min_in: f64,
+    /// Auto seats: no knee closer than this to the bow / stern tip, in.
+    pub bow_clear_in: f64,
+    pub stern_clear_in: f64,
+    /// Every case (auto, even or given seats) must pass with each paddler
+    /// anywhere within +/- this of their seat: the nominal seats and all
+    /// 2^k corners are checked. 0 = nominal seats only.
+    pub variance_in: f64,
+}
+
+impl Default for Seats {
+    fn default() -> Self {
+        Seats { auto: true, spacing_min_in: 30.0, bow_clear_in: 36.0, stern_clear_in: 36.0, variance_in: 3.0 }
     }
 }
 
@@ -446,6 +475,28 @@ impl Params {
                 && s.len() != lc.weights_lb.len()
             {
                 bail!("load_case '{}': seats_in and weights_lb differ in length", lc.name);
+            }
+        }
+        let st = &self.seats;
+        if ![st.spacing_min_in, st.bow_clear_in, st.stern_clear_in, st.variance_in]
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0)
+        {
+            bail!("seats: spacing_min_in, bow_clear_in, stern_clear_in and variance_in must be >= 0");
+        }
+        for lc in &self.load_cases {
+            let k = lc.weights_lb.len();
+            if st.auto && lc.seats_in.is_none() && k > 4 {
+                bail!(
+                    "load_case '{}': auto seats try every crew order, so at most 4 paddlers; give seats_in",
+                    lc.name
+                );
+            }
+            if st.variance_in > 0.0 && k > 6 {
+                bail!(
+                    "load_case '{}': seats.variance_in checks 2^k seat corners, so at most 6 paddlers",
+                    lc.name
+                );
             }
         }
         if self.material.knee_patch_in <= 0.0 {

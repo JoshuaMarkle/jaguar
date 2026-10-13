@@ -223,6 +223,11 @@ const FIELDS = {
     ['factor_of_safety', 'Factor of safety', '-', 'Strength is divided by this. Must be at least 1.', 'any', 1],
     ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight to cover paddling impact.', 'any', 0],
     ['knee_patch_in', 'Knee patch length', 'in', 'Length of the knee contact patch. Never zero: a point load makes D/C stop converging.', 'any', 0]],
+  seats: [
+    ['spacing_min_in', 'Min seat spacing', 'in', 'Auto seats: knees of neighbouring paddlers at least this far apart.', 'any', 0],
+    ['bow_clear_in', 'Bow clearance', 'in', 'Auto seats: no knee closer than this to the bow tip.', 'any', 0],
+    ['stern_clear_in', 'Stern clearance', 'in', 'Auto seats: no knee closer than this to the stern tip.', 'any', 0],
+    ['variance_in', 'Seat variance', 'in', 'Every load case must also pass with each knee moved up to this far forward or aft of its seat (all corners are checked). 0 = exact seats only.', 'any', 0]],
   stability: [
     ['crew_cg_in', 'Crew CG height', 'in', 'Height of the paddlers\' centre of gravity above the keel. Kneeling paddlers are about 12 in (an assumption, not a measurement). Higher = tippier.', 'any', 0],
     ['gm_min_in', 'Min GM', 'in', 'Minimum metacentric height (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
@@ -304,10 +309,10 @@ function lcBlock(lc) {
   const d = document.createElement('div'); d.className = 'lc';
   const tn = 'Name of this crew arrangement.';
   const tw = 'Paddler weights in lb, bow to stern, comma separated.';
-  const ts = 'Optional knee positions in inches from the bow, one per paddler, comma separated. Leave empty to space paddlers evenly.';
+  const ts = 'Optional knee positions in inches from the bow, one per paddler, comma separated. Leave empty for auto seats (or evenly spaced with Auto seats off).';
   d.innerHTML = row('', 'Name', tn, `<input class="lcname" value="${esc(lc.name || '')}">`)
     + row('', 'Weights', tw, `<input class="lcw" value="${(lc.weights_lb || []).join(', ')}">`, 'lb')
-    + row('', 'Seats', ts, `<input class="lcs" placeholder="evenly spaced" value="${(lc.seats_in || []).join(', ')}">`, 'in')
+    + row('', 'Seats', ts, `<input class="lcs" placeholder="auto" value="${(lc.seats_in || []).join(', ')}">`, 'in')
     + row('', '', 'Delete this load case.', '<button type="button" class="btn soft">Remove case</button>');
   d.querySelector('button').onclick = () => d.remove();
   $('cases').appendChild(d);
@@ -344,7 +349,9 @@ function buildForm() {
       + row('shape.rocker_in.0', 'End rocker', ROCKER_T, `<div class="multi">${rocker(0)}${rocker(1)}</div>`, 'in')
       + '<div class="group">Search effort</div>'
       + SHAPE_INT.map(intRow).join(''), 'shapefs')
-    + section('crew', '<div id="cases" style="display:grid;gap:var(--s2)"></div>' + row('addcase', '', 'Add another crew arrangement. The design must pass every load case.', '<button type="button" class="btn soft" id="addcase">Add load case</button>'))
+    + section('crew', '<div id="cases" style="display:grid;gap:var(--s2)"></div>' + row('addcase', '', 'Add another crew arrangement. The design must pass every load case.', '<button type="button" class="btn soft" id="addcase">Add load case</button>')
+      + row('seats.auto', 'Auto seats', 'Cases without seats: place the knees and choose the crew order that keep the most margin on bending, freeboard and GM. Off = evenly spaced.', '<input type="checkbox" class="switch" id="seats.auto">')
+      + FIELDS.seats.map(f => numRow('seats', f)).join(''))
     + section('material',
       row('material.mix_data', 'Mix data file', mt, '<input id="material.mix_data">')
       + row('material.strength_model', 'Strength model', smt, '<select id="material.strength_model"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select>')
@@ -464,6 +471,8 @@ function fillForm(p, hulls) {
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
+  const st = p.seats || { auto: true, spacing_min_in: 30, bow_clear_in: 36, stern_clear_in: 36, variance_in: 3 };
+  $('seats.auto').checked = !!st.auto; for (const [k] of FIELDS.seats) $(`seats.${k}`).value = st[k];
 }
 // TOML from the form. Numbers are written so they always parse as TOML floats where params.rs wants f64.
 const fl = v => { const n = Number(v); if (v === '' || !isFinite(n)) throw new Error('not a number: "' + v + '"'); return Number.isInteger(n) ? n.toFixed(1) : String(n); };
@@ -482,6 +491,9 @@ function formToml() {
     if (seats.length) out.push(`seats_in = [${seats.map(fl).join(', ')}]`);
     out.push('');
   }
+  out.push('[seats]', `auto = ${$('seats.auto').checked}`);
+  for (const [k] of FIELDS.seats) out.push(`${k} = ${fl(g('seats.' + k))}`);
+  out.push('');
   for (const sec of ['material', 'search', 'gates', 'stability', 'objective']) {
     out.push(`[${sec}]`);
     if (sec === 'material') out.push(`strength_model = ${tstr(g('material.strength_model'))}`);

@@ -22,6 +22,7 @@ use crate::hullgen::ShapeParams;
 use crate::mix::{MixProvenance, StrengthFit};
 use crate::params::{LoadCase, ObjectiveKind, Params, StrengthModel, range};
 use crate::resistance::{resistance, weighted_resistance};
+use crate::seats::{self, CaseSeats, SeatSource};
 use crate::section::{Sections, sections};
 use anyhow::Result;
 use rayon::prelude::*;
@@ -95,13 +96,24 @@ pub struct Winner {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct CaseDiagrams {
     pub name: String,
-    /// Knee x per paddler actually used, in from bow (seats_in or even spacing).
+    /// Nominal knee x per paddler (`weights_lb` order), in from bow.
     pub seats_in: Vec<f64>,
+    /// Paddler indices bow to stern.
+    pub crew_order: Vec<usize>,
+    /// given | even | auto (None only in hand-built values).
+    pub seat_source: Option<SeatSource>,
+    /// Knees checked at +/- this (`seats.variance_in`).
+    pub seat_variance_in: f64,
+    /// Seats of the sample `verdict` comes from (= seats_in when variance is 0).
+    pub verdict_seats_in: Vec<f64>,
     pub weights_lb: Vec<f64>,
     /// Set when equilibrium failed for this case; all numbers below are then
     /// absent/empty (never a sentinel). With an error, verdict is None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Draft and trim at the nominal seats; GM and freeboard the worst over
+    /// the seat samples (what the gates see). Diagrams and per-station D/C are
+    /// at the nominal seats, `verdict` is the worst sample.
     pub draft_in: Option<f64>,
     pub trim_in: Option<f64>,
     pub gm_in: Option<f64>,
@@ -392,17 +404,29 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         ds.par_iter().map(|&d| Grid::build_flared(hull, d, n, params.hull.flare_deg)).collect();
     let pairs: Vec<(usize, usize)> =
         (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
+    // Seats per wall geometry (t, depth), solved at the middle density of the
+    // axis and shared by every density (src/seats.rs); verify reuses them.
+    let mid = &axis[axis.len() / 2];
+    let plans: Vec<Result<Vec<CaseSeats>, String>> = pairs
+        .par_iter()
+        .map(|&(gi, ti)| {
+            let sec = sections(&grids[gi], ts[ti]);
+            plan_seats(params, &mid.1, &grids[gi], &sec, ts[ti], mid.0).map_err(|e| format!("{e:#}"))
+        })
+        .collect();
     let mut candidates: Vec<(usize, usize, usize, Candidate)> = pairs
         .par_iter()
-        .flat_map_iter(|&(gi, ti)| {
+        .zip(&plans)
+        .flat_map_iter(|(&(gi, ti), plan)| {
             let grid = &grids[gi];
             let t = ts[ti];
             let sec = sections(grid, t);
             let done = &done;
+            let axis = &axis;
             rhos.iter()
                 .enumerate()
-                .map(|(ri, &rho)| {
-                    let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho);
+                .map(move |(ri, &rho)| {
+                    let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, plan, true);
                     c.mix = axis[ri].2.clone();
                     let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                     on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
@@ -424,8 +448,16 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
             let sec = sections(&grid, c.thickness_in);
             let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
-            let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
-            let cases = all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
+            let pi = pairs
+                .iter()
+                .position(|&(gi, ti)| grids[gi].depth == c.depth_in && ts[ti] == c.thickness_in)
+                .ok_or_else(|| anyhow::anyhow!("winner wall not on the search grid"))?;
+            let plan = &plans[pi];
+            let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, plan, false);
+            // A winner passed, so its seats resolved.
+            let seats = plan.as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
+            let cases =
+                all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, seats);
             let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
             let search_space = search_space(params, &fit, c)?;
             let wall = &search_space[..3];
@@ -459,7 +491,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     })
 }
 
-/// Resolved knee x per paddler for `case`: `seats_in`, or evenly spaced.
+/// Knee x per paddler for `case` without auto seats: `seats_in`, or evenly spaced.
 pub fn resolved_seats(case: &crate::params::LoadCase, grid: &Grid) -> Vec<f64> {
     let n = grid.nx();
     let length = grid.x[n - 1] - grid.x[0];
@@ -478,15 +510,20 @@ pub fn all_case_diagrams(
     sec: &Sections,
     t: f64,
     rho: f64,
+    seats: &[CaseSeats],
 ) -> Vec<CaseDiagrams> {
     params
         .load_cases
         .iter()
-        .map(|lc| match case_diagrams(params, fit, grid, sec, t, rho, &lc.name) {
+        .zip(seats)
+        .map(|(lc, s)| match case_diagrams(params, fit, grid, sec, t, rho, &lc.name, s) {
             Ok(c) => c,
             Err(e) => CaseDiagrams {
                 name: lc.name.clone(),
-                seats_in: resolved_seats(lc, grid),
+                seats_in: s.seats_in.clone(),
+                crew_order: s.crew_order.clone(),
+                seat_source: Some(s.source),
+                seat_variance_in: params.seats.variance_in,
                 weights_lb: lc.weights_lb.clone(),
                 error: Some(format!("{e:#}")),
                 ..Default::default()
@@ -557,7 +594,93 @@ pub fn eval_case(
     Ok(CaseEval { service, strength, verdict })
 }
 
+/// Seats of every load case on this wall (`params.load_cases` order): given,
+/// even, or auto (src/seats.rs, scored with [`eval_case`]).
+pub fn plan_seats(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    t: f64,
+    rho: f64,
+) -> Result<Vec<CaseSeats>> {
+    params
+        .load_cases
+        .iter()
+        .map(|case| match seats::fixed(params, case, grid) {
+            Some(s) => Ok(s),
+            None => {
+                let exact = |s: &[f64]| {
+                    let e = eval_case(params, fit, grid, sec, rho, case, s)?;
+                    Ok(seats::score(params, &e.verdict, e.service.gm_in))
+                };
+                seats::auto(params, fit, grid, sec, t, rho, case, &exact)
+                    .map_err(|e| anyhow::anyhow!("{}: {e:#}", case.name))
+            }
+        })
+        .collect()
+}
+
+/// A load case checked over its seat samples (`seats::samples`: nominal,
+/// then the +/- `seats.variance_in` corners).
+pub struct CaseEnvelope {
+    /// At the nominal seats.
+    pub nominal: CaseEval,
+    /// Highest-D/C sample's verdict, freeboard = min over the samples.
+    pub verdict: Verdict,
+    /// Min GM_T over the samples.
+    pub gm_in: f64,
+    /// Seats of the sample `verdict` comes from.
+    pub verdict_seats_in: Vec<f64>,
+}
+
+/// Fails a gate (search D/C, freeboard, GM)?
+fn misses_gate(params: &Params, v: &Verdict, gm: f64) -> bool {
+    !(v.dc <= params.gates.dc_search
+        && v.freeboard_in >= params.gates.freeboard_min_in
+        && gm >= params.stability.gm_min_in)
+}
+
+/// [`eval_case`] over the seat samples. `early_exit`: stop at the first
+/// sample that misses a gate (the case fails either way, so the verdict is
+/// then the worst sample evaluated, not necessarily the worst of all).
+#[allow(clippy::too_many_arguments)]
+pub fn eval_envelope(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    case: &LoadCase,
+    seats: &[f64],
+    early_exit: bool,
+) -> Result<CaseEnvelope> {
+    let mut all = seats::samples(seats, params.seats.variance_in, grid).into_iter();
+    let first = all.next().unwrap_or_default();
+    let nominal = eval_case(params, fit, grid, sec, rho, case, &first)?;
+    let mut env = CaseEnvelope {
+        verdict: nominal.verdict.clone(),
+        gm_in: nominal.service.gm_in,
+        verdict_seats_in: first,
+        nominal,
+    };
+    for s in all {
+        if early_exit && misses_gate(params, &env.verdict, env.gm_in) {
+            break;
+        }
+        let e = eval_case(params, fit, grid, sec, rho, case, &s)?;
+        let fb = env.verdict.freeboard_in.min(e.verdict.freeboard_in);
+        env.gm_in = env.gm_in.min(e.service.gm_in);
+        if e.verdict.dc.is_nan() || e.verdict.dc > env.verdict.dc {
+            (env.verdict, env.verdict_seats_in) = (e.verdict, s);
+        }
+        env.verdict.freeboard_in = fb;
+    }
+    Ok(env)
+}
+
 /// Full per-case diagrams and per-station D/C (same masks and formulas as check.rs).
+#[allow(clippy::too_many_arguments)]
 pub fn case_diagrams(
     params: &Params,
     fit: &StrengthFit,
@@ -566,6 +689,7 @@ pub fn case_diagrams(
     t: f64,
     rho: f64,
     case_name: &str,
+    seats: &CaseSeats,
 ) -> Result<CaseDiagrams> {
     let case = params
         .load_cases
@@ -573,9 +697,9 @@ pub fn case_diagrams(
         .find(|c| c.name == case_name)
         .ok_or_else(|| anyhow::anyhow!("unknown load case {case_name}"))?;
     let n = grid.nx();
-    let seats = resolved_seats(case, grid);
-    let CaseEval { service, strength: loads, verdict } =
-        eval_case(params, fit, grid, sec, rho, case, &seats)?;
+    let env = eval_envelope(params, fit, grid, sec, rho, case, &seats.seats_in, false)?;
+    let CaseEval { service, strength: loads, .. } = env.nominal;
+    let verdict = env.verdict;
     let cap = |name: &str| verdict.checks.iter().find(|c| c.name == name).map_or(f64::NAN, |c| c.capacity);
     let (ft_cap, fc_cap, v_cap) = (cap("bending_tension"), cap("bending_compression"), cap("shear"));
     let dc = |s: f64, c: f64| if c.is_finite() && c > 0.0 { s / c } else { f64::INFINITY };
@@ -585,11 +709,15 @@ pub fn case_diagrams(
     let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
     let mut out = CaseDiagrams {
         name: case.name.clone(),
-        seats_in: seats,
+        seats_in: seats.seats_in.clone(),
+        crew_order: seats.crew_order.clone(),
+        seat_source: Some(seats.source),
+        seat_variance_in: params.seats.variance_in,
+        verdict_seats_in: env.verdict_seats_in,
         weights_lb: case.weights_lb.clone(),
         draft_in: Some(service.draft_in),
         trim_in: Some(service.trim_in),
-        gm_in: Some(service.gm_in),
+        gm_in: Some(env.gm_in),
         freeboard_in: Some(verdict.freeboard_in),
         compression_allow_psi: Some(fc_cap),
         shear_allow_psi: Some(v_cap),
@@ -680,7 +808,19 @@ fn hull_weight(grid: &Grid, sec: &Sections, rho: f64) -> f64 {
     w * rho / 1728.0
 }
 
-fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: f64, rho: f64) -> Candidate {
+/// One candidate over every load case at its planned seats (`plan`, Err = the
+/// seats could not be resolved: the candidate fails with that reason).
+#[allow(clippy::too_many_arguments)]
+fn evaluate(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    t: f64,
+    rho: f64,
+    plan: &Result<Vec<CaseSeats>, String>,
+    early_exit: bool,
+) -> Candidate {
     let beam = 2.0 * grid.y.iter().cloned().fold(0.0, f64::max);
     let mut c = Candidate {
         length_in: grid.x[grid.x.len() - 1] - grid.x[0],
@@ -703,16 +843,22 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
     let (mut gm, mut fb) = (f64::INFINITY, f64::INFINITY);
     // (crew lb, midship draft) of the heaviest load case, for drag
     let mut heaviest: Option<(f64, f64)> = None;
-    for case in &params.load_cases {
-        let seats = resolved_seats(case, grid);
-        let v = match eval_case(params, fit, grid, sec, rho, case, &seats) {
-            Ok(CaseEval { service: loads, verdict, .. }) => {
-                gm = gm.min(loads.gm_in);
+    let plan = match plan {
+        Ok(p) => p,
+        Err(e) => {
+            c.error = Some(format!("seats: {e}"));
+            return c;
+        }
+    };
+    for (case, seats) in params.load_cases.iter().zip(plan) {
+        let v = match eval_envelope(params, fit, grid, sec, rho, case, &seats.seats_in, early_exit) {
+            Ok(env) => {
+                gm = gm.min(env.gm_in);
                 let lb: f64 = case.weights_lb.iter().sum();
                 if heaviest.is_none_or(|(h, _)| lb > h) {
-                    heaviest = Some((lb, loads.draft_in));
+                    heaviest = Some((lb, env.nominal.service.draft_in));
                 }
-                verdict
+                env.verdict
             }
             Err(e) => {
                 c.error = Some(format!("{}: {e:#}", case.name));
