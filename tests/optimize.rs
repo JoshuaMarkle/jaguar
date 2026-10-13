@@ -51,7 +51,7 @@ fn example_finds_verified_winner() {
     // Strength from data/mix_tests.csv; knee punching (ACI 318-19 22.6.5.2,
     // demand on b0*d, two knees with a 60/40 split) governs and needs 58 pcf.
     assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 58.0, 12.0));
-    assert!((c.hull_weight_lb / 105.35 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
+    assert!((c.hull_weight_lb / 98.39 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
     let v = c.verdict.as_ref().unwrap();
     assert!((v.dc - 0.904).abs() < 2e-3, "{}", v.dc);
     assert_eq!(v.governing_check, "punching");

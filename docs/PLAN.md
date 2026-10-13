@@ -28,9 +28,6 @@ answer more trustworthy first.
 - **A9. Mix chart for every measured property**: optional `flexural_psi` / `compressive_psi`
   columns in the CSV, fit each that has data, plot each vs density with its fit line. Derived values
   only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.
-- **A10. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered ends
-  as wall (about 8% heavier than the exported solid on off1). Decide whether to match the export,
-  then re-run examples.
 - **A11. Air pockets in the STEP/STL export**: bulkheads at `air_pocket_in` from each tip, so the mold
   shop sees where the foam/sealed volume goes.
 

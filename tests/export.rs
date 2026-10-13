@@ -80,11 +80,12 @@ fn off1_solid_is_watertight_sized_and_matches_analysis() {
     let beam = 2.0 * h.half_breadth.iter().flatten().cloned().fold(0.0, f64::max);
     assert!((hi[1] - lo[1] - beam).abs() < 0.01, "beam {}", hi[1] - lo[1]);
     assert!(lo[2].abs() < 1e-9 && (hi[2] - 12.0).abs() < 1e-9);
-    // The analysis takes t x the full table girth, which includes zero-breadth waterlines in the
-    // rockered ends (a vertical "wall" on the centreline that does not exist: ~250 in^3 on off1)
-    // and a thin-shell t x girth on the mold line. The real solid is lighter, by under 15%.
+    // The analysis is a thin shell t x mold-line girth (about 1.6% over the true offset wall
+    // amidships) and the export fills its narrow ends solid; on off1 the two nearly cancel
+    // (2926 vs 2928 in^3). Counting the empty waterlines below the rockered keel as wall, as the
+    // analysis once did, put it 7% over the solid.
     let (v, va) = (m.volume(), analysis_volume(&h, &s));
-    assert!(v < va && v > 0.85 * va, "solid {v:.0} vs analysis {va:.0} in^3");
+    assert!((v / va - 1.0).abs() < 0.02, "solid {v:.0} vs analysis {va:.0} in^3");
 }
 
 #[test]
