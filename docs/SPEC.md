@@ -25,7 +25,7 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 ### `canoe.toml`
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
-`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`. Paths are relative to the toml.
+`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`. Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
 ### `jaguar-hull/1` (hull geometry, JSON)
@@ -79,8 +79,12 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
      d = (layers-k)/layers t. `d_over_t` is an explicit override and an error together with them;
      with neither, 2 layers and mesh after 1 (d = t/2).
    * biaxial (Kupfer-Gerstle): per station, principal stresses of the bending fibre stress (both
-     fibres) with that station's shell shear; sigma_1 <= f_t/FS (1 - 0.8 |sigma_2| / (f'c/FS)),
-     f_t = flexural strength
+     fibres) with that station's shell shear and, with `[turning]` (`speed_mps`, `radius_in`), the
+     transverse turning stress at both signs; sigma_1 <= f_t/FS (1 - 0.8 |min(sigma_2, 0)| /
+     (f'c/FS)), f_t = flexural strength. Turning: k = V^2/(gR), the floated weight W (hull + crew,
+     as factored) is reacted by a uniform lateral pressure p = k W / A_lat on one side's underwater
+     profile (h = local waterline - keel), each side a cantilever from the keel:
+     sigma_y = 3 p h^2 / t^2 (`check::hoop_psi`). Absent = sigma_y 0
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
    GM_T >= `gm_min_in` for every load case, and, with `[flotation]`, the canoe floats swamped
    (`src/flotation.rs`): wall volume + sealed bow and stern air pockets (equal length l from each

@@ -32,6 +32,28 @@ pub struct Params {
     /// Present = gate on swamped flotation with bow/stern air pockets (src/flotation.rs).
     #[serde(default)]
     pub flotation: Option<FlotationParams>,
+    /// Present = add the transverse wall stress of a steady turn to the biaxial
+    /// check (`check::hoop_psi`). Absent = no turning load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turning: Option<Turning>,
+}
+
+/// Steady turn for the biaxial check: lateral acceleration V^2 / R.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Turning {
+    /// Boat speed through the turn, m/s.
+    pub speed_mps: f64,
+    /// Turn radius, in.
+    pub radius_in: f64,
+}
+
+impl Turning {
+    /// Lateral acceleration in g: k = V^2 / (g R). R -> infinity gives 0.
+    pub fn lateral_g(&self) -> f64 {
+        let r_m = self.radius_in / crate::units::M_TO_IN;
+        self.speed_mps * self.speed_mps / (crate::units::G_MPS2 * r_m)
+    }
 }
 
 /// Swamped flotation (ASCE: the canoe must float when swamped).
@@ -536,6 +558,14 @@ impl Params {
         {
             bail!("flotation: need air_pocket_max_in >= 0 and swamp_factor > 0");
         }
+        if let Some(t) = &self.turning
+            && !(t.speed_mps.is_finite()
+                && t.speed_mps >= 0.0
+                && t.radius_in.is_finite()
+                && t.radius_in > 0.0)
+        {
+            bail!("turning: need speed_mps >= 0 and radius_in > 0");
+        }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");
         }
@@ -661,6 +691,20 @@ mod tests {
             .unwrap()
             .replace("mold = \"male\"", "mold = \"wood\"");
         assert!(Params::parse(&text, Path::new("examples")).is_err(), "unknown mold");
+    }
+
+    #[test]
+    fn turning_is_optional_and_strict() {
+        let base = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        assert!(Params::parse(&base, Path::new("examples")).unwrap().turning.is_none());
+        let t = |extra: &str| Params::parse(&format!("{base}\n[turning]\n{extra}\n"), Path::new("examples"));
+        let p = t("speed_mps = 2.5\nradius_in = 393.7007874015748").unwrap();
+        // 2.5^2 / (9.80665 x 10 m)
+        assert!((p.turning.unwrap().lateral_g() - 6.25 / 98.0665).abs() < 1e-12);
+        assert!(t("speed_mps = 2.5\nradius_in = 0.0").is_err());
+        assert!(t("speed_mps = -1.0\nradius_in = 400.0").is_err());
+        assert!(t("speed_mps = 2.5\nradius_in = 400.0\nbogus = 1").is_err());
+        assert!(t("speed_mps = 2.5").is_err(), "radius required");
     }
 
     #[test]

@@ -12,6 +12,8 @@ pub struct CrewLoad {
 #[derive(Debug, Clone)]
 pub struct Loads {
     pub hull_weight_lb: f64,
+    /// Total weight floated (hull + crew, as factored), lb = displacement.
+    pub weight_lb: f64,
     pub draft_in: f64,
     pub trim_in: f64,
     pub shear: Vec<f64>,
@@ -139,7 +141,7 @@ pub fn solve(
         bail!("equilibrium broken: V_end={:.2} M_end={:.1}", v[n - 1], m[n - 1]);
     }
     let gm_in = metacentric_height(grid, &cum, &cumz, d0, th, sec, &w_hull, wh, crew, crew_cg_in)?;
-    Ok(Loads { hull_weight_lb: wh, draft_in: d0, trim_in: th, shear: v, moment: m, gm_in })
+    Ok(Loads { hull_weight_lb: wh, weight_lb: wtot, draft_in: d0, trim_in: th, shear: v, moment: m, gm_in })
 }
 
 /// GM_T = KB + BM - KG at the waterline `d0 + th (x - L/2)/L`.
