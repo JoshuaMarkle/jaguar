@@ -15,7 +15,7 @@ use crate::section::Sections;
 use crate::units::WATER_PCF;
 use anyhow::{Result, bail};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Flotation {
     /// Concrete wall volume, in^3.
     pub wall_in3: f64,

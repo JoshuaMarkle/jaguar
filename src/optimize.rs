@@ -100,6 +100,420 @@ pub struct Winner {
     pub diagrams: Diagrams,
     /// Every load case at verification resolution, in `load_cases` order.
     pub cases: Vec<CaseDiagrams>,
+    /// The bare hull floating with no crew, at verification resolution.
+    pub empty: EmptyFloat,
+    /// Every intermediate value behind the governing load case's checks
+    /// (the report's calculation appendix).
+    pub calc: CalcTrace,
+}
+
+/// Worked calculation of the winner's governing load case at the seats its
+/// verdict comes from and the strength combination that governs, at
+/// verification resolution. Every number is recomputed by the same functions
+/// the checks use, so each demand and capacity equals that case's verdict.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CalcTrace {
+    /// Set when the trace could not be computed; nothing else is then present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(flatten)]
+    pub calc: Option<Calc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Calc {
+    pub case: String,
+    /// Knee x per paddler (`weights_lb` order) of the governing seat sample.
+    pub seats_in: Vec<f64>,
+    pub weights_lb: Vec<f64>,
+    pub method: crate::params::DesignMethod,
+    pub factor_of_safety: f64,
+    pub dynamic_load_factor: f64,
+    /// (dead, live) load factors of the governing combination.
+    pub dead_factor: f64,
+    pub live_factor: f64,
+    /// Capacity multiplier: 1/FS (asd) or phi (lrfd); punching may differ.
+    pub capacity_factor: f64,
+    pub punching_factor: f64,
+    pub stations: usize,
+    pub length_in: f64,
+    pub thickness_in: f64,
+    pub density_pcf: f64,
+    pub depth_in: f64,
+    /// Integral of the shell area A(x) dx, in^3.
+    pub wall_volume_in3: f64,
+    /// Service equilibrium (unfactored, dynamic factor on the crew).
+    pub service: CalcFloat,
+    /// Equilibrium the stress checks use (factored for lrfd).
+    pub strength: CalcFloat,
+    pub split_slope_psi_per_pcf: f64,
+    pub split_intercept_psi: f64,
+    pub split_psi: f64,
+    /// "measured" or "derived" (see `StrengthFit::source`).
+    pub flexural_source: &'static str,
+    pub flex_over_split: f64,
+    pub flexural_psi: f64,
+    pub fc_source: &'static str,
+    pub fc_psi: f64,
+    pub lambda: f64,
+    pub bending_tension: Option<CalcFibre>,
+    pub bending_compression: Option<CalcFibre>,
+    pub shear: Option<CalcShear>,
+    pub punching: CalcPunching,
+    pub biaxial: Option<CalcBiaxial>,
+    /// Swamped flotation of the bare hull (with `[flotation]`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flotation: Option<crate::flotation::Flotation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swamp_factor: Option<f64>,
+}
+
+/// One equilibrium: weights, draft, trim, freeboard and GM parts.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalcFloat {
+    pub hull_weight_lb: f64,
+    /// Crew as floated (weights x dynamic factor x live factor), lb.
+    pub crew_lb: f64,
+    pub weight_lb: f64,
+    pub draft_in: f64,
+    pub trim_in: f64,
+    /// Highest local waterline (an end of the trimmed waterline), in.
+    pub waterline_max_in: f64,
+    pub freeboard_in: f64,
+    pub kb_in: f64,
+    pub bm_in: f64,
+    pub kg_in: f64,
+    pub gm_in: f64,
+    pub crew_cg_in: f64,
+}
+
+/// Bending stress at one fibre of one station.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalcFibre {
+    pub x_in: f64,
+    pub moment_lbin: f64,
+    pub area_in2: f64,
+    pub zbar_in: f64,
+    pub inertia_in4: f64,
+    /// Fibre distance from the neutral axis, in.
+    pub c_in: f64,
+    /// "bottom" or "top".
+    pub fibre: &'static str,
+    pub stress_psi: f64,
+    pub capacity_psi: f64,
+    pub dc: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalcShear {
+    pub x_in: f64,
+    pub shear_lb: f64,
+    pub zbar_in: f64,
+    pub inertia_in4: f64,
+    /// First moment of the shell below the axis, in^3.
+    pub q_in3: f64,
+    /// Web width, two walls: 2 t, in.
+    pub b_in: f64,
+    pub stress_psi: f64,
+    pub capacity_psi: f64,
+    pub dc: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CalcPunching {
+    pub method: crate::params::PunchingMethod,
+    /// Heaviest paddler x dynamic factor x live factor, lb.
+    pub paddler_lb: f64,
+    pub knees: u32,
+    pub knee_split: f64,
+    pub knee_spacing_in: f64,
+    pub knee_patch_in: f64,
+    pub pad_in: f64,
+    /// d / t (aci_22_6), 1 for plain_14_5.
+    pub depth_over_t: f64,
+    #[serde(flatten)]
+    pub calc: crate::check::PunchingCalc,
+    pub capacity_psi: f64,
+    pub dc: f64,
+}
+
+/// Kupfer-Gerstle at one station: the governing of the four sign combinations.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalcBiaxial {
+    pub x_in: f64,
+    pub tension_psi: f64,
+    pub compression_psi: f64,
+    /// Transverse turning stress (0 without `[turning]`), psi.
+    pub transverse_psi: f64,
+    pub shear_psi: f64,
+    /// sigma_x and sigma_y of the governing combination.
+    pub sigma_x_psi: f64,
+    pub sigma_y_psi: f64,
+    pub sigma_1_psi: f64,
+    pub sigma_2_psi: f64,
+    /// f_t (1 - 0.8 |sigma_2| / f'c) with f_t, f'c already x capacity factor.
+    pub ft_psi: f64,
+    pub fc_psi: f64,
+    pub capacity_psi: f64,
+    pub dc: f64,
+}
+
+/// Build the calculation trace of `case` (the winner's governing case).
+#[allow(clippy::too_many_arguments)]
+pub fn calc_trace(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    t: f64,
+    rho: f64,
+    case_name: &str,
+    seats: &CaseSeats,
+) -> CalcTrace {
+    match calc(params, fit, grid, sec, t, rho, case_name, seats) {
+        Ok(c) => CalcTrace { error: None, calc: Some(c) },
+        Err(e) => CalcTrace { error: Some(format!("{e:#}")), calc: None },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn calc(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    t: f64,
+    rho: f64,
+    case_name: &str,
+    seats: &CaseSeats,
+) -> Result<Calc> {
+    use crate::check::{first_moment_below, hoop_psi, punching_calc};
+    use crate::params::{DesignMethod, PunchingMethod};
+    let case = params
+        .load_cases
+        .iter()
+        .find(|c| c.name == case_name)
+        .ok_or_else(|| anyhow::anyhow!("unknown load case {case_name}"))?;
+    let mat = &params.material;
+    // The checks use the thickness recovered from the section (equal to t up to rounding).
+    let t = crate::check::thickness(grid, sec).unwrap_or(t);
+    let env = eval_envelope(params, fit, grid, sec, rho, case, &seats.seats_in, false)?;
+    let e = eval_case(params, fit, grid, sec, rho, case, &env.verdict_seats_in)?;
+    let (dead, live) = e.combo;
+    let pu = &params.punching;
+    let (k, k_punch) = match mat.method {
+        DesignMethod::Asd => (1.0 / mat.factor_of_safety, 1.0 / mat.factor_of_safety),
+        DesignMethod::Lrfd => (0.60, if pu.method == PunchingMethod::Aci22_6 { 0.75 } else { 0.60 }),
+    };
+    let crew_total: f64 = case.weights_lb.iter().sum::<f64>() * mat.dynamic_load_factor;
+    let float = |l: &Loads, lf: f64| CalcFloat {
+        hull_weight_lb: l.hull_weight_lb,
+        crew_lb: crew_total * lf,
+        weight_lb: l.weight_lb,
+        draft_in: l.draft_in,
+        trim_in: l.trim_in,
+        waterline_max_in: waterline(grid, l).iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        freeboard_in: freeboard(grid, l),
+        kb_in: l.kb_in,
+        bm_in: l.bm_in,
+        kg_in: l.kg_in,
+        gm_in: l.gm_in,
+        crew_cg_in: params.stability.crew_cg_in,
+    };
+    let loads = &e.strength;
+    let v = &e.verdict;
+    let (ft_cap, fc) = (fit.flexural_psi(rho) * k, fit.fc_psi(rho));
+    let lambda = 1.0;
+    let station = |name: &str| -> Option<usize> {
+        let x = v.checks.iter().find(|c| c.name == name)?.x_in?;
+        grid.x.iter().position(|&xi| xi == x)
+    };
+    let fibre = |name: &str, tension: bool| -> Option<CalcFibre> {
+        let i = station(name)?;
+        let (m, zb, ii) = (loads.moment[i], sec.zbar[i], sec.inertia[i]);
+        let (c_top, c_bot) = (grid.depth - zb, zb);
+        let (ct, cc) = crate::check::fibres(m, c_top, c_bot);
+        let c = if tension { ct } else { cc };
+        // Sagging (M >= 0) puts the bottom in tension, hogging the top.
+        let bottom = (m >= 0.0) == tension;
+        let cap = if tension {
+            ft_cap
+        } else if fc > 0.0 {
+            0.85 * fc * k
+        } else {
+            f64::NAN
+        };
+        let s = m.abs() * c / ii;
+        Some(CalcFibre {
+            x_in: grid.x[i],
+            moment_lbin: m,
+            area_in2: sec.area[i],
+            zbar_in: zb,
+            inertia_in4: ii,
+            c_in: c,
+            fibre: if bottom { "bottom" } else { "top" },
+            stress_psi: s,
+            capacity_psi: cap,
+            dc: s / cap,
+        })
+    };
+    let shear = station("shear").map(|i| {
+        let q = first_moment_below(grid.row(i), &grid.z, t, sec.zbar[i]);
+        let tau = loads.shear[i].abs() * q / (sec.inertia[i] * 2.0 * t);
+        let cap = if fc > 0.0 { 2.0 * lambda * fc.sqrt() * k } else { f64::NAN };
+        CalcShear {
+            x_in: grid.x[i],
+            shear_lb: loads.shear[i],
+            zbar_in: sec.zbar[i],
+            inertia_in4: sec.inertia[i],
+            q_in3: q,
+            b_in: 2.0 * t,
+            stress_psi: tau,
+            capacity_psi: cap,
+            dc: tau / cap,
+        }
+    });
+    let max_paddler =
+        case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor * live;
+    let pc = punching_calc(max_paddler, t, fc, lambda, mat.knee_patch_in, pu);
+    let p_cap = pc.v_nominal * k_punch;
+    let punching = CalcPunching {
+        method: pu.method,
+        paddler_lb: max_paddler,
+        knees: pu.knees,
+        knee_split: pu.knee_split,
+        knee_spacing_in: pu.knee_spacing_in,
+        knee_patch_in: mat.knee_patch_in,
+        pad_in: pu.pad_in,
+        depth_over_t: pc.depth_in / t,
+        dc: pc.v_u / p_cap,
+        capacity_psi: p_cap,
+        calc: pc,
+    };
+    let fc_k = if fc > 0.0 { fc * k } else { f64::NAN };
+    let hoop = hoop_psi(grid, loads, t, params.turning.as_ref());
+    let biaxial = station("biaxial").map(|i| {
+        let (m, zb, ii) = (loads.moment[i], sec.zbar[i], sec.inertia[i]);
+        let (ct, cc) = crate::check::fibres(m, grid.depth - zb, zb);
+        let (st, sc) = (m.abs() * ct / ii, m.abs() * cc / ii);
+        let q = first_moment_below(grid.row(i), &grid.z, t, zb);
+        let tau = loads.shear[i].abs() * q / (ii * 2.0 * t);
+        let sy = hoop[i];
+        // Same four sign combinations as check::kupfer_dc; keep the worst.
+        let mut best: Option<CalcBiaxial> = None;
+        for (sx, sy) in [(st, sy), (-sc, sy), (st, -sy), (-sc, -sy)] {
+            let r = ((0.5 * (sx - sy)).powi(2) + tau * tau).sqrt();
+            let c = 0.5 * (sx + sy);
+            let (s1, s2) = (c + r, c - r);
+            let cap = ft_cap * (1.0 - 0.8 * s2.min(0.0).abs() / fc_k);
+            let dc = if cap.is_nan() || cap <= 0.0 || !cap.is_finite() {
+                f64::INFINITY
+            } else {
+                s1.max(0.0) / cap
+            };
+            if best.as_ref().is_none_or(|b| dc > b.dc) {
+                best = Some(CalcBiaxial {
+                    x_in: grid.x[i],
+                    tension_psi: st,
+                    compression_psi: sc,
+                    transverse_psi: hoop[i],
+                    shear_psi: tau,
+                    sigma_x_psi: sx,
+                    sigma_y_psi: sy,
+                    sigma_1_psi: s1,
+                    sigma_2_psi: s2,
+                    ft_psi: ft_cap,
+                    fc_psi: fc_k,
+                    capacity_psi: cap,
+                    dc,
+                });
+            }
+        }
+        best
+    });
+    let n = grid.nx();
+    let flotation = match &params.flotation {
+        Some(fp) => Some(crate::flotation::flotation(grid, sec, rho, fp.swamp_factor, fp.air_pocket_max_in)?),
+        None => None,
+    };
+    Ok(Calc {
+        case: case.name.clone(),
+        seats_in: env.verdict_seats_in.clone(),
+        weights_lb: case.weights_lb.clone(),
+        method: mat.method,
+        factor_of_safety: mat.factor_of_safety,
+        dynamic_load_factor: mat.dynamic_load_factor,
+        dead_factor: dead,
+        live_factor: live,
+        capacity_factor: k,
+        punching_factor: k_punch,
+        stations: n,
+        length_in: grid.x[n - 1] - grid.x[0],
+        thickness_in: t,
+        density_pcf: rho,
+        depth_in: grid.depth,
+        wall_volume_in3: (1..n)
+            .map(|i| 0.5 * (sec.area[i] + sec.area[i - 1]) * (grid.x[i] - grid.x[i - 1]))
+            .sum(),
+        service: float(&e.service, 1.0),
+        strength: float(loads, live),
+        split_slope_psi_per_pcf: fit.split_slope_psi_per_pcf,
+        split_intercept_psi: fit.split_intercept_psi,
+        split_psi: fit.split_psi(rho),
+        flexural_source: fit.source(crate::mix::Property::Flexural),
+        flex_over_split: fit.flex_over_split,
+        flexural_psi: fit.flexural_psi(rho),
+        fc_source: fit.source(crate::mix::Property::Compressive),
+        fc_psi: fc,
+        lambda,
+        bending_tension: fibre("bending_tension", true),
+        bending_compression: fibre("bending_compression", false),
+        shear,
+        punching,
+        biaxial: biaxial.flatten(),
+        flotation,
+        swamp_factor: params.flotation.as_ref().map(|f| f.swamp_factor),
+    })
+}
+
+/// Unloaded (no crew) equilibrium of the winner: hull self weight only.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct EmptyFloat {
+    /// Set when equilibrium failed; the numbers below are then absent/empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub draft_in: Option<f64>,
+    pub trim_in: Option<f64>,
+    /// Minimum freeboard over the stations, in.
+    pub freeboard_in: Option<f64>,
+    pub x_in: Vec<f64>,
+    /// Local waterline height above keel, in.
+    pub waterline_in: Vec<f64>,
+}
+
+/// Float the bare hull (no crew) and report draft, trim, freeboard and waterline.
+pub fn empty_float(params: &Params, grid: &Grid, sec: &Sections, rho: f64) -> EmptyFloat {
+    let (patch, cg) = (params.material.knee_patch_in, params.stability.crew_cg_in);
+    match solve(grid, sec, rho, &[], patch, cg) {
+        Ok(loads) => EmptyFloat {
+            error: None,
+            draft_in: Some(loads.draft_in),
+            trim_in: Some(loads.trim_in),
+            freeboard_in: Some(freeboard(grid, &loads)),
+            x_in: grid.x.clone(),
+            waterline_in: waterline(grid, &loads),
+        },
+        Err(e) => EmptyFloat { error: Some(format!("{e:#}")), ..Default::default() },
+    }
+}
+
+/// Local waterline height above keel per station, clamped to [0, depth].
+fn waterline(grid: &Grid, loads: &Loads) -> Vec<f64> {
+    let l = grid.x[grid.nx() - 1];
+    grid.x
+        .iter()
+        .map(|&x| (loads.draft_in + loads.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
+        .collect()
 }
 
 /// One load case of the winner: resolved seats, equilibrium, stresses and
@@ -469,6 +883,16 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let seats = plan.as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
             let cases =
                 all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, seats);
+            let empty = empty_float(params, &grid, &sec, c.density_pcf);
+            let calc = match (&c.governing_case, &axis[ri].1) {
+                (Some(g), f) => match params.load_cases.iter().position(|lc| &lc.name == g) {
+                    Some(gi) => {
+                        calc_trace(params, f, &grid, &sec, c.thickness_in, c.density_pcf, g, &seats[gi])
+                    }
+                    None => CalcTrace { error: Some(format!("unknown governing case {g}")), calc: None },
+                },
+                (None, _) => CalcTrace { error: Some("no governing case".into()), calc: None },
+            };
             let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
             let conv = convergence(params, &axis[ri].1, hull, c, seats);
             let verified = v.verdict.is_some()
@@ -496,6 +920,8 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                     .map(|d| d.diagrams.clone())
                     .unwrap_or_default(),
                 cases,
+                empty,
+                calc,
             })
         }
     };
@@ -560,6 +986,8 @@ pub struct CaseEval {
     pub strength: Loads,
     /// Verdict of that combination; freeboard from the service loads.
     pub verdict: Verdict,
+    /// (dead, live) load factors of that combination ((1, 1) for asd).
+    pub combo: (f64, f64),
 }
 
 /// Evaluate `case` with paddlers at `seats`. LRFD: each combination
@@ -587,7 +1015,7 @@ pub fn eval_case(
     let fb = freeboard(grid, &service);
     let max_paddler =
         case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
-    let mut best: Option<(Loads, Verdict)> = None;
+    let mut best: Option<(Loads, Verdict, (f64, f64))> = None;
     for &(dead, live) in mat.method.combos() {
         let loads = if (dead, live) == (1.0, 1.0) {
             service.clone()
@@ -606,12 +1034,12 @@ pub fn eval_case(
             params.turning.as_ref(),
         );
         v.freeboard_in = fb;
-        if best.as_ref().is_none_or(|(_, b)| v.dc.is_nan() || v.dc > b.dc) {
-            best = Some((loads, v));
+        if best.as_ref().is_none_or(|(_, b, _)| v.dc.is_nan() || v.dc > b.dc) {
+            best = Some((loads, v, (dead, live)));
         }
     }
-    let (strength, verdict) = best.ok_or_else(|| anyhow::anyhow!("no load combinations"))?;
-    Ok(CaseEval { service, strength, verdict })
+    let (strength, verdict, combo) = best.ok_or_else(|| anyhow::anyhow!("no load combinations"))?;
+    Ok(CaseEval { service, strength, verdict, combo })
 }
 
 /// Seats of every load case on this wall (`params.load_cases` order): given,
@@ -776,12 +1204,7 @@ pub fn case_diagrams(
         out.dc_shear.push(dc(tau, v_cap));
         out.dc_biaxial.push(crate::check::kupfer_dc(st, sc, hoop, tau, ft_cap, fc_kupfer));
     }
-    let l = grid.x[n - 1];
-    let waterline_in = grid
-        .x
-        .iter()
-        .map(|&x| (service.draft_in + service.trim_in * (x - l / 2.0) / l).clamp(0.0, grid.depth))
-        .collect();
+    let waterline_in = waterline(grid, &service);
     out.diagrams = Diagrams {
         x_in: grid.x.clone(),
         shear_lb: loads.shear,

@@ -53,6 +53,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | task | status |
 |---|---|
 | Export canoe as STEP | done (T22 CLI, T23 web, T42 wall normal to surface) |
+| Export PDF report (canoe, stats, inputs, charts) | done (web UI, browser print) |
 | Draft / length / beam / depth increments, rocker in, min entry angle, symmetric | done (T30, web form T49) |
 | Flare angle | done (`hull.flare_deg`) |
 | Buoyancy / self weight distributed | done (real submerged area, draft and trim solved) |

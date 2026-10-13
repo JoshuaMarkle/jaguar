@@ -284,6 +284,84 @@ fn winner_has_diagrams_for_every_load_case() {
     }
 }
 
+/// The bare hull (no crew) floats higher than under any crew, and its
+/// freeboard is the gunwale minus the highest local waterline.
+#[test]
+fn winner_has_empty_float() {
+    let (p, h) = example();
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    let e = &w.empty;
+    assert!(e.error.is_none(), "{:?}", e.error);
+    let (draft, fb) = (e.draft_in.unwrap(), e.freeboard_in.unwrap());
+    assert_eq!(e.x_in, w.cases[0].diagrams.x_in);
+    assert!(draft > 0.0);
+    for k in &w.cases {
+        assert!(draft < k.draft_in.unwrap(), "{}: {draft} vs {:?}", k.name, k.draft_in);
+        assert!(fb > k.freeboard_in.unwrap(), "{}: {fb} vs {:?}", k.name, k.freeboard_in);
+    }
+    let top = e.waterline_in.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    assert!((w.candidate.depth_in - top - fb).abs() < 1e-9, "{top} {fb}");
+}
+
+/// The report's calculation trace recomputes the governing case: every
+/// demand and capacity equals that case's verdict (verification resolution).
+fn assert_calc_matches(p: &Params, h: &Hull) {
+    let w = optimize::run(p, h).unwrap().winner.unwrap();
+    assert!(w.calc.error.is_none(), "{:?}", w.calc.error);
+    let c = w.calc.calc.as_ref().unwrap();
+    let k = w.cases.iter().find(|k| k.name == c.case).unwrap();
+    let v = k.verdict.as_ref().unwrap();
+    let got = |n: &str| -> (f64, f64, Option<f64>) {
+        match n {
+            "bending_tension" | "bending_compression" => {
+                let f = if n == "bending_tension" { &c.bending_tension } else { &c.bending_compression };
+                let f = f.as_ref().unwrap();
+                (f.stress_psi, f.capacity_psi, Some(f.x_in))
+            }
+            "shear" => {
+                let s = c.shear.as_ref().unwrap();
+                (s.stress_psi, s.capacity_psi, Some(s.x_in))
+            }
+            "punching" => (c.punching.calc.v_u, c.punching.capacity_psi, None),
+            "biaxial" => {
+                let b = c.biaxial.as_ref().unwrap();
+                (b.dc, 1.0, Some(b.x_in))
+            }
+            _ => unreachable!(),
+        }
+    };
+    for chk in &v.checks {
+        let (d, cap, x) = got(chk.name);
+        assert_eq!((d, cap, x), (chk.demand, chk.capacity, chk.x_in), "{}", chk.name);
+    }
+    // The hand-checkable formulas the report prints hold with these numbers.
+    let bt = c.bending_tension.as_ref().unwrap();
+    assert!((bt.moment_lbin.abs() * bt.c_in / bt.inertia_in4 - bt.stress_psi).abs() < 1e-9 * bt.stress_psi);
+    let s = &c.service;
+    assert!((s.kb_in + s.bm_in - s.kg_in - s.gm_in).abs() < 1e-12);
+    assert!((c.depth_in - s.waterline_max_in - s.freeboard_in).abs() < 1e-9);
+    assert!((c.wall_volume_in3 * c.density_pcf / 1728.0 - s.hull_weight_lb).abs() < 1e-9 * s.hull_weight_lb);
+    assert!((s.hull_weight_lb + s.crew_lb - s.weight_lb).abs() < 1e-9 * s.weight_lb);
+}
+
+#[test]
+fn calc_trace_matches_verdict_asd() {
+    let (p, h) = example();
+    assert_calc_matches(&p, &h);
+}
+
+#[test]
+fn calc_trace_matches_verdict_lrfd_turning() {
+    let (mut p, h) = example();
+    p.material.method = jaguar::params::DesignMethod::Lrfd;
+    p.turning = Some(jaguar::params::Turning { speed_mps: 2.0, radius_in: 600.0 });
+    assert_calc_matches(&p, &h);
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    let c = w.calc.calc.unwrap();
+    assert_eq!((c.dead_factor, c.live_factor), (1.2, 1.6));
+    assert!(c.biaxial.unwrap().transverse_psi > 0.0);
+}
+
 /// The freeboard gate covers every load case, not only the one with the
 /// highest D/C: a light crew kneeling forward (2F here) trims the bow down
 /// while the heavier 2M crew still governs on punching.

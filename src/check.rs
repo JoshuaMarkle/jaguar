@@ -76,7 +76,7 @@ pub struct Verdict {
 }
 
 /// Wall thickness recovered from the section: area = t * (2 y0 + sum 2 ds).
-fn thickness(grid: &Grid, sec: &Sections) -> Option<f64> {
+pub fn thickness(grid: &Grid, sec: &Sections) -> Option<f64> {
     (0..grid.nx()).find_map(|i| {
         let p = section::perimeter(grid.row(i), &grid.z);
         (p > 1e-9).then(|| sec.area[i] / p)
@@ -399,6 +399,9 @@ mod tests {
             shear: vec![v; nx],
             moment: vec![m; nx],
             gm_in: 10.0,
+            kb_in: 0.0,
+            bm_in: 0.0,
+            kg_in: 0.0,
         }
     }
 

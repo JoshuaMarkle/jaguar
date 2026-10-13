@@ -22,6 +22,11 @@ pub struct Loads {
     /// equilibrium waterline (with trim). KG combines hull wall (section zbar)
     /// and crew (`crew_cg_in`).
     pub gm_in: f64,
+    /// Parts of GM_T: centre of buoyancy, metacentric radius I_wp / V, and
+    /// centre of gravity above the keel, in.
+    pub kb_in: f64,
+    pub bm_in: f64,
+    pub kg_in: f64,
 }
 
 fn trapz(f: &[f64], x: &[f64]) -> f64 {
@@ -221,11 +226,24 @@ pub fn solve(
     if v[n - 1].abs() > 1e-3 * wtot || m[n - 1].abs() > 1e-3 * wtot * l {
         bail!("equilibrium broken: V_end={:.2} M_end={:.1}", v[n - 1], m[n - 1]);
     }
-    let gm_in = metacentric_height(grid, &cum, &cumz, d0, th, sec, &w_hull, wh, crew, crew_cg_in)?;
-    Ok(Loads { hull_weight_lb: wh, weight_lb: wtot, draft_in: d0, trim_in: th, shear: v, moment: m, gm_in })
+    let (kb_in, bm_in, kg_in) =
+        metacentric_height(grid, &cum, &cumz, d0, th, sec, &w_hull, wh, crew, crew_cg_in)?;
+    let gm_in = kb_in + bm_in - kg_in;
+    Ok(Loads {
+        hull_weight_lb: wh,
+        weight_lb: wtot,
+        draft_in: d0,
+        trim_in: th,
+        shear: v,
+        moment: m,
+        gm_in,
+        kb_in,
+        bm_in,
+        kg_in,
+    })
 }
 
-/// GM_T = KB + BM - KG at the waterline `d0 + th (x - L/2)/L`.
+/// (KB, BM, KG) of GM_T = KB + BM - KG at the waterline `d0 + th (x - L/2)/L`.
 #[allow(clippy::too_many_arguments)]
 fn metacentric_height(
     grid: &Grid,
@@ -238,7 +256,7 @@ fn metacentric_height(
     wh: f64,
     crew: &[CrewLoad],
     crew_cg_in: f64,
-) -> Result<f64> {
+) -> Result<(f64, f64, f64)> {
     let (x, z, n, nz) = (&grid.x, &grid.z, grid.nx(), grid.nz());
     let l = x[n - 1];
     let zt = z[nz - 1];
@@ -268,7 +286,7 @@ fn metacentric_height(
     if !gm.is_finite() {
         bail!("non-finite GM (KB {kb}, BM {bm}, KG {kg})");
     }
-    Ok(gm)
+    Ok((kb, bm, kg))
 }
 
 /// Shear and moment at `x` from a unit load spread uniformly over

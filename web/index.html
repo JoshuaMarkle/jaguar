@@ -635,9 +635,18 @@ function buildCanoe() {
   const draft = dg && dg.waterline_in && dg.waterline_in.length ? interp(dg.x_in, dg.waterline_in, hull.length / 2) : null;
   if (typeof draft === 'number') {
     const maxB = Math.max(...hull.half_breadth.flat());
-    water = new THREE.Mesh(new THREE.PlaneGeometry(hull.length * 1.3, maxB * 5),
+    const x0 = hull.x[0] - hull.length * 0.15, x1 = hull.x[nx - 1] + hull.length * 0.15, yb = maxB * 2.5;
+    const sea = new THREE.Shape([new THREE.Vector2(x0, -yb), new THREE.Vector2(x1, -yb), new THREE.Vector2(x1, yb), new THREE.Vector2(x0, yb)]);
+    // Hole = the hull's waterplane at this draft, so no water shows inside the canoe.
+    const hole = [];
+    const push = (x, y) => { const p = hole[hole.length - 1]; if (!p || p.x !== x || p.y !== y) hole.push(new THREE.Vector2(x, y)); };
+    for (let i = 0; i < nx; i++) push(hull.x[i], halfBreadth(hull, i, draft, flareDeg()));
+    for (let i = nx - 1; i >= 0; i--) push(hull.x[i], -halfBreadth(hull, i, draft, flareDeg()));
+    sea.holes.push(new THREE.Path(hole));
+    water = new THREE.Mesh(new THREE.ShapeGeometry(sea),
       new THREE.MeshBasicMaterial({ color: 0x4d8dff, transparent: true, opacity: 0.18, side: THREE.DoubleSide }));
-    water.rotation.x = -Math.PI / 2; water.position.set(hull.length / 2, draft, 0); scene.add(water);
+    // Shape lies in XY (y = half breadth); lay it flat so half breadth runs along z.
+    water.rotation.x = -Math.PI / 2; water.position.y = draft; scene.add(water);
   }
   target.set(hull.length / 2, depth / 2, 0);
   radius = hull.length * 1.1; placeCam();
@@ -659,12 +668,12 @@ function bulkhead(group, x, zs) {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
   thickness: ['thickness', 'in', k => k.thickness_in], density: ['density', 'pcf', k => k.density_pcf], depth: ['depth', 'in', k => k.depth_in],
-  freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'N', k => k.drag_n],
+  freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'lb', k => typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null],
   length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in]};
 const axLabel = (l, u) => u === '-' ? l : `${l}, ${u}`;
 const axSel = { x: null, y: 'dc' };
@@ -736,7 +745,7 @@ function ring(ctx, x, y, r = 8) { ctx.strokeStyle = C.accent; ctx.lineWidth = 2;
 function msg(ctx, W, H, t) { ctx.fillStyle = C.faint; ctx.font = font(12); ctx.textAlign = 'center'; ctx.fillText(t, W / 2, H / 2); ctx.textAlign = 'left'; }
 const winC = () => result && result.winner && result.winner.candidate;
 // Per-load-case winner diagrams (result.winner.cases), one grey shade + dash per case.
-const CASE_TABS = ['hull', 'stress', 'dcx'];
+const CASE_TABS = ['hull', 'stress', 'dcx', 'fb'];
 const caseHidden = new Set();
 const CASE_STYLE = [['#141414', []], ['#5a5a5a', [6, 3]], ['#8a8a8a', [2, 3]], ['#3a3a3a', [8, 3, 2, 3]], ['#a8a8a8', []], ['#707070', [4, 4]]];
 const caseStyle = i => CASE_STYLE[i % CASE_STYLE.length];
@@ -760,7 +769,7 @@ function drawPlot() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
-  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
   if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
@@ -809,6 +818,25 @@ function plotStress(ctx, W, H) {
   if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], C.ink);
   legend(ctx, r2.l + 10, r2.t + 16, ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, `${k.name} waterline (trim ${k.trim_in.toFixed(2)} in, fb ${k.freeboard_in.toFixed(2)} in)`, dash]; }).concat([[C.ink, 'gunwale (mold depth)']]));
 }
+// Freeboard (gunwale minus local waterline) along the hull: every shown case plus the empty canoe.
+function plotFreeboard(ctx, W, H) {
+  const d = diag(), c = winC(); if (!d || !c) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
+  const e = result.winner.empty, ok = e && !e.error && e.x_in && e.x_in.length;
+  const ks = shownCases(), fb = wl => wl.map(z => c.depth_in - z);
+  const series = ks.map(k => [k.x_in, fb(k.waterline_in)]).concat(ok ? [[e.x_in, fb(e.waterline_in)]] : []);
+  if (!series.length) return msg(ctx, W, H, 'All load cases hidden.');
+  const ys = series.flatMap(s => s[1]).concat([0]).concat(typeof fbGate === 'number' ? [fbGate] : []);
+  const r = { l: 72, t: 12, w: W - 92, h: H - 52 }, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
+  const a = axes(ctx, r, xr, [0, Math.max(...ys) * 1.1], 'x from bow, in', 'freeboard (gunwale above water), in');
+  if (typeof fbGate === 'number') hline(ctx, r.l, r.l + r.w, a.py(fbGate), C.error, [5, 4]);
+  for (const k of ks) line(ctx, a, k.x_in, fb(k.waterline_in), ...caseStyle(k.i));
+  if (ok) line(ctx, a, e.x_in, fb(e.waterline_in), C.accent);
+  caseKnees(ctx, a, r, ks);
+  const items = ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, `${k.name}: min ${k.freeboard_in.toFixed(2)} in (worst seats)`, dash]; });
+  items.push(ok ? [C.accent, `no crew: min ${e.freeboard_in.toFixed(2)} in`] : [C.error, `no crew: ${e && e.error ? e.error : 'not in this result'}`]);
+  if (typeof fbGate === 'number') items.push([C.error, `min freeboard gate ${fbGate} in`, [5, 4]]);
+  legend(ctx, r.l + 10, r.t + 16, items);
+}
 // Utilization along the hull: per case, max over bending tension/compression/shear/biaxial D/C at each station.
 function plotDcx(ctx, W, H) {
   const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
@@ -830,9 +858,9 @@ function plotChecks(ctx, W, H) {
   const c = winC(), v = c && c.verdict;
   if (!v || !Array.isArray(v.checks) || !v.checks.length) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const ks = v.checks, n = ks.length, max = Math.max(1.0, dcGate, ...ks.map(k => isFinite(k.dc) ? k.dc : 0)) * 1.1;
-  const r = { l: 140, t: 12, w: W - 164, h: H - 52 };
+  const r = { l: 140, t: 12, w: W - 260, h: H - 52 };
   const a = axes(ctx, r, [0, max], [0, n], 'D/C (demand / capacity)', '');
-  const bh = r.h / n;
+  const bh = (r.h - 24) / n; // bottom strip keeps the legend off the last bar
   ks.forEach((k, i) => {
     const y = r.t + i * bh + bh * 0.25, dc = isFinite(k.dc) ? k.dc : max, gov = k.name === v.governing_check;
     ctx.fillStyle = dcShade(dc); ctx.fillRect(r.l + 1, y, a.px(dc) - r.l - 1, bh * 0.5);
@@ -914,11 +942,11 @@ function plotXsec(ctx, W, H) {
 function plotShape(ctx, W, H) {
   const sh = cands.filter(k => k.shape);
   if (!sh.length) return msg(ctx, W, H, 'Run a shape search first (Hull: Optimize hull shape).');
-  const score = k => objKind === 'drag' ? k.drag_n : k.hull_weight_lb;
+  const score = k => objKind === 'drag' ? (typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null) : k.hull_weight_lb;
   let best = Infinity; const bx = [], by = [];
   sh.forEach((k, i) => { if (k.passes && typeof score(k) === 'number' && score(k) < best) best = score(k); if (isFinite(best)) { bx.push(i + 1); by.push(best); } });
   const hw = (W - 40) / 2, r1 = { l: 72, t: 12, w: hw - 72, h: H - 52 }, r2 = { l: hw + 92, t: 12, w: hw - 72, h: H - 52 };
-  const ul = objKind === 'drag' ? 'best drag, N' : 'best hull weight, lb';
+  const ul = objKind === 'drag' ? 'best drag, lb' : 'best hull weight, lb';
   if (bx.length) { const a = axes(ctx, r1, [1, Math.max(2, sh.length)], range2(by), 'shape evaluation #', ul); line(ctx, a, bx, by, C.ink); legend(ctx, r1.l + 10, r1.t + 16, [[C.ink, 'best passing so far']]); }
   else { ctx.strokeStyle = C.hair; ctx.strokeRect(r1.l + 0.5, r1.t + 0.5, r1.w, r1.h); ctx.fillStyle = C.faint; ctx.fillText('No passing shape yet.', r1.l + 10, r1.t + 20); }
   const a2 = axes(ctx, r2, range2(sh.map(k => k.length_in)), range2(sh.map(k => k.beam_in)), 'length, in', 'beam, in');
@@ -929,6 +957,9 @@ function plotShape(ctx, W, H) {
 }
 
 // ---------- result panel ----------
+// Drag is computed in newtons (result.json drag_n); shown in pounds with newtons shaded.
+const N_PER_LBF = 4.4482216152605;
+const dragTxt = n => `${(n / N_PER_LBF).toFixed(2)} lb <span class="muted">${n.toFixed(1)} N</span>`;
 const kv = (k, v, t = '') => `<div class="kv"${t ? ` title="${esc(t)}"` : ''}><span>${k}</span><span>${v}</span></div>`;
 function checksTable(v) {
   if (!Array.isArray(v.checks) || !v.checks.length) return '<div class="note-box">No per-check breakdown in this result.</div>';
@@ -962,6 +993,7 @@ function showWinner() {
     <div style="display:flex;gap:var(--s2);margin-bottom:var(--s2)">
       <a class="btn soft" href="/api/export?format=step" download title="Winning canoe as a STEP solid (inches): hull, wall thickness and mold depth, for CAD and the mold shop.">Export STEP</a>
       <a class="btn soft" href="/api/export?format=stl" download title="Same solid as a binary STL mesh (inches), for 3D printing or mesh tools.">Export STL</a>
+      <button type="button" class="btn soft" id="exportpdf" title="Report of this run: canoe picture and winner stats first, then search space, mix data, inputs and every chart. Opens the print dialog: choose Save as PDF.">Export PDF</button>
     </div>
     ${kv('Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`)}
     ${kv('Beam', `${f(c.beam_in, 1)} in`)}
@@ -972,7 +1004,7 @@ function showWinner() {
     ${kv('Side flare', `${f(flareDeg(), 1)} deg`)}
     ${kv('Depth', `${f(c.depth_in, 2)} in`)}
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
-    ${typeof c.drag_n === 'number' ? kv('Drag', `${f(c.drag_n, 1)} N`) : ''}
+    ${typeof c.drag_n === 'number' ? kv('Drag', dragTxt(c.drag_n)) : ''}
     ${kv('GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>${gmBelow ? ' <span class="t-error">below gate</span>' : ''}`, 'Metacentric height (stability).')}
     ${kv('Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`)}
     ${pocketRow(c)}
@@ -986,6 +1018,291 @@ function showWinner() {
       ? '<div class="note-box warn">Density is the heaviest mix the lab data supports. Test heavier, stronger mixes to go higher.</div>'
       : '<div class="note-box warn">Density is the lightest mix the lab data supports. Test lighter mixes to go lower.</div>' : ''}
     ${shapeRows}`;
+  $('exportpdf').onclick = exportPdf;
+}
+
+// ---------- PDF report ----------
+// Built in the browser from the last result (the same data the panels show) and printed from a
+// hidden iframe: the print dialog's "Save as PDF" writes the file. Charts are the plot functions
+// above drawn into offscreen canvases; the canoe is a snapshot of the 3D view from a fixed angle.
+function snapCanoe(W, H) {
+  const saved = [theta, phi, radius], pr = renderer.getPixelRatio(), bg = scene.background;
+  renderer.setPixelRatio(2); renderer.setSize(W, H, false); camera.aspect = W / H; camera.updateProjectionMatrix();
+  scene.background = new THREE.Color(0xffffff);
+  theta = 1.15; phi = 0.85; radius = hull.length * 0.95; placeCam();
+  renderer.render(scene, camera);
+  const url = renderer.domElement.toDataURL('image/png');
+  [theta, phi, radius] = saved; placeCam(); scene.background = bg; renderer.setPixelRatio(pr); resize();
+  return url;
+}
+function chartImg(fn, W, H) {
+  const c = document.createElement('canvas'), s = 3;
+  c.width = W * s; c.height = H * s;
+  const ctx = c.getContext('2d'); ctx.setTransform(s, 0, 0, s, 0, 0);
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H); ctx.font = font(11); ctx.textAlign = 'left';
+  fn(ctx, W, H);
+  return c.toDataURL('image/png');
+}
+// Charts for the report: every case shown, default candidate axes, the run's own mix fit.
+function reportCharts() {
+  const hidden = new Set(caseHidden), ax = { ...axSel }, mf = mixFit, W = 760, out = [];
+  caseHidden.clear(); axSel.x = null; axSel.y = 'dc'; mixFit = result.strength;
+  try {
+    const add = (title, note, fn, H) => out.push({ title, note, img: chartImg(fn, W, H) });
+    const w = winC(), shapeRun = cands.some(k => k.shape);
+    add('Candidates', 'Every design tried. Green passes, grey fails, red cross is an analysis error, blue ring is the winner. Dashed line: D/C search gate.', plotCands, 340);
+    if (shapeRun) add('Shape search', 'Best passing objective as shapes were evaluated (left); length and beam of every shape (right).', plotShape, 300);
+    if (w && !shapeRun) add('Wall / density map', 'Every thickness and density at the winner depth.', plotMap, 320);
+    if (w && w.verdict && w.verdict.checks) add('Checks', 'Winner D/C per check (demand / capacity) against the search gate.', plotChecks, 60 + 60 * w.verdict.checks.length);
+    if (diag()) {
+      add('Shear and bending moment', 'Along the hull, per load case. Triangles mark the knees.', plotHull, 440);
+      add('Stress and waterline', 'Bending tension against the allowable (top); loaded waterline against the gunwale (bottom).', plotStress, 440);
+      add('D/C along the hull', 'Max of bending tension, compression, shear and biaxial at each station.', plotDcx, 300);
+      add('Freeboard', 'Gunwale above the local waterline per load case and with no crew aboard (worst seat sample in the legend). Dashed: freeboard gate.', plotFreeboard, 300);
+    }
+    if (w && result.winner_hull) add('Cross-sections', '', plotXsec, 240);
+    if (mixFit) add('Mix strength', 'Lab breaks scaled to final strength and the fit used by this run. Shaded: tested density range.', plotMix, 260);
+  } finally {
+    for (const n of hidden) caseHidden.add(n); Object.assign(axSel, ax); mixFit = mf;
+  }
+  return out;
+}
+const REPORT_CSS = `
+  @page { size: letter; margin: 0.5in 0.5in 0.55in;
+    @bottom-right { content: "Generated by JAGUAR \\00b7  page " counter(page); font: 6.5pt ${FONT}; color: #adadad; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 450 9pt/1.35 ${FONT}; color: #141414; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  h1 { font-size: 20pt; font-weight: 650; line-height: 1.05; margin: 0 0 4pt; }
+  h2 { font-size: 12pt; font-weight: 650; margin: 14pt 0 4pt; break-after: avoid; }
+  h3 { font-size: 9.5pt; font-weight: 600; margin: 10pt 0 2pt; break-after: avoid; }
+  .muted { color: #707070; } .page { break-before: page; }
+  .top { display: grid; grid-template-columns: 58% 1fr; gap: 14pt; align-items: start; }
+  .top img { width: 100%; border: 1px solid #e0e0e0; border-radius: 8px; display: block; }
+  .big { font-size: 26pt; font-weight: 650; line-height: 1; margin: 8pt 0 2pt; }
+  .badge { display: inline-block; padding: 1pt 6pt; border-radius: 4px; font-size: 8pt; font-weight: 600; color: #fff; }
+  .badge.ok { background: #24a148; } .badge.bad { background: #da1e28; }
+  .brand { font-size: 6.5pt; color: #adadad; }
+  .cols { columns: 2; column-gap: 18pt; }
+  .kv { display: flex; justify-content: space-between; gap: 8pt; padding: 2pt 0; border-bottom: 1px solid #f0f0f0; break-inside: avoid; }
+  .kv > :first-child { color: #707070; } .kv > :last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  table { width: 100%; border-collapse: collapse; font-size: 8pt; font-variant-numeric: tabular-nums; }
+  th { font-weight: 450; color: #707070; text-align: right; padding: 2pt 3pt; border-bottom: 1px solid #e0e0e0; white-space: nowrap; }
+  td { text-align: right; padding: 1.5pt 3pt; border-bottom: 1px solid #f0f0f0; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; padding-left: 0; }
+  td.l, th.l { text-align: left; white-space: normal; }
+  tr { break-inside: avoid; } tr.gov td { font-weight: 600; }
+  .note { background: #f3f3f3; border-left: 3px solid #f1c21b; border-radius: 6px; padding: 4pt 8pt; margin-top: 6pt; }
+  figure { margin: 0 0 10pt; break-inside: avoid; } figure img { width: 100%; display: block; }
+  figcaption { color: #707070; font-size: 8pt; margin-bottom: 3pt; }
+  .eq { break-inside: avoid; margin: 0 0 7pt; }
+  .eq .why { color: #707070; font-size: 8pt; margin-bottom: 1pt; }
+  .eq .f, .eq .n { font-family: 'Cambria Math', 'STIX Two Math', Georgia, serif; font-size: 9.5pt; padding-left: 10pt; }
+  .eq .n { color: #262626; } .eq .n b { font-weight: 650; }
+`;
+function reportHtml(canoeImg, charts) {
+  const win = result.winner, c = win.candidate, v = c.verdict || {}, p = result.params || {}, sh = c.shape;
+  const f = (x, n) => typeof x === 'number' && isFinite(x) ? x.toFixed(n) : '-';
+  const kvr = (k, val) => `<div class="kv"><span>${k}</span><span>${val}</span></div>`;
+  const table = (head, rows, cls = '') => `<table class="${cls}"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  const now = new Date();
+  const hullName = (result.winner_hull && result.winner_hull.name) || (p.hull && p.hull.file) || hullLabel || 'hull';
+  const prov = win.mix_provenance;
+  const provTxt = prov ? `${prov.status}${prov.nearest && prov.nearest.length ? '; nearest ' + prov.nearest.map(n => `${esc(n.name)} ${f(n.density_pcf, 1)} (${n.distance_pcf >= 0 ? '+' : ''}${f(n.distance_pcf, 1)})`).join(', ') : ''}` : '';
+  const pocket = typeof c.air_pocket_in === 'number' ? `${f(c.air_pocket_in, 1)} in each end` : null;
+  const stats = [
+    ['Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`],
+    ['Beam', `${f(c.beam_in, 1)} in`], sh ? ['Design draft', `${f(sh.draft_in, 2)} in`] : null,
+    ['Wall thickness', `${f(c.thickness_in, 3)} in`], ['Mold depth', `${f(c.depth_in, 2)} in`], ['Side flare', `${f(flareDeg(), 1)} deg`],
+    ['Mix density', `${f(c.density_pcf, 1)} pcf${c.mix ? ' (' + esc(c.mix) + ')' : ''}`], prov ? ['Mix source', provTxt] : null,
+    ['Hull weight', `${f(c.hull_weight_lb, 1)} lb`], typeof c.drag_n === 'number' ? ['Drag', `${dragTxt(c.drag_n)} at ${f(p.objective && p.objective.speed_mps, 1)} m/s`] : null,
+    ['GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>`],
+    ['Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`], pocket ? ['Air pocket', pocket] : null,
+    ['D/C search', f(v.dc, 3)], ['D/C verify', `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`],
+    win.dc_extrapolated != null ? ['D/C extrapolated', f(win.dc_extrapolated, 4)] : null,
+    ['Governing', `${esc(c.governing_case || '-')} / ${esc(v.governing_check || '-')}`],
+    ...(sh ? SHAPE.filter(([k]) => !['length_in', 'beam_in', 'draft_in'].includes(k)).map(([k, label]) => [label, f(sh[k], 3)]) : []),
+  ].filter(Boolean);
+  const checks = Array.isArray(v.checks) ? table(['check', 'demand psi', 'capacity psi', 'D/C', 'at x, in'], v.checks.map(k =>
+    `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td><td>${f(k.dc, 3)}</td><td>${f(k.x_in, 1)}</td></tr>`)) : '';
+  const cases = table(['case', 'knee in @ lb, bow to stern', 'seats', 'draft in', 'trim in', 'GM in', 'freeboard in', 'D/C', 'governs'],
+    (win.cases || []).map(k => k.error ? `<tr><td>${esc(k.name)}</td><td class="l" colspan="8">${esc(k.error)}</td></tr>`
+      : `<tr><td>${esc(k.name)}</td><td>${k.seats_in.map((x, j) => [x, k.weights_lb[j]]).sort((a, b) => a[0] - b[0]).map(([x, w]) => `${f(x, 0)}@${f(w, 0)}`).join(', ')}</td><td>${esc(k.seat_source || '')}${k.seat_variance_in ? ' &plusmn;' + f(k.seat_variance_in, 1) : ''}</td>
+        <td>${f(k.draft_in, 2)}</td><td>${f(k.trim_in, 2)}</td><td>${f(k.gm_in, 2)}</td><td>${f(k.freeboard_in, 2)}</td><td>${f(k.verdict && k.verdict.dc, 3)}</td><td>${esc(k.verdict ? k.verdict.governing_check : '-')}</td></tr>`));
+  const notes = [
+    win.on_grid_edge ? 'Winner is on the search grid edge. Widen the search range.' : '',
+    win.at_mix_data_edge ? 'Density is at the edge of what the lab data supports.' : '',
+    !win.verified ? 'Winner did not pass verification at the finer station count.' : '',
+  ].filter(Boolean).map(t => `<div class="note">${t}</div>`).join('');
+
+  // Inputs: every params section, scalars as key/value rows, arrays of tables (load cases) as tables.
+  const val = x => Array.isArray(x) ? x.map(val).join(', ') : x && typeof x === 'object' ? Object.entries(x).map(([k, y]) => `${k} ${val(y)}`).join('; ') : typeof x === 'number' ? String(+x.toPrecision(6)) : esc(String(x));
+  const inputs = Object.entries(p).filter(([, s]) => s != null).map(([sec, s]) => {
+    if (Array.isArray(s) && s.every(o => o && typeof o === 'object')) {
+      const keys = [...new Set(s.flatMap(o => Object.keys(o)))];
+      return `<h3>${esc(sec)}</h3>${table(keys, s.map(o => `<tr>${keys.map(k => `<td>${o[k] == null ? '-' : val(o[k])}</td>`).join('')}</tr>`))}`;
+    }
+    const rows = typeof s === 'object' ? Object.entries(s).filter(([, x]) => x != null).map(([k, x]) => kvr(esc(k), val(x))) : [kvr(esc(sec), val(s))];
+    return `<h3>${esc(sec)}</h3><div class="cols">${rows.join('')}</div>`;
+  }).join('');
+  const space = table(['variable', 'min', 'max', 'step', 'count', 'winner', 'bound', 'limit'], (win.search_space || []).map(a =>
+    `<tr><td>${esc(a.name)}</td><td>${val(a.min)}</td><td>${val(a.max)}</td><td>${a.step != null ? val(a.step) : '-'}</td><td>${a.count != null ? a.count : '-'}</td><td>${val(a.winner)}</td><td>${a.at_bound || ''}</td><td>${esc(a.limit || '')}</td></tr>`));
+  const cv = win.convergence;
+  const conv = cv ? table(['stations', ...cv.stations.map(String)], [`<tr><td>D/C</td>${cv.dc.map(x => `<td>${f(x, 4)}</td>`).join('')}</tr>`])
+    + `<div class="kv"><span>extrapolated</span><span>${cv.extrapolated != null ? f(cv.extrapolated, 4) : 'none, 2n-1 gate used'}${cv.order != null ? ', order ' + f(cv.order, 1) : ''}${cv.governing ? ', ' + esc(cv.governing) : ''}</span></div>`
+    + (cv.note ? `<div class="muted" style="margin-top:2pt">${esc(cv.note)}</div>` : '') : '';
+  const s = result.strength;
+  const mix = s ? `<div class="cols">${kvr('Split tensile fit', `${f(s.split_slope_psi_per_pcf, 2)} &times; density ${s.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(s.split_intercept_psi), 1)} psi`)}
+      ${kvr('RMS error', `${f(s.rms_residual_psi, 1)} psi`)}${kvr('Tested densities', `${f(s.density_min_pcf, 1)} to ${f(s.density_max_pcf, 1)} pcf`)}
+      ${kvr('Flexural', s.flexural_fit ? `measured, ${s.flexural_fit.n} tests` : `derived: ${f(s.flex_over_split, 2)} &times; split`)}
+      ${kvr("f'c", s.compressive_fit ? `measured, ${s.compressive_fit.n} tests` : 'derived: (split / 6.7)&sup2;')}</div>`
+    + table(['lab point', 'mix', 'density pcf', 'measured psi', 'fraction of final', 'final psi', 'flexural psi', "f'c psi"], (s.points || []).map(q =>
+      `<tr><td>${esc(q.mix)}</td><td>${esc(q.group || '')}</td><td>${f(q.density_pcf, 2)}</td><td>${f(q.measured_psi, 0)}</td><td>${f(q.fraction_of_final, 2)}</td><td>${f(q.final_psi, 0)}</td><td>${q.flexural_psi != null ? f(q.flexural_psi, 0) : '-'}</td><td>${q.compressive_psi != null ? f(q.compressive_psi, 0) : '-'}</td></tr>`)) : '';
+
+  return `<!doctype html><html><head><meta charset="utf-8"><title>JAGUAR report</title><style>${REPORT_CSS}</style></head><body>
+  <div class="top">
+    <img src="${canoeImg}" alt="winning canoe">
+    <div>
+      <div class="brand">Generated by JAGUAR</div>
+      <h1>Canoe design report.</h1>
+      <div class="muted">${esc(hullName)} &middot; ${now.toLocaleString()}</div>
+      <div class="big">${f(c.hull_weight_lb, 1)} lb</div>
+      <div class="muted">hull weight, ${f(c.thickness_in, 3)} in wall at ${f(c.density_pcf, 1)} pcf, ${f(c.depth_in, 2)} in deep</div>
+      <div style="margin-top:8pt"><span class="badge ${win.verified ? 'ok' : 'bad'}">${win.verified ? 'Verified' : 'Not verified'}</span>
+        <span class="muted">&nbsp;D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations, gate ${f(p.gates && p.gates.dc_verify, 2)}</span></div>
+      <div class="muted" style="margin-top:4pt">Objective: ${esc(objKind)}. ${cands.length} candidates tried, ${cands.filter(k => k.passes).length} pass.</div>
+    </div>
+  </div>
+  ${notes}
+  <h2>Winner.</h2><div class="cols">${stats.map(([k, x]) => kvr(k, x)).join('')}</div>
+  <h2>Checks.</h2>${checks}
+  <h2>Load cases.</h2>${cases}
+  <div class="page"><h2 style="margin-top:0">Optimization data.</h2>
+    <h3>Search space</h3>${space}
+    ${conv ? `<h3>Station convergence of the winner</h3>${conv}` : ''}
+    <h2>Mix data.</h2>${mix}
+    <h2>Inputs.</h2>${inputs}
+  </div>
+  <div class="page"><h2 style="margin-top:0">Charts.</h2>
+    ${charts.map(ch => `<figure><h3>${esc(ch.title)}</h3>${ch.note ? `<figcaption>${esc(ch.note)}</figcaption>` : ''}<img src="${ch.img}"></figure>`).join('')}
+  </div>
+  <div class="page">${calcHtml(win)}</div>
+  </body></html>`;
+}
+// Calculation appendix: each governing equation, then the same equation with the winner's numbers
+// (result.winner.calc, recomputed by the checks' own code, so every result equals the verdict).
+function calcHtml(win) {
+  const k = win.calc, c = win.candidate, e = win.empty;
+  const head = '<h2 style="margin-top:0">Calculations.</h2>';
+  if (!k || k.error || !k.service) return head + `<div class="note">Calculation trace not available${k && k.error ? ': ' + esc(k.error) : ' (re-run with this version of JAGUAR)'}.</div>`;
+  const g = (x, n = 3) => typeof x !== 'number' ? '-' : !isFinite(x) ? '&infin;' : Math.abs(x) >= 1e5 || (Math.abs(x) < 1e-3 && x !== 0) ? x.toExponential(n - 1).replace(/e([+-]?)(\d+)/, (_, sg, d) => ` &times; 10<sup>${sg === '-' ? '&minus;' : ''}${d}</sup>`) : x.toFixed(n);
+  const neg = x => x < 0 ? `(${g(x)})` : g(x);
+  const eq = (why, form, num) => `<div class="eq"><div class="why">${why}</div><div class="f">${form}</div>${num ? `<div class="n">${num}</div>` : ''}</div>`;
+  const sv = k.service, st = k.strength, asd = k.method === 'asd';
+  const kf = asd ? `1 / FS = 1 / ${g(k.factor_of_safety, 2)}` : `&phi; = ${g(k.capacity_factor, 2)}`;
+  const kSym = asd ? '1/FS' : '&phi;';
+  const out = [head, `<div class="muted">Governing load case <b>${esc(k.case)}</b> at its worst seat sample (knees ${k.seats_in.map(x => g(x, 1)).join(', ')} in),
+    ${k.stations} stations along ${g(k.length_in, 1)} in. Units: in, lb, psi, pcf. ${asd ? `Allowable stress design: capacity &times; 1/FS.` : `LRFD: loads &times; ${g(k.dead_factor, 1)}D + ${g(k.live_factor, 1)}L, capacity &times; &phi;.`}
+    Every value below is recomputed by the same code as the checks; each result equals the checks table.</div>`];
+
+  out.push('<h3>1. Hull section and weight</h3>');
+  out.push(eq('Thin shell: wall thickness t along the mold-line girth s of both sides, plus the flat keel strip. Per station:',
+    'A = 2 y<sub>0</sub> t + 2 t &Sigma; &Delta;s<sub>k</sub>, &nbsp; z&#772; = &Sigma; A<sub>k</sub> z<sub>k</sub> / A, &nbsp; I = &Sigma; A<sub>k</sub> [(z<sub>k</sub> &minus; z&#772;)<sup>2</sup> + &Delta;z<sub>k</sub><sup>2</sup>/12] + 2 y<sub>0</sub> t z&#772;<sup>2</sup>',
+    `t = ${g(k.thickness_in, 3)} in; values at the governing stations are listed under each check.`));
+  out.push(eq('Wall volume and hull weight (trapezoid rule over the stations, 1728 in<sup>3</sup>/ft<sup>3</sup>):',
+    'V<sub>wall</sub> = &int; A(x) dx, &nbsp; W<sub>hull</sub> = V<sub>wall</sub> &rho; / 1728',
+    `W<sub>hull</sub> = ${g(k.wall_volume_in3, 1)} &times; ${g(k.density_pcf, 1)} / 1728 = <b>${g(sv.hull_weight_lb, 2)} lb</b>`));
+
+  out.push('<h3>2. Loads and floating equilibrium</h3>');
+  out.push(eq('Each paddler kneels on a 3 in patch; weights carry the dynamic load factor:',
+    'W<sub>crew</sub> = DLF &Sigma; w<sub>j</sub>',
+    `W<sub>crew</sub> = ${g(k.dynamic_load_factor, 2)} &times; (${k.weights_lb.map(w => g(w, 0)).join(' + ')}) = ${g(sv.crew_lb, 1)} lb; &nbsp; W = ${g(sv.hull_weight_lb, 2)} + ${g(sv.crew_lb, 1)} = <b>${g(sv.weight_lb, 2)} lb</b>`));
+  out.push(eq('Draft d and trim &theta; solve force and moment balance (local waterline d + &theta;(x &minus; L/2)/L, fresh water 62.4 pcf):',
+    '&int; 62.4 A<sub>sub</sub>(x) / 1728 dx = W, &nbsp; &int; 62.4 A<sub>sub</sub>(x) (x &minus; L/2) / 1728 dx = &Sigma; W<sub>i</sub>(x<sub>i</sub> &minus; L/2)',
+    `d = <b>${g(sv.draft_in, 3)} in</b>, &theta; = <b>${g(sv.trim_in, 3)} in</b> (bow to stern difference)`));
+  out.push(eq('Freeboard is the mold depth minus the highest local waterline:',
+    'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
+    `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> &nbsp;(gate &ge; ${g(fbGate, 2)} in)`
+    + (e && !e.error && typeof e.freeboard_in === 'number' ? `<br>No crew: W = ${g(sv.hull_weight_lb, 2)} lb floats at d = ${g(e.draft_in, 3)} in, f = <b>${g(e.freeboard_in, 3)} in</b>` : '')));
+  out.push(eq('Transverse stability: centre of buoyancy KB, metacentric radius BM = I<sub>wp</sub> / V, centre of gravity KG (hull wall at its section centroids, crew at crew_cg):',
+    'KB = &int;&int; z dA dx / V, &nbsp; BM = &int; (2/3) y<sub>wl</sub><sup>3</sup> dx / V, &nbsp; KG = (&int; w<sub>hull</sub> z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W, &nbsp; GM = KB + BM &minus; KG',
+    `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> &nbsp;(z<sub>crew</sub> = ${g(sv.crew_cg_in, 1)} in, gate &ge; ${g(gmGate, 2)} in)`));
+  out.push(eq('Shear and bending moment: net load q(x) = buoyancy &minus; self weight, integrated from the bow; each knee patch subtracts in closed form:',
+    'V(x) = &int;<sub>0</sub><sup>x</sup> q dx &minus; &Sigma; P<sub>j</sub> F<sub>V</sub>(x), &nbsp; M(x) = &int;<sub>0</sub><sup>x</sup> V dx &minus; &Sigma; P<sub>j</sub> F<sub>M</sub>(x), &nbsp; V(L) = M(L) = 0',
+    asd ? 'Stress checks use these service loads.' : `Stress checks re-solve with self weight &times; ${g(k.dead_factor, 1)} and crew &times; ${g(k.live_factor, 1)}: W = ${g(st.weight_lb, 1)} lb, d = ${g(st.draft_in, 3)} in.`));
+
+  out.push('<h3>3. Material strength</h3>');
+  out.push(eq('Split tensile strength from the lab fit (linear in density):',
+    'f<sub>sp</sub> = a &rho; + b',
+    `f<sub>sp</sub> = ${g(k.split_slope_psi_per_pcf, 3)} &times; ${g(k.density_pcf, 1)} ${k.split_intercept_psi < 0 ? '&minus;' : '+'} ${g(Math.abs(k.split_intercept_psi), 1)} = <b>${g(k.split_psi, 1)} psi</b>`));
+  out.push(k.flexural_source === 'measured'
+    ? eq('Flexural strength (modulus of rupture), measured fit:', 'f<sub>r</sub> = fit(&rho;)', `f<sub>r</sub> = <b>${g(k.flexural_psi, 1)} psi</b>`)
+    : eq('Flexural strength (modulus of rupture) from split tensile:', 'f<sub>r</sub> = (f<sub>r</sub>/f<sub>sp</sub>) f<sub>sp</sub>', `f<sub>r</sub> = ${g(k.flex_over_split, 2)} &times; ${g(k.split_psi, 1)} = <b>${g(k.flexural_psi, 1)} psi</b>`));
+  out.push(k.fc_source === 'measured'
+    ? eq("Compressive strength, measured fit:", "f'<sub>c</sub> = fit(&rho;)", `f'<sub>c</sub> = <b>${g(k.fc_psi, 0)} psi</b>`)
+    : eq("Compressive strength from ACI f<sub>ct</sub> = 6.7 &radic;f'<sub>c</sub> (lightweight effect already in the data, &lambda; = 1):", "f'<sub>c</sub> = (f<sub>sp</sub> / 6.7)<sup>2</sup>", `f'<sub>c</sub> = (${g(k.split_psi, 1)} / 6.7)<sup>2</sup> = <b>${g(k.fc_psi, 0)} psi</b>`));
+
+  out.push('<h3>4. Checks</h3>');
+  const fib = (name, b, capForm, capNum) => b ? eq(`${name} at x = ${g(b.x_in, 1)} in (${b.fibre} fibre; A = ${g(b.area_in2, 3)} in<sup>2</sup>, z&#772; = ${g(b.zbar_in, 3)} in, c = ${b.fibre === 'bottom' ? 'z&#772;' : 'D &minus; z&#772;'}):`,
+    `&sigma; = |M| c / I, &nbsp; capacity = ${capForm}`,
+    `&sigma; = |${g(b.moment_lbin, 1)}| &times; ${g(b.c_in, 3)} / ${g(b.inertia_in4, 2)} = ${g(b.stress_psi, 1)} psi; &nbsp; capacity = ${capNum} = ${g(b.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(b.dc, 3)}</b>`) : '';
+  out.push(fib('Bending tension', k.bending_tension, `f<sub>r</sub> &times; ${kSym}`, `${g(k.flexural_psi, 1)} &times; ${g(k.capacity_factor, 4)}`));
+  out.push(fib('Bending compression', k.bending_compression, `0.85 f'<sub>c</sub> &times; ${kSym}`, `0.85 &times; ${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)}`));
+  const sh = k.shear;
+  if (sh) out.push(eq(`Shear at x = ${g(sh.x_in, 1)} in (two walls, b = 2t; Q = first moment of the shell below z&#772; = ${g(sh.zbar_in, 3)} in; ACI one-way shear):`,
+    `&tau; = |V| Q / (I b), &nbsp; capacity = 2 &lambda; &radic;f'<sub>c</sub> &times; ${kSym}`,
+    `&tau; = |${g(sh.shear_lb, 2)}| &times; ${g(sh.q_in3, 3)} / (${g(sh.inertia_in4, 2)} &times; ${g(sh.b_in, 3)}) = ${g(sh.stress_psi, 2)} psi; &nbsp; capacity = 2 &times; &radic;${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)} = ${g(sh.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(sh.dc, 3)}</b>`));
+  const pu = k.punching, aci = pu.method === 'aci_22_6';
+  const pLoad = pu.knees === 1 ? `P = ${g(pu.paddler_lb, 1)} lb (whole paddler on one knee)`
+    : pu.merged ? `P = ${g(pu.paddler_lb, 1)} lb (critical circles overlap: whole paddler on the merged perimeter b<sub>0</sub> = 2 s + &pi;(d<sub>load</sub> + d))`
+    : `P = ${g(pu.knee_split, 2)} &times; ${g(pu.paddler_lb, 1)} = ${g(pu.load_lb, 1)} lb per knee`;
+  out.push(eq(`Knee punching (${aci ? 'ACI 318-19 22.6, two-way shear' : 'ACI 318-19 14.5.5, plain concrete'}). Heaviest paddler &times; DLF${asd ? '' : ' &times; live factor'} = ${g(pu.paddler_lb, 1)} lb; round knee patch with pad, &beta; = 1:`,
+    `d<sub>load</sub> = knee + 2 pad, &nbsp; ${aci ? 'd = (d/t) t' : 'h = t'}, &nbsp; b<sub>0</sub> = &pi;(d<sub>load</sub> + ${aci ? 'd' : 'h'}), &nbsp; v<sub>u</sub> = P / (b<sub>0</sub> ${aci ? 'd' : 'h'})`,
+    `d<sub>load</sub> = ${g(pu.knee_patch_in, 2)} + 2 &times; ${g(pu.pad_in, 3)} = ${g(pu.d_load_in, 3)} in; &nbsp; ${aci ? `d = ${g(pu.depth_over_t, 3)} &times; ${g(k.thickness_in, 3)}` : 'h'} = ${g(pu.depth_in, 4)} in; &nbsp; b<sub>0</sub> = ${g(pu.b0_in, 3)} in<br>${pLoad}; &nbsp; v<sub>u</sub> = ${g(pu.load_lb, 1)} / (${g(pu.b0_in, 3)} &times; ${g(pu.depth_in, 4)}) = <b>${g(pu.v_u, 1)} psi</b>`));
+  if (aci) {
+    const ls = Math.min(1, Math.sqrt(2 / (1 + pu.depth_in / 10)));
+    out.push(eq('Punching capacity (Table 22.6.5.2, size effect &lambda;<sub>s</sub> = &radic;(2 / (1 + d/10)) &le; 1):',
+      `v<sub>c</sub> = min(4, 2 + 4/&beta;, 2 + 40 d / b<sub>0</sub>) &lambda;<sub>s</sub> &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>c</sub> &times; ${asd ? '1/FS' : '&phi; (0.75)'}`,
+      `&lambda;<sub>s</sub> = ${g(ls, 4)}; &nbsp; v<sub>c</sub> = min(4, 6, ${g(2 + 40 * pu.depth_in / pu.b0_in, 3)}) &times; ${g(ls, 4)} &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; &nbsp; capacity = ${g(pu.v_nominal, 1)} &times; ${g(k.punching_factor, 4)} = ${g(pu.capacity_psi, 1)} psi`
+      + `<br>D/C = ${g(pu.v_u, 1)} / ${g(pu.capacity_psi, 1)} = <b>${g(pu.dc, 3)}</b>`));
+  } else {
+    out.push(eq('Punching capacity (Table 14.5.5.1):',
+      `v<sub>n</sub> = min((4/3)(1 + 2/&beta;), 8/3) &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>n</sub> &times; ${kSym}`,
+      `v<sub>n</sub> = (8/3) &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; &nbsp; capacity = ${g(pu.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(pu.dc, 3)}</b>`));
+  }
+  const bx = k.biaxial;
+  if (bx) out.push(eq(`Biaxial (Kupfer-Gerstle) at x = ${g(bx.x_in, 1)} in: longitudinal fibre stress (tension ${g(bx.tension_psi, 1)}, compression ${g(bx.compression_psi, 1)} psi), transverse turning stress &sigma;<sub>y</sub> = ${g(bx.transverse_psi, 1)} psi at both signs, peak shear &tau; = ${g(bx.shear_psi, 2)} psi; worst of the four combinations:`,
+    `&sigma;<sub>1,2</sub> = (&sigma;<sub>x</sub> + &sigma;<sub>y</sub>)/2 &plusmn; &radic;(((&sigma;<sub>x</sub> &minus; &sigma;<sub>y</sub>)/2)<sup>2</sup> + &tau;<sup>2</sup>), &nbsp; capacity = f<sub>t</sub> (1 &minus; 0.8 |min(&sigma;<sub>2</sub>, 0)| / f'<sub>c</sub>), &nbsp; f<sub>t</sub>, f'<sub>c</sub> &times; ${kSym}`,
+    `&sigma;<sub>x</sub> = ${neg(bx.sigma_x_psi)}, &sigma;<sub>y</sub> = ${neg(bx.sigma_y_psi)} &rarr; &sigma;<sub>1</sub> = ${g(bx.sigma_1_psi, 2)}, &sigma;<sub>2</sub> = ${g(bx.sigma_2_psi, 2)} psi; &nbsp; capacity = ${g(bx.ft_psi, 1)} &times; (1 &minus; 0.8 &times; ${g(Math.abs(Math.min(bx.sigma_2_psi, 0)), 2)} / ${g(bx.fc_psi, 1)}) = ${g(bx.capacity_psi, 1)} psi; &nbsp; D/C = max(&sigma;<sub>1</sub>, 0) / capacity = <b>${g(bx.dc, 3)}</b>`));
+  out.push(eq('Governing D/C is the largest over all checks, load cases and seat samples:', 'D/C = max(D/C<sub>i</sub>)',
+    `D/C = <b>${g(c.verdict && c.verdict.dc, 3)}</b> at search resolution (gate &le; ${g(dcGate, 2)}), ${g(win.verify_dc, 3)} at ${win.verify_stations} stations`));
+
+  out.push('<h3>5. Verification and flotation</h3>');
+  out.push(eq('Station convergence: the winner is re-run at n, 2n &minus; 1 and 4n &minus; 3 stations (spacing halves); per (case, check) series D<sub>1</sub>, D<sub>2</sub>, D<sub>3</sub>, Richardson extrapolation:',
+    'p = log<sub>2</sub>[(D<sub>2</sub> &minus; D<sub>1</sub>) / (D<sub>3</sub> &minus; D<sub>2</sub>)], &nbsp; D<sub>&infin;</sub> = D<sub>3</sub> + (D<sub>3</sub> &minus; D<sub>2</sub>) / (2<sup>p</sup> &minus; 1), &nbsp; verified: max(D<sub>&infin;</sub>, D<sub>3</sub>) &le; dc_verify',
+    win.convergence && win.convergence.extrapolated != null
+      ? `Governing series ${esc(win.convergence.governing || '')}: ${win.convergence.order != null ? `p = ${g(win.convergence.order, 2)}, D<sub>&infin;</sub>` : `already converged (D<sub>2</sub> = D<sub>3</sub>), D<sub>&infin;</sub> = D<sub>3</sub>`} = <b>${g(win.convergence.extrapolated, 4)}</b> (gate &le; ${g(result.params.gates.dc_verify, 2)})`
+      : `Series irregular: the ${win.verify_stations}-station D/C ${g(win.verify_dc, 3)} is gated instead.`));
+  const fl = k.flotation;
+  if (fl) out.push(eq('Swamped flotation: submerged wall plus sealed bow and stern air pockets of equal length l must float the bare hull with a reserve:',
+    '(V<sub>wall</sub> + V<sub>pockets</sub>(l)) &times; 62.4 / 1728 &ge; SF &times; W<sub>hull</sub>, &nbsp; V<sub>pockets</sub> needed = SF W<sub>hull</sub> 1728 / 62.4 &minus; V<sub>wall</sub>',
+    `V<sub>pockets</sub> = ${g(k.swamp_factor, 2)} &times; ${g(fl.weight_lb, 2)} &times; 1728 / 62.4 &minus; ${g(fl.wall_in3, 1)} = ${g(fl.pocket_in3, 1)} in<sup>3</sup> &rarr; l = <b>${g(fl.pocket_len_in, 1)} in</b> each end`));
+  return out.join('');
+}
+function exportPdf() {
+  if (!result || !result.winner || !hull) return;
+  try {
+    const html = reportHtml(snapCanoe(1400, 760), reportCharts());
+    // The previous report's frame stays until the next export: removing it while a print dialog
+    // is still open cancels the print in some browsers.
+    const old = $('pdfframe'); if (old) old.remove();
+    const fr = document.createElement('iframe');
+    fr.id = 'pdfframe'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    // Chrome names the saved PDF after the top document title.
+    const title = document.title;
+    document.title = `jaguar-report-${result.winner.candidate.hull_weight_lb.toFixed(1)}lb`;
+    fr.onload = () => { fr.contentWindow.onafterprint = () => { document.title = title; }; fr.contentWindow.focus(); fr.contentWindow.print(); };
+    fr.srcdoc = html; document.body.appendChild(fr);
+  } catch (e) { $('err').textContent = 'pdf: ' + e.message; }
 }
 
 // ---------- API ----------
@@ -1032,6 +1349,9 @@ function drawMix() {
   const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  plotMix(ctx, W, H);
+}
+function plotMix(ctx, W, H) {
   const m = mixFit, showFc = $('mixfc') && $('mixfc').checked, lf = (f, x) => f.slope_psi_per_pcf * x + f.intercept_psi;
   // Measured fits are solid with their points; derived curves are dashed.
   const ff = m.flexural_fit, cf = m.compressive_fit;
