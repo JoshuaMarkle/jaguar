@@ -89,7 +89,7 @@ fn golden_bending_dc() {
             mesh_after_layer: None,
             mold: None,
         };
-        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2, &pu);
+        let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2, &pu, None);
         let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();
         assert_rel("dc", bt.dc, f(o, "dc"), tol);
     }
@@ -193,7 +193,8 @@ fn golden_strength_checks_per_combination() {
             assert_rel(&format!("{tag} draft"), loads.draft_in, f(cb, "draft"), tol);
             let mmax = loads.moment.iter().fold(0.0_f64, |a, m| a.max(m.abs()));
             assert_rel(&format!("{tag} Mmax"), mmax, f(cb, "Mmax"), tol);
-            let v = check::check(&grid, &sec, &loads, rho, &p.material, &ref_fit(i), 175.0, &p.punching);
+            let v =
+                check::check(&grid, &sec, &loads, rho, &p.material, &ref_fit(i), 175.0, &p.punching, None);
             for name in STRESS_CHECKS {
                 assert_rel(&format!("{tag} {name}"), dc_of(&v, name), f(&cb["dc"], name), tol);
             }
@@ -256,7 +257,7 @@ fn lrfd_punching_scales_by_live_factor_over_phi() {
         let fs = p.material.factor_of_safety;
         let punch = |p: &Params, lb: f64| {
             dc_of(
-                &check::check(&grid, &sec, &loads, rho, &p.material, &ref_fit(i), lb, &p.punching),
+                &check::check(&grid, &sec, &loads, rho, &p.material, &ref_fit(i), lb, &p.punching, None),
                 "punching",
             )
         };

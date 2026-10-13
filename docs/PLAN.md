@@ -33,8 +33,6 @@ answer more trustworthy first.
   Can move hogging ~40%. Pays off only after punching is relieved (A1, C1).
 - **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
   dc_search / dc_verify margin.
-- **B7. Hoop stress from turning in the biaxial check** (k = V^2/gR, as in the ASCE report). Needs a
-  turn radius input; small effect while bending is at 0.3.
 - **B8. Turning model** to replace the lateral-profile proxy behind `straight_weight` (T32). Needed
   before C3.
 
@@ -69,7 +67,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
-| Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |
+| Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |
 | Race simulator / ML path | open, out of scope (C3) |

@@ -36,7 +36,7 @@ uniform mix since JAGUAR has no zoning, 2M + 4_coed with the report's seats, cre
 | bending fibre | sign-aware (tension fibre only), transformed multi-zone section | max(c) regardless of sign (conservative, matches golden) | report sharper, JAGUAR safer |
 | compression | advisory only | gated vs 0.85 f'c | JAGUAR stricter |
 | shear | "well below", not quantified | VQ/(I 2t) vs 2 sqrt(f'c), gated | JAGUAR stricter |
-| combined | Kupfer-Gerstle with hoop stress from turning (k = V^2/gR) | none | gap, but small effect (see below) |
+| combined | Kupfer-Gerstle with hoop stress from turning (k = V^2/gR) | Kupfer (T45) + optional `[turning]` hoop stress (T59) | same; +2% biaxial D/C at 2.5 m/s, 10 m |
 | torsion | advisory D/C 3.53, not gated | out of scope | same outcome |
 | strength model | f'c = 161.29 rho - 9566, ft = f'c/5, "n = 3" but lists 7 mixes (50.9-80 pcf) | split tensile fit from 3 breaks (54.9-60 pcf), f'c = (fsp/6.7)^2 | **disagree badly** (61.5 pcf: ft 71 psi vs 314 psi) |
 | stability | crew KG 19.86 in from anthropometry, GM -2.99 in, reported not gated | crew_cg_in = 12 (assumed), gated at gm_min 0.25 | JAGUAR gate is optimistic if 19.86 is right |
@@ -81,7 +81,7 @@ Snapshot of 2026-10-12, now out of date: current status is in `docs/PLAN.md`.
 | Doubly symmetric | open (set fore = aft bounds by hand, nothing ties them) |
 | Buoyancy distributed force | **done** |
 | Self weight distributed force | **done** |
-| Kupfer (shear + moment) | open (PLAN idea) |
+| Kupfer (shear + moment) | done (T45, turning T59) |
 | LRFD 1.2 / 1.6 | open (ASD with FS 1.5 + DLF 1.2 now) |
 | Race cases 4/3/2 separately | **done in the engine** (`[[load_case]]`), examples only use 2M |
 | Auto seat solver + variance + manual override | manual done, auto/variance open (PLAN idea) |

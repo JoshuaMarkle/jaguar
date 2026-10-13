@@ -232,6 +232,9 @@ const FIELDS = {
   flotation: [
     ['air_pocket_max_in', 'Max air pocket', 'in', 'Longest sealed air pocket (flotation chamber) allowed at EACH end, measured in from the bow and from the stern. A design that needs a longer pocket to float swamped fails.', 'any', 0],
     ['swamp_factor', 'Swamp factor', '-', 'Swamped, the submerged wall plus both air pockets must displace at least this times the canoe weight (fresh water). 1.1 = 10% reserve.', 'any', 0]],
+  turning: [
+    ['speed_mps', 'Turn speed', 'm/s', 'Boat speed through the turn. Lateral acceleration = speed^2 / radius.', 'any', 0],
+    ['radius_in', 'Turn radius', 'in', 'Radius of the turn (394 in = 10 m). Smaller = harder turn.', 'any', 0]],
   search: [
     ['thickness_in', 'Wall thickness', 'in', 'Wall thickness range to search: min, max, step (inclusive).'],
     ['density_pcf', 'Mix density', 'pcf', 'Concrete density range to search: min, max, step (inclusive). Denser is stronger but heavier.'],
@@ -281,7 +284,7 @@ const PUNCH = [
   ['mesh_after_layer', 'Mesh after pass', '-', 'The mesh is laid after this pass (1 = after the first). Must be less than the number of passes.', 1, 1]];
 const PUNCH_INT = ['layers', 'mesh_after_layer'];
 // [title, note shown muted next to it]
-const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
+const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], turning: ['Turning', 'side-wall stress in a turn'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 // One aligned row: label | control | unit. The tooltip lives on the row so hovering anywhere explains it.
@@ -327,6 +330,7 @@ function buildForm() {
   const optRow = ([k, label, unit, t, ph]) => row(`shape.${k}`, label, t, `<input type="number" id="shape.${k}" step="any" min="0" placeholder="${ph}">`, unit);
   const rocker = n => `<input type="number" id="shape.rocker_in.${n}" title="${esc(ROCKER_T)} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
   const flt = 'Check that the canoe floats when swamped (ASCE): the concrete wall plus sealed air pockets at the bow and stern must hold it up. JAGUAR sizes the pocket length each design needs; off = no flotation gate.';
+  const trn = 'Add the transverse wall stress of a steady turn to the biaxial (Kupfer) check: the canoe and crew are pushed sideways at speed^2 / radius, the water pushes back on the hull side, and the side bends like a cantilever from the keel. Off = no turning load.';
   $('form').innerHTML =
     section('hull',
       row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
@@ -357,6 +361,9 @@ function buildForm() {
     + section('flotation',
       row('flotation.on', 'Swamped flotation gate', flt, '<input type="checkbox" class="switch" id="flotation.on">')
       + `<div id="flotbody" style="display:grid;gap:var(--s1)">${FIELDS.flotation.map(f => numRow('flotation', f)).join('')}</div>`)
+    + section('turning',
+      row('turning.on', 'Turning stress', trn, '<input type="checkbox" class="switch" id="turning.on">')
+      + `<div id="turnbody" style="display:grid;gap:var(--s1)">${FIELDS.turning.map(f => numRow('turning', f)).join('')}</div>`)
     + section('objective',
       row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option></select>')
       + FIELDS.objective.map(f => numRow('objective', f)).join('')
@@ -368,6 +375,7 @@ function buildForm() {
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
   $('flotation.on').onchange = setFlotation;
+  $('turning.on').onchange = setTurning;
   for (const b of $('dispseg').children) b.onclick = () => setDispMode(b.dataset.disp);
   $('dispaddbtn').onclick = () => { dispRow('', ''); dispMode = 'custom'; dispRefresh(); };
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
@@ -383,6 +391,7 @@ function setShapeMode() {
   $('shapefs').style.display = on ? '' : 'none';
 }
 function setFlotation() { $('flotbody').style.display = $('flotation.on').checked ? 'grid' : 'none'; }
+function setTurning() { $('turnbody').style.display = $('turning.on').checked ? 'grid' : 'none'; }
 // Race displacement rows: crew lb + share. The segmented control fills presets; editing a row makes it custom.
 function dispRow(crew, w) {
   const d = document.createElement('div'); d.className = 'row'; d.title = DISP_T;
@@ -444,6 +453,9 @@ function fillForm(p, hulls) {
   const fp = p.flotation;
   $('flotation.on').checked = !!fp; setFlotation();
   for (const [k] of FIELDS.flotation) $(`flotation.${k}`).value = fp ? fp[k] : { air_pocket_max_in: 36, swamp_factor: 1.1 }[k];
+  const tp = p.turning;
+  $('turning.on').checked = !!tp; setTurning();
+  for (const [k] of FIELDS.turning) $(`turning.${k}`).value = tp ? tp[k] : { speed_mps: 2.5, radius_in: 394 }[k];
   if (p.objective.straight_weight == null) p.objective.straight_weight = 1;
   const ds = p.objective.displacements;
   setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
@@ -501,6 +513,11 @@ function formToml() {
   if ($('flotation.on').checked) {
     out.push('[flotation]');
     for (const [k] of FIELDS.flotation) out.push(`${k} = ${fl(g('flotation.' + k))}`);
+    out.push('');
+  }
+  if ($('turning.on').checked) {
+    out.push('[turning]');
+    for (const [k] of FIELDS.turning) out.push(`${k} = ${fl(g('turning.' + k))}`);
     out.push('');
   }
   return out.join('\n');

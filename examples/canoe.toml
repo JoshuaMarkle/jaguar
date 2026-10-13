@@ -81,6 +81,10 @@ gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself).
 air_pocket_max_in = 36.0  # max sealed air pocket length at each end (bow and stern)
 swamp_factor = 1.1        # wall + pockets must displace >= this x canoe weight
 
+# [turning]               # optional: add the transverse wall stress of a steady turn to the biaxial check
+# speed_mps = 2.5         # boat speed through the turn (lateral acceleration V^2 / R)
+# radius_in = 394.0       # turn radius (394 in = 10 m)
+
 [objective]
 kind = "drag"             # "drag" (default) = least water resistance, "weight" = lightest hull
 speed_mps = 2.5           # race speed for the drag objective

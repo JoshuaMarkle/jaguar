@@ -536,7 +536,17 @@ pub fn eval_case(
         } else {
             solve(grid, sec, rho * dead, &crew(live), patch, cg)?
         };
-        let mut v = check(grid, sec, &loads, rho, mat, fit, max_paddler * live, &params.punching);
+        let mut v = check(
+            grid,
+            sec,
+            &loads,
+            rho,
+            mat,
+            fit,
+            max_paddler * live,
+            &params.punching,
+            params.turning.as_ref(),
+        );
         v.freeboard_in = fb;
         if best.as_ref().is_none_or(|(_, b)| v.dc.is_nan() || v.dc > b.dc) {
             best = Some((loads, v));
@@ -585,7 +595,8 @@ pub fn case_diagrams(
         ..Default::default()
     };
     let mut tension_psi = Vec::with_capacity(n);
-    for i in 0..n {
+    let hoop = crate::check::hoop_psi(grid, &loads, t, params.turning.as_ref());
+    for (i, &hoop) in hoop.iter().enumerate() {
         let ii = sec.inertia[i];
         if ii <= 1e-3 * imax {
             for v in [&mut tension_psi, &mut out.compression_psi, &mut out.shear_psi] {
@@ -614,7 +625,7 @@ pub fn case_diagrams(
         out.dc_bending_tension.push(dc(st, ft_cap));
         out.dc_bending_compression.push(dc(sc, fc_cap));
         out.dc_shear.push(dc(tau, v_cap));
-        out.dc_biaxial.push(crate::check::kupfer_dc(st, sc, tau, ft_cap, fc_kupfer));
+        out.dc_biaxial.push(crate::check::kupfer_dc(st, sc, hoop, tau, ft_cap, fc_kupfer));
     }
     let l = grid.x[n - 1];
     let waterline_in = grid

@@ -28,8 +28,9 @@
 //!   circles overlap, then the whole paddler on the merged obround perimeter
 //!   b0 = 2 spacing + pi (d_load + d). Capacity = v / FS (no phi on top).
 //! * `biaxial`: Kupfer-Gerstle tension-compression envelope on the principal
-//!   stresses of (bending fibre stress, peak shear) per station, see
-//!   [`kupfer_dc`]. Demand is the D/C itself, capacity 1.
+//!   stresses of (bending fibre stress, transverse turning stress [`hoop_psi`],
+//!   peak shear) per station, see [`kupfer_dc`]. Demand is the D/C itself,
+//!   capacity 1. Without `[turning]` the transverse stress is 0.
 //! * Freeboard: depth - max local draft (not a D/C; gated separately).
 //!
 //! f'c <= 0 or capacity <= 0 makes that check dc = +inf; optimize treats a
@@ -44,7 +45,7 @@
 use crate::equilibrium::Loads;
 use crate::hull::Grid;
 use crate::mix::StrengthFit;
-use crate::params::{DesignMethod, Material, Punching, PunchingMethod};
+use crate::params::{DesignMethod, Material, Punching, PunchingMethod, Turning};
 use crate::section::{self, Sections};
 use serde::Serialize;
 
@@ -186,20 +187,67 @@ pub fn fibres(m: f64, c_top: f64, c_bot: f64) -> (f64, f64) {
     if m >= 0.0 { (c_bot, c_top) } else { (c_top, c_bot) }
 }
 
-/// Kupfer-Gerstle (1973) biaxial D/C at one station, tension-compression
-/// branch: sigma_1 <= f_t (1 - 0.8 |sigma_2| / f'c). Conservatively combines
-/// the extreme-fibre bending stress with the section's peak shear stress
-/// (which really peaks at the axis). Both fibres are tried: the tension
-/// fibre (sigma = +st) and the compression fibre (sigma = -sc). `ft`, `fc`
-/// are already divided by FS. Non-finite or exhausted capacity -> +inf.
-pub fn kupfer_dc(st: f64, sc: f64, tau: f64, ft: f64, fc: f64) -> f64 {
-    let one = |s: f64| {
-        let r = (0.25 * s * s + tau * tau).sqrt();
-        let (s1, s2) = (0.5 * s + r, 0.5 * s - r);
-        let cap = ft * (1.0 - 0.8 * s2.abs() / fc);
+/// Kupfer-Gerstle (1973) biaxial D/C at one station. Plane stress
+/// (sigma_x, sigma_y, tau) -> principal sigma_1 >= sigma_2; tension-compression
+/// branch sigma_1 <= f_t (1 - 0.8 |sigma_2| / f'c), tension-tension
+/// (sigma_2 >= 0) sigma_1 <= f_t. Conservatively combines the extreme-fibre
+/// bending stress with the section's peak shear stress (which really peaks at
+/// the axis) and the transverse stress `sy` at both signs (it bends the wall,
+/// so one face is in tension and the other in compression). Both longitudinal
+/// fibres are tried: tension (sigma_x = +st) and compression (sigma_x = -sc).
+/// `ft`, `fc` are already divided by FS. Non-finite or exhausted capacity, or
+/// non-finite `sy` -> +inf.
+pub fn kupfer_dc(st: f64, sc: f64, sy: f64, tau: f64, ft: f64, fc: f64) -> f64 {
+    if !sy.is_finite() {
+        return f64::INFINITY;
+    }
+    let one = |sx: f64, sy: f64| {
+        let r = ((0.5 * (sx - sy)).powi(2) + tau * tau).sqrt();
+        let c = 0.5 * (sx + sy);
+        let (s1, s2) = (c + r, c - r);
+        let cap = ft * (1.0 - 0.8 * s2.min(0.0).abs() / fc);
         if cap.is_nan() || cap <= 0.0 || !cap.is_finite() { f64::INFINITY } else { s1.max(0.0) / cap }
     };
-    one(st).max(one(-sc))
+    one(st, sy).max(one(-sc, sy)).max(one(st, -sy)).max(one(-sc, -sy))
+}
+
+/// Transverse bending stress in the wall from a steady turn, psi per station
+/// (the legacy ASCE report's k = V^2 / (g R)). Assumptions:
+/// * Everything floated (hull + crew, `loads.weight_lb`, factored like the
+///   rest of `loads`) accelerates sideways at `lateral_g` g. The water reacts
+///   it as a uniform lateral pressure on the underwater profile of one side:
+///   p = k W / A_lat, A_lat = integral h(x) dx, h = local waterline - keel
+///   (vertical submerged height). How load and reaction differ along the hull
+///   (the yaw moment) is not modelled.
+/// * Each side is a cantilever fixed at the keel, free at the waterline. Any
+///   horizontal pressure p on a projected height h has moment p h^2 / 2 per
+///   unit length about the keel whatever the section shape, so the root
+///   stress is sigma_y = 6 m / t^2 = 3 p h^2 / t^2.
+/// * The side's own inertia (it relieves the side) and the symmetric
+///   hydrostatic pressure are left out. The root stress is combined with the
+///   extreme longitudinal fibre in [`kupfer_dc`] (conservative, like the shear).
+///
+/// `turning = None` -> all 0. Uncomputable (no underwater profile, t <= 0) ->
+/// +inf at every station, which fails the biaxial check.
+pub fn hoop_psi(grid: &Grid, loads: &Loads, t: f64, turning: Option<&Turning>) -> Vec<f64> {
+    let n = grid.nx();
+    let Some(tu) = turning else { return vec![0.0; n] };
+    let l = grid.x[n - 1];
+    let h: Vec<f64> = (0..n)
+        .map(|i| {
+            let y = grid.row(i);
+            let Some(j) = y.iter().position(|&v| v > 0.0) else { return 0.0 };
+            let keel = grid.z[j.saturating_sub(1)];
+            let wl = (loads.draft_in + loads.trim_in * (grid.x[i] - l / 2.0) / l).clamp(0.0, grid.depth);
+            (wl - keel).max(0.0)
+        })
+        .collect();
+    let a_lat: f64 = (1..n).map(|i| 0.5 * (h[i] + h[i - 1]) * (grid.x[i] - grid.x[i - 1])).sum();
+    let p = tu.lateral_g() * loads.weight_lb / a_lat;
+    if !(a_lat > 0.0 && t > 0.0 && p.is_finite()) {
+        return vec![f64::INFINITY; n];
+    }
+    h.iter().map(|h| 3.0 * p * h * h / (t * t)).collect()
 }
 
 /// Minimum freeboard over the stations, in: depth - local draft.
@@ -230,6 +278,7 @@ pub fn check(
     fit: &StrengthFit,
     max_paddler_lb: f64,
     pu: &Punching,
+    turning: Option<&Turning>,
 ) -> Verdict {
     let fs = mat.factor_of_safety;
     // Capacity multiplier: 1/FS (asd) or phi (lrfd, ACI 318-19 21.2.1:
@@ -250,7 +299,8 @@ pub fn check(
     let ft_cap = fit.flexural_psi(rho) * k;
     let fc_kupfer = if fc > 0.0 { fc * k } else { f64::NAN };
     let (mut kz, mut xk) = (f64::NEG_INFINITY, f64::NAN);
-    for i in 0..grid.nx() {
+    let sy = hoop_psi(grid, loads, t, turning);
+    for (i, &sy) in sy.iter().enumerate() {
         let ii = sec.inertia[i];
         if ii <= 1e-3 * imax {
             continue;
@@ -271,7 +321,7 @@ pub fn check(
         if s > tau {
             (tau, xs) = (s, grid.x[i]);
         }
-        let k = kupfer_dc(m.abs() * ct / ii, m.abs() * cc / ii, s, ft_cap, fc_kupfer);
+        let k = kupfer_dc(m.abs() * ct / ii, m.abs() * cc / ii, sy, s, ft_cap, fc_kupfer);
         if k.is_nan() || k > kz {
             (kz, xk) = (k, grid.x[i]);
         }
@@ -343,6 +393,7 @@ mod tests {
     fn loads(nx: usize, m: f64, v: f64) -> Loads {
         Loads {
             hull_weight_lb: 0.0,
+            weight_lb: 0.0,
             draft_in: 2.0,
             trim_in: 0.0,
             shear: vec![v; nx],
@@ -375,7 +426,7 @@ mod tests {
         let g = box_grid(3);
         let t = 0.5;
         let sec = crate::section::sections(&g, t);
-        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu1());
+        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu1(), None);
         let p = get(&v, "punching");
         let d = 0.25;
         let b0 = std::f64::consts::PI * (3.0 + d);
@@ -426,7 +477,7 @@ mod tests {
         // Keel 12*t at z=0 plus two walls; Q below zbar by hand.
         let q = 12.0 * t * zb + 2.0 * t * zb * zb / 2.0;
         assert!((first_moment_below(g.row(1), &g.z, t, zb) - q).abs() < 1e-9);
-        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), &fit(), 0.0, &pu1());
+        let v = check(&g, &sec, &loads(3, 0.0, 100.0), 60.0, &mat(), &fit(), 0.0, &pu1(), None);
         let s = get(&v, "shear");
         assert!((s.demand - 100.0 * q / (sec.inertia[1] * 2.0 * t)).abs() < 1e-9);
         assert!((s.capacity - 2.0 * 6000f64.sqrt() / 2.0).abs() < 1e-9);
@@ -437,9 +488,9 @@ mod tests {
         let g = box_grid(3);
         let sec = crate::section::sections(&g, 0.5);
         let (zb, i) = (sec.zbar[1], sec.inertia[1]);
-        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1());
+        let sag = check(&g, &sec, &loads(3, 1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1(), None);
         assert!((get(&sag, "bending_compression").demand - 1000.0 * (10.0 - zb) / i).abs() < 1e-9);
-        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1());
+        let hog = check(&g, &sec, &loads(3, -1000.0, 0.0), 60.0, &mat(), &fit(), 0.0, &pu1(), None);
         assert!((get(&hog, "bending_compression").demand - 1000.0 * zb / i).abs() < 1e-9);
         // B5: tension at the opposite fibre (bottom when sagging, top when hogging).
         assert!((get(&sag, "bending_tension").demand - 1000.0 * zb / i).abs() < 1e-9);
@@ -451,15 +502,78 @@ mod tests {
     #[test]
     fn kupfer_hand_calc() {
         // Pure bending: sigma_1 = st, sigma_2 = 0 -> D/C = st / ft.
-        assert!((kupfer_dc(100.0, 0.0, 0.0, 200.0, 1000.0) - 0.5).abs() < 1e-12);
+        assert!((kupfer_dc(100.0, 0.0, 0.0, 0.0, 200.0, 1000.0) - 0.5).abs() < 1e-12);
         // Pure shear tau: sigma_1 = tau, sigma_2 = -tau -> tau / (ft (1 - 0.8 tau / fc)).
         let want = 50.0 / (200.0 * (1.0 - 0.8 * 50.0 / 1000.0));
-        assert!((kupfer_dc(0.0, 0.0, 50.0, 200.0, 1000.0) - want).abs() < 1e-12);
+        assert!((kupfer_dc(0.0, 0.0, 0.0, 50.0, 200.0, 1000.0) - want).abs() < 1e-12);
         // Shear raises the D/C above uniaxial bending alone.
-        assert!(kupfer_dc(100.0, 100.0, 30.0, 200.0, 1000.0) > 0.5);
+        assert!(kupfer_dc(100.0, 100.0, 0.0, 30.0, 200.0, 1000.0) > 0.5);
         // Compression past 1.25 fc exhausts the tension capacity.
-        assert!(kupfer_dc(0.0, 1300.0, 1.0, 200.0, 1000.0).is_infinite());
-        assert!(kupfer_dc(1.0, 1.0, 1.0, 200.0, f64::NAN).is_infinite());
+        assert!(kupfer_dc(0.0, 1300.0, 0.0, 1.0, 200.0, 1000.0).is_infinite());
+        assert!(kupfer_dc(1.0, 1.0, 0.0, 1.0, 200.0, f64::NAN).is_infinite());
+    }
+
+    #[test]
+    fn kupfer_transverse_stress_hand_calc() {
+        // sigma_y alone acts like sigma_x alone.
+        assert!((kupfer_dc(0.0, 0.0, 100.0, 0.0, 200.0, 1000.0) - 0.5).abs() < 1e-12);
+        // sx = 100 with sy = -50 (the other face): s1 = 100, s2 = -50 -> 100 / (200 x 0.96).
+        // sy = +50 would be tension-tension (D/C 0.5), the worse face governs.
+        assert!((kupfer_dc(100.0, 0.0, 50.0, 0.0, 200.0, 1000.0) - 100.0 / 192.0).abs() < 1e-12);
+        assert!(kupfer_dc(100.0, 0.0, f64::NAN, 0.0, 200.0, 1000.0).is_infinite());
+        assert!(kupfer_dc(100.0, 0.0, f64::INFINITY, 0.0, 200.0, 1000.0).is_infinite());
+    }
+
+    fn turn(speed_mps: f64, radius_in: f64) -> Turning {
+        Turning { speed_mps, radius_in }
+    }
+
+    #[test]
+    fn hoop_stress_hand_calc() {
+        // Box L = 20, keel at z = 0, draft 2: h = 2 everywhere, A_lat = 40 in^2.
+        let mut g = box_grid(3);
+        let mut l = loads(3, 0.0, 0.0);
+        l.weight_lb = 400.0;
+        let tu = turn(2.5, 10.0 * crate::units::M_TO_IN);
+        let k = 6.25 / (9.80665 * 10.0);
+        // p = k W / A_lat = 10 k psi; sigma_y = 3 p h^2 / t^2 = 120 k / 0.25.
+        let s = hoop_psi(&g, &l, 0.5, Some(&tu));
+        assert!(s.iter().all(|&v| (v - 480.0 * k).abs() < 1e-9), "{s:?}");
+        assert_eq!(hoop_psi(&g, &l, 0.5, None), vec![0.0; 3]);
+        // Station 0 rockered: no wall below z = 4, keel at z = 3 is above the
+        // waterline -> h = 0 there, A_lat = 10 + 20 = 30.
+        for k in 0..4 {
+            g.y[k] = 0.0;
+        }
+        let s = hoop_psi(&g, &l, 0.5, Some(&tu));
+        assert_eq!(s[0], 0.0);
+        let p = k * 400.0 / 30.0;
+        assert!((s[2] - 3.0 * p * 4.0 / 0.25).abs() < 1e-9);
+        // Nothing under water: the stress cannot be computed -> fails, not 0.
+        l.draft_in = 0.0;
+        assert!(hoop_psi(&g, &l, 0.5, Some(&tu)).iter().all(|v| v.is_infinite()));
+    }
+
+    #[test]
+    fn turning_raises_biaxial_monotonically_and_vanishes_on_a_straight() {
+        let g = box_grid(3);
+        let sec = crate::section::sections(&g, 0.5);
+        let mut l = loads(3, 1000.0, 50.0);
+        l.weight_lb = 400.0;
+        let bi = |tu: Option<&Turning>| {
+            get(&check(&g, &sec, &l, 60.0, &mat(), &fit(), 0.0, &pu1(), tu), "biaxial").dc
+        };
+        let straight = bi(None);
+        assert_eq!(bi(Some(&turn(2.5, f64::INFINITY))), straight);
+        assert!((bi(Some(&turn(2.5, 1e12))) - straight).abs() < 1e-9);
+        let mut prev = straight;
+        for v in [0.5, 1.0, 2.0, 3.0, 4.0] {
+            let d = bi(Some(&turn(v, 400.0)));
+            assert!(d > prev, "v = {v}: {d} <= {prev}");
+            prev = d;
+        }
+        // Only V^2 / R matters.
+        assert_eq!(bi(Some(&turn(2.0, 400.0))), bi(Some(&turn(4.0, 1600.0))));
     }
 
     #[test]
@@ -472,7 +586,7 @@ mod tests {
         let dc = |m| {
             let mut q = pu.clone();
             q.mold = Some(m);
-            get(&check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &q), "punching").dc
+            get(&check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &q, None), "punching").dc
         };
         let (male, female) = (dc(crate::params::Mold::Male), dc(crate::params::Mold::Female));
         assert!(female > 1.5 * male, "male {male} female {female}");
@@ -490,7 +604,7 @@ mod tests {
         let sec = crate::section::sections(&g, 0.5);
         let mut pu = pu1();
         pu.layers = Some(3); // conflicts with d_over_t: never validated, must not pass
-        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu);
+        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu, None);
         assert!(get(&v, "punching").dc.is_infinite());
     }
 
@@ -500,7 +614,7 @@ mod tests {
         let sec = crate::section::sections(&g, 0.5);
         let mut f = fit();
         f.split_intercept_psi = -1e6;
-        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &mat(), &f, 100.0, &pu1());
+        let v = check(&g, &sec, &loads(3, 10.0, 10.0), 60.0, &mat(), &f, 100.0, &pu1(), None);
         assert!(v.dc.is_infinite());
         assert!(get(&v, "punching").dc.is_infinite());
         assert!(get(&v, "shear").dc.is_infinite());

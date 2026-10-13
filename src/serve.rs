@@ -666,7 +666,7 @@ mod tests {
         assert!(body.contains("jaguar-hull/1"));
     }
 
-    /// The optional sections the web form writes ([flotation], displacements, shape-search
+    /// The optional sections the web form writes ([flotation], [turning], displacements, shape-search
     /// limits) survive prefs save -> /api/params, and stay absent when the form omits them.
     #[test]
     fn prefs_round_trip_optional_fields() {
@@ -688,12 +688,14 @@ mod tests {
                 "seed = 1\nlength_step_in = 6.0\nbeam_step_in = 0.5\ndraft_step_in = 0.5\n\
                  min_entry_angle_deg = 8.0\nrocker_in = [0.5, 3.0]\nsymmetric = true",
             )
-            + "\n[flotation]\nair_pocket_max_in = 30.0\nswamp_factor = 1.2\n";
+            + "\n[flotation]\nair_pocket_max_in = 30.0\nswamp_factor = 1.2\n"
+            + "\n[turning]\nspeed_mps = 2.0\nradius_in = 400.0\n";
         let (st, _, body) = a.handle("POST", "/api/prefs", &text);
         assert_eq!(st, 200, "{body}");
         let p = &params_of(&a)["params"];
         assert_eq!(p["flotation"]["air_pocket_max_in"], 30.0);
         assert_eq!(p["flotation"]["swamp_factor"], 1.2);
+        assert_eq!(p["turning"]["radius_in"], 400.0);
         assert_eq!(p["objective"]["straight_weight"], 0.8);
         assert_eq!(p["objective"]["displacements"][1]["crew_lb"], 525.0);
         assert_eq!(p["objective"]["displacements"].as_array().unwrap().len(), 3);
@@ -714,10 +716,14 @@ mod tests {
         assert_eq!(st, 200, "{body}");
         let p = &params_of(&a)["params"];
         assert!(p["flotation"].is_null());
+        assert!(p["turning"].is_null());
         assert!(p["objective"]["displacements"].is_null());
         assert!(p["shape_search"].is_null());
         let saved = std::fs::read_to_string(&prefs).unwrap();
-        assert!(!saved.contains("flotation") && !saved.contains("displacements"), "{saved}");
+        assert!(
+            !saved.contains("flotation") && !saved.contains("displacements") && !saved.contains("turning"),
+            "{saved}"
+        );
     }
 
     #[test]
