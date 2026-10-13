@@ -82,6 +82,13 @@
   .btn.soft { background: var(--soft); border-color: transparent; } .btn.soft:hover { background: var(--hair); }
   .btn:disabled { opacity: .45; cursor: default; }
 
+  /* Segmented control (docs/DESIGN.md): soft track, active option is a white segment. */
+  .seg { display: flex; gap: 2px; padding: 2px; background: var(--soft); border-radius: var(--r-sm); }
+  .seg button { flex: 1; border: 0; background: none; height: 22px; padding: 0 var(--s1); border-radius: var(--r-xs); cursor: pointer; color: var(--muted); }
+  .seg button:hover { color: var(--ink); }
+  .seg button.on { background: var(--canvas); color: var(--ink); box-shadow: 0 0 0 1px var(--hair); }
+  .row > .btn.x { height: 22px; padding: 0 6px; justify-self: end; }
+
   .lc { border: 1px solid var(--hair); border-radius: var(--r-md); padding: var(--s1) var(--s2); margin: 0 calc(-1 * var(--s2) - 1px); display: grid; gap: var(--s1); }
 
   progress { appearance: none; -webkit-appearance: none; width: 100%; height: 4px; border: 0; border-radius: 999px; background: var(--soft); overflow: hidden; }
@@ -220,7 +227,11 @@ const FIELDS = {
     ['crew_cg_in', 'Crew CG height', 'in', 'Height of the paddlers\' centre of gravity above the keel. Kneeling paddlers are about 12 in (an assumption, not a measurement). Higher = tippier.', 'any', 0],
     ['gm_min_in', 'Min GM', 'in', 'Minimum metacentric height (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
   objective: [
-    ['speed_mps', 'Race speed', 'm/s', 'Speed at which water resistance is computed for the drag objective. A 2-person sprint is about 2.5 m/s.', 'any', 0]],
+    ['speed_mps', 'Race speed', 'm/s', 'Speed at which water resistance is computed for the drag objective. A 2-person sprint is about 2.5 m/s.', 'any', 0],
+    ['straight_weight', 'Straight-line share', '-', 'Drag objective with shape search only: share of the shape score that is straight-line drag (0..1). The rest goes to the turning proxy. 1 = drag only. Below 1 needs Optimize for = drag and Optimize hull shape on.', 'any', 0]],
+  flotation: [
+    ['air_pocket_max_in', 'Max air pocket', 'in', 'Longest sealed air pocket (flotation chamber) allowed at EACH end, measured in from the bow and from the stern. A design that needs a longer pocket to float swamped fails.', 'any', 0],
+    ['swamp_factor', 'Swamp factor', '-', 'Swamped, the submerged wall plus both air pockets must displace at least this times the canoe weight (fresh water). 1.1 = 10% reserve.', 'any', 0]],
   search: [
     ['thickness_in', 'Wall thickness', 'in', 'Wall thickness range to search: min, max, step (inclusive).'],
     ['density_pcf', 'Mix density', 'pcf', 'Concrete density range to search: min, max, step (inclusive). Denser is stronger but heavier.'],
@@ -249,13 +260,26 @@ const SHAPE_INT = [
   ['refine_rounds', 'Refine rounds', 'Rounds of local tweaking around the best shapes found.', 6],
   ['seed', 'Seed', 'Random seed. Same seed = same shapes = same result.', 1],
 ];
+// Optional manufacturability limits: [key, label, unit, tooltip, placeholder]. Empty = absent from canoe.toml.
+const SHAPE_OPT = [
+  ['length_step_in', 'Length step', 'in', 'Snap the sampled length to multiples of this (strongback, mold sections). Empty = continuous.', 'continuous'],
+  ['beam_step_in', 'Beam step', 'in', 'Snap the sampled beam to multiples of this. Empty = continuous.', 'continuous'],
+  ['draft_step_in', 'Draft step', 'in', 'Snap the sampled design draft to multiples of this. Empty = continuous. (Mold depth already steps by the search range.)', 'continuous'],
+  ['min_entry_angle_deg', 'Min entry angle', 'deg', 'Smallest allowed waterline entry half-angle at the bow (chord over the first 5% of length). Finer bows are rejected as unbuildable. Empty = no limit.', 'no limit'],
+];
+const ROCKER_T = 'Allowed keel rise, min and max, at 5% of the length from the bow and from the stern, relative to the lowest keel point. Shapes outside are rejected. Both empty = any rocker.';
+const SYM_T = 'Bow and stern identical: stern waterplane, stern rocker and stern taper follow the bow values (their bounds above are ignored).';
+// objective.displacements presets: [crew_lb, share of race distance].
+const DISP_PRESETS = { regionals: [[350, 0.75], [700, 0.25]], nationals: [[350, 0.60], [525, 0.20], [700, 0.20]], total: [[350, 0.675], [525, 0.10], [700, 0.225]] };
+const DISP_T = 'Drag objective only. None = drag of the heaviest load case at its loaded draft. Otherwise the drag is the weighted sum over race conditions, each floating level at hull weight + crew. Regionals 350/700 lb at 75/25%, Nationals 350/525/700 at 60/20/20%, Total 350/525/700 at 67.5/10/22.5%. Shares must sum to 1.';
+let dispMode = 'none';
 const PUNCH = [
   ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
   ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
   ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
   ['d_over_t', 'Mesh depth / wall', '-', 'How deep the reinforcing mesh sits, as a fraction of wall thickness (aci_22_6 only). 0.5 = mesh in the middle of the wall.', 'any', 0]];
 // [title, note shown muted next to it]
-const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
+const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 // One aligned row: label | control | unit. The tooltip lives on the row so hovering anywhere explains it.
@@ -296,12 +320,21 @@ function buildForm() {
     return row(`shape.${k}.0`, label, t, `<div class="multi">${i(0)}${i(1)}</div>`, unit, sub);
   };
   const intRow = ([k, label, t]) => row(`shape.${k}`, label, t, `<input type="number" id="shape.${k}" step="1" min="${k === 'samples' ? 1 : 0}">`);
+  const optRow = ([k, label, unit, t, ph]) => row(`shape.${k}`, label, t, `<input type="number" id="shape.${k}" step="any" min="0" placeholder="${ph}">`, unit);
+  const rocker = n => `<input type="number" id="shape.rocker_in.${n}" title="${esc(ROCKER_T)} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
+  const flt = 'Check that the canoe floats when swamped (ASCE): the concrete wall plus sealed air pockets at the bow and stern must hold it up. JAGUAR sizes the pocket length each design needs; off = no flotation gate.';
   $('form').innerHTML =
     section('hull',
       row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
       + `<div id="hullpick">${row('hull.file', 'Hull file', ht, '<select id="hull.file"></select>')}</div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join(''))
-    + section('shape', SHAPE.map(pair).join('') + SHAPE_INT.map(intRow).join(''), 'shapefs')
+    + section('shape', SHAPE.map(pair).join('')
+      + row('shape.symmetric', 'Symmetric ends', SYM_T, '<input type="checkbox" class="switch" id="shape.symmetric">')
+      + '<div class="group">Buildability limits <span class="hint">empty = no limit</span></div>'
+      + SHAPE_OPT.map(optRow).join('')
+      + row('shape.rocker_in.0', 'End rocker', ROCKER_T, `<div class="multi">${rocker(0)}${rocker(1)}</div>`, 'in')
+      + '<div class="group">Search effort</div>'
+      + SHAPE_INT.map(intRow).join(''), 'shapefs')
     + section('crew', '<div id="cases" style="display:grid;gap:var(--s2)"></div>' + row('addcase', '', 'Add another crew arrangement. The design must pass every load case.', '<button type="button" class="btn soft" id="addcase">Add load case</button>'))
     + section('material',
       row('material.mix_data', 'Mix data file', mt, '<input id="material.mix_data">')
@@ -315,12 +348,22 @@ function buildForm() {
     + section('search', FIELDS.search.map(triRow).join(''))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
+    + section('flotation',
+      row('flotation.on', 'Swamped flotation gate', flt, '<input type="checkbox" class="switch" id="flotation.on">')
+      + `<div id="flotbody" style="display:grid;gap:var(--s1)">${FIELDS.flotation.map(f => numRow('flotation', f)).join('')}</div>`)
     + section('objective',
       row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option></select>')
-      + FIELDS.objective.map(f => numRow('objective', f)).join(''));
+      + FIELDS.objective.map(f => numRow('objective', f)).join('')
+      + row('', 'Race displacements', DISP_T, '<span class="hint" id="dispnote"></span>')
+      + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${['none', 'regionals', 'nationals', 'total', 'custom'].map(m => `<button type="button" data-disp="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>`
+      + '<div id="disps" style="display:grid;gap:var(--s1)"></div>'
+      + `<div id="dispadd">${row('', '', 'Add another race condition.', '<button type="button" class="btn soft" id="dispaddbtn">Add condition</button>')}</div>`);
   $('addcase').onclick = () => lcBlock({ name: 'case' + ($('cases').children.length + 1), weights_lb: [] });
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
+  $('flotation.on').onchange = setFlotation;
+  for (const b of $('dispseg').children) b.onclick = () => setDispMode(b.dataset.disp);
+  $('dispaddbtn').onclick = () => { dispRow('', ''); dispMode = 'custom'; dispRefresh(); };
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
   // Remember which sections are collapsed.
   for (const d of document.querySelectorAll('details.keep')) {
@@ -333,6 +376,35 @@ function setShapeMode() {
   $('hullpick').style.display = on ? 'none' : '';
   $('shapefs').style.display = on ? '' : 'none';
 }
+function setFlotation() { $('flotbody').style.display = $('flotation.on').checked ? 'grid' : 'none'; }
+// Race displacement rows: crew lb + share. The segmented control fills presets; editing a row makes it custom.
+function dispRow(crew, w) {
+  const d = document.createElement('div'); d.className = 'row'; d.title = DISP_T;
+  d.innerHTML = `<label>Crew, share</label><div class="multi"><input type="number" class="dcrew" step="any" min="0" placeholder="crew lb" value="${crew}" title="Crew plus gear weight for this race condition, lb."><input type="number" class="dw" step="any" min="0" max="1" placeholder="share" value="${w}" title="Share of the race distance at this displacement (0..1)."></div><button type="button" class="btn soft x" title="Remove this condition">&times;</button>`;
+  d.querySelector('button').onclick = () => { d.remove(); dispMode = $('disps').children.length ? 'custom' : 'none'; dispRefresh(); };
+  for (const i of d.querySelectorAll('input')) i.addEventListener('input', () => { dispMode = 'custom'; dispRefresh(); });
+  $('disps').appendChild(d);
+}
+const dispRows = () => [...$('disps').children].map(d => [d.querySelector('.dcrew').value, d.querySelector('.dw').value]);
+function setDisps(list) { $('disps').innerHTML = ''; for (const [c, w] of list) dispRow(c, w); }
+function setDispMode(m) {
+  if (m === 'none') setDisps([]);
+  else if (DISP_PRESETS[m]) setDisps(DISP_PRESETS[m]);
+  else if (!$('disps').children.length) setDisps([[350, 1]]);
+  dispMode = m; dispRefresh();
+}
+function dispRefresh() {
+  for (const b of $('dispseg').children) b.classList.toggle('on', b.dataset.disp === dispMode);
+  const rows = dispRows();
+  $('dispadd').style.display = dispMode === 'none' ? 'none' : '';
+  if (!rows.length) { $('dispnote').textContent = 'heaviest load case'; $('dispnote').className = 'hint'; return; }
+  const sum = rows.reduce((s, [, w]) => s + Number(w), 0), ok = Math.abs(sum - 1) <= 1e-6;
+  $('dispnote').textContent = `${rows.length} condition${rows.length > 1 ? 's' : ''}, shares sum to ${isFinite(sum) ? +sum.toFixed(4) : '?'}${ok ? '' : ' (need 1)'}`;
+  $('dispnote').className = ok ? 'hint' : 'hint t-error';
+}
+// Which preset (if any) a displacement list is, so a reload highlights the same button.
+const dispModeOf = ds => !ds || !ds.length ? 'none'
+  : Object.keys(DISP_PRESETS).find(k => DISP_PRESETS[k].length === ds.length && DISP_PRESETS[k].every(([c, w], i) => c === ds[i].crew_lb && Math.abs(w - ds[i].weight) < 1e-9)) || 'custom';
 function shapeHints() {
   for (const k of ['length_in', 'beam_in', 'draft_in']) {
     const v = [0, 1].map(n => Number($(`shape.${k}.${n}`).value));
@@ -355,7 +427,16 @@ function fillForm(p, hulls) {
   const ss = p.shape_search;
   for (const [k, , , , d] of SHAPE) for (const n of [0, 1]) $(`shape.${k}.${n}`).value = ss ? ss[k][n] : d[n];
   for (const [k, , , d] of SHAPE_INT) $(`shape.${k}`).value = ss ? ss[k] : d;
+  for (const [k] of SHAPE_OPT) $(`shape.${k}`).value = ss && ss[k] != null ? ss[k] : '';
+  for (const n of [0, 1]) $(`shape.rocker_in.${n}`).value = ss && ss.rocker_in ? ss.rocker_in[n] : '';
+  $('shape.symmetric').checked = !!(ss && ss.symmetric);
   $('shapemode').checked = !!ss; setShapeMode(); shapeHints();
+  const fp = p.flotation;
+  $('flotation.on').checked = !!fp; setFlotation();
+  for (const [k] of FIELDS.flotation) $(`flotation.${k}`).value = fp ? fp[k] : { air_pocket_max_in: 36, swamp_factor: 1.1 }[k];
+  if (p.objective.straight_weight == null) p.objective.straight_weight = 1;
+  const ds = p.objective.displacements;
+  setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
@@ -384,6 +465,8 @@ function formToml() {
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
+    const ds = sec === 'objective' ? dispRows() : [];
+    if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ crew_lb = ${fl(c)}, weight = ${fl(w)} }`).join(', ')}]`);
     out.push('');
   }
   out.push('[punching]', `method = ${tstr(g('punching.method'))}`, `knees = ${int('punching.knees')}`);
@@ -393,6 +476,18 @@ function formToml() {
     out.push('[shape_search]');
     for (const [k] of SHAPE) out.push(`${k} = [${[0, 1].map(n => fl(g(`shape.${k}.${n}`))).join(', ')}]`);
     for (const [k] of SHAPE_INT) out.push(`${k} = ${int('shape.' + k)}`);
+    for (const [k] of SHAPE_OPT) if (g('shape.' + k).trim() !== '') out.push(`${k} = ${fl(g('shape.' + k))}`);
+    const rk = [0, 1].map(n => g(`shape.rocker_in.${n}`).trim());
+    if (rk.some(v => v !== '')) {
+      if (rk.some(v => v === '')) throw new Error('end rocker: give both min and max, or leave both empty');
+      out.push(`rocker_in = [${rk.map(fl).join(', ')}]`);
+    }
+    if ($('shape.symmetric').checked) out.push('symmetric = true');
+    out.push('');
+  }
+  if ($('flotation.on').checked) {
+    out.push('[flotation]');
+    for (const [k] of FIELDS.flotation) out.push(`${k} = ${fl(g('flotation.' + k))}`);
     out.push('');
   }
   return out.join('\n');
@@ -480,6 +575,9 @@ function buildCanoe() {
   canoe = new THREE.Group();
   canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xd2cfc9, side: THREE.DoubleSide })));
   canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.08 })));
+  // Swamped-flotation bulkheads: planes air_pocket_in in from the bow and from the stern.
+  const pocket = w && typeof w.air_pocket_in === 'number' ? w.air_pocket_in : null;
+  if (pocket !== null && pocket > 0) for (const xb of [hull.x[0] + pocket, hull.x[nx - 1] - pocket]) bulkhead(canoe, xb, zs);
   scene.add(canoe);
   // Waterline plane at the loaded midship waterline (from the winner's diagrams).
   const dg = result && result.winner && result.winner.diagrams;
@@ -492,6 +590,21 @@ function buildCanoe() {
   }
   target.set(hull.length / 2, depth / 2, 0);
   radius = hull.length * 1.1; placeCam();
+}
+
+// Hull cross-section at x (between stations, linear) from the keel up to the gunwale, as a filled plane + outline.
+function bulkhead(group, x, zs) {
+  const xs = hull.x; let i = 1; while (i < xs.length - 1 && xs[i] < x) i++;
+  const t = Math.min(1, Math.max(0, (x - xs[i - 1]) / (xs[i] - xs[i - 1])));
+  const hb = k => (1 - t) * halfBreadth(hull, i - 1, zs[k], flareDeg()) + t * halfBreadth(hull, i, zs[k], flareDeg());
+  const pts = [];
+  for (let k = 0; k < zs.length; k++) pts.push(new THREE.Vector2(hb(k), zs[k]));
+  for (let k = zs.length - 1; k >= 0; k--) pts.push(new THREE.Vector2(-hb(k), zs[k]));
+  // Shape lies in the XY plane (x = half breadth, y = height); turn it so half breadth runs along z.
+  const face = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts)),
+    new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+  const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, p.y, 0))), new THREE.LineBasicMaterial({ color: 0x141414 }));
+  for (const o of [face, edge]) { o.rotation.y = Math.PI / 2; o.position.x = x; group.add(o); }
 }
 
 // ---------- plot tabs ----------
@@ -773,6 +886,14 @@ function checksTable(v) {
     <td>${f(k.dc, 3)}</td><td><span class="bar" style="width:${Math.min(48, 48 * (k.dc || 0))}px;background:${dcShade(k.dc || 0)}"></span></td></tr>`).join('');
   return `<table class="tbl"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table>`;
 }
+// Swamped flotation: air pocket length needed at each end (candidate.air_pocket_in), shown only when the run had [flotation].
+function pocketRow(c) {
+  const fp = result && result.params && result.params.flotation;
+  if (!fp && typeof c.air_pocket_in !== 'number') return '';
+  const t = 'Swamped flotation: length of the sealed air pocket needed at EACH end (in from the bow and from the stern) so the swamped canoe floats. Drawn as two bulkheads in the 3D view.';
+  const max = fp ? ` <span class="muted">max ${fp.air_pocket_max_in.toFixed(1)}, swamp factor ${fp.swamp_factor}</span>` : '';
+  return kv('Air pocket', `${typeof c.air_pocket_in === 'number' ? c.air_pocket_in.toFixed(1) + ' in each end' : 'not computed'}${max}`, t);
+}
 function showWinner() {
   const box = $('winner');
   if (!result) { box.innerHTML = '<span class="muted">No result yet.</span>'; return; }
@@ -803,6 +924,7 @@ function showWinner() {
     ${typeof c.drag_n === 'number' ? kv('Drag', `${f(c.drag_n, 1)} N`) : ''}
     ${kv('GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>${gmBelow ? ' <span class="t-error">below gate</span>' : ''}`, 'Metacentric height (stability).')}
     ${kv('Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`)}
+    ${pocketRow(c)}
     ${kv('D/C search', `${f(v.dc, 3)}`)}
     ${kv(`D/C verify`, `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`)}
     ${kv('Governing case', esc(c.governing_case || '?'))}

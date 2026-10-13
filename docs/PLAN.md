@@ -35,12 +35,6 @@ answer more trustworthy first.
 - **A3. Golden coverage for the new physics.** `tests/golden/reference.py` does not cover LRFD
   (T46), the biaxial check (T45) or swamped flotation (T43): those are only tested against the Rust
   itself. Add them to the independent Python reference and the golden JSON.
-- **A4. Web form for fields already in `Params`.** Missing: all of `[flotation]`
-  (`air_pocket_max_in`, `swamp_factor`), shape-search steps (`draft_step_in`, `length_step_in`,
-  `beam_step_in`), `rocker_in`, `min_entry_angle_deg`, `symmetric`, `objective.displacements`
-  (with Regionals / Nationals / Total presets), `straight_weight`.
-- **A5. Show flotation in the web result.** `air_pocket_in` is in result.json and the terminal but
-  not in the result panel or the 3D view (draw the pocket bulkheads).
 - **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
   biaxial check. Add it so the D/C(x) plot shows every along-hull check.
 - **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
@@ -85,10 +79,10 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | task | status |
 |---|---|
 | Export canoe as STEP | done (T22 CLI, T23 web, T42 wall normal to surface) |
-| Draft / length / beam / depth increments, rocker in, min entry angle, symmetric | done (T30). Not in the web form (A4) |
+| Draft / length / beam / depth increments, rocker in, min entry angle, symmetric | done (T30, web form T49) |
 | Flare angle | done (`hull.flare_deg`) |
 | Buoyancy / self weight distributed | done (real submerged area, draft and trim solved) |
-| Displacement weighting 350/525/700 | done (T31). Presets commented in canoe.toml, not in the web form (A4) |
+| Displacement weighting 350/525/700 | done (T31). Presets in canoe.toml comments and the web form (T49) |
 | Straight 80 / turning 20 | partial (T32): turning is a proxy (B8) |
 | Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
 | Mix CSV import, editable table, row delete | done (T21) |
@@ -100,7 +94,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |
-| Bow/stern air pockets, swamped flotation | done (T43); web display (A5), export (A11) open |
+| Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); export (A11) open |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |
 | Race simulator / ML path | open, out of scope (C3) |
 

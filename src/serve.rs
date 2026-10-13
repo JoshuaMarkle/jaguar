@@ -659,6 +659,60 @@ mod tests {
         assert!(body.contains("jaguar-hull/1"));
     }
 
+    /// The optional sections the web form writes ([flotation], displacements, shape-search
+    /// limits) survive prefs save -> /api/params, and stay absent when the form omits them.
+    #[test]
+    fn prefs_round_trip_optional_fields() {
+        let dir = tmpdir();
+        let prefs = dir.join("prefs.toml");
+        let a = app_with_prefs(prefs.clone());
+        let shape =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/shape_opt.toml")).unwrap();
+        // Same layout as the form's formToml(): inline displacements under [objective].
+        let text = shape
+            .replace("kind = \"weight\"", "kind = \"drag\"")
+            .replace(
+                "speed_mps = 2.5",
+                "speed_mps = 2.5\nstraight_weight = 0.8\ndisplacements = [{ crew_lb = 350.0, weight = 0.6 }, \
+                 { crew_lb = 525.0, weight = 0.2 }, { crew_lb = 700.0, weight = 0.2 }]",
+            )
+            .replace(
+                "seed          = 1",
+                "seed = 1\nlength_step_in = 6.0\nbeam_step_in = 0.5\ndraft_step_in = 0.5\n\
+                 min_entry_angle_deg = 8.0\nrocker_in = [0.5, 3.0]\nsymmetric = true",
+            )
+            + "\n[flotation]\nair_pocket_max_in = 30.0\nswamp_factor = 1.2\n";
+        let (st, _, body) = a.handle("POST", "/api/prefs", &text);
+        assert_eq!(st, 200, "{body}");
+        let p = &params_of(&a)["params"];
+        assert_eq!(p["flotation"]["air_pocket_max_in"], 30.0);
+        assert_eq!(p["flotation"]["swamp_factor"], 1.2);
+        assert_eq!(p["objective"]["straight_weight"], 0.8);
+        assert_eq!(p["objective"]["displacements"][1]["crew_lb"], 525.0);
+        assert_eq!(p["objective"]["displacements"].as_array().unwrap().len(), 3);
+        let ss = &p["shape_search"];
+        assert_eq!(ss["length_step_in"], 6.0);
+        assert_eq!(ss["beam_step_in"], 0.5);
+        assert_eq!(ss["draft_step_in"], 0.5);
+        assert_eq!(ss["min_entry_angle_deg"], 8.0);
+        assert_eq!(ss["rocker_in"][1], 3.0);
+        assert_eq!(ss["symmetric"], true);
+        // A restarted server reads the saved prefs back unchanged.
+        let b = app_with_prefs(prefs.clone());
+        assert_eq!(params_of(&b)["params"], *p);
+        // Omitted optional fields stay absent: null in /api/params, not in the prefs file.
+        let plain = a.toml_text.split("[flotation]").next().unwrap().to_string()
+            + "[objective]\nkind = \"drag\"\nspeed_mps = 2.5\n";
+        let (st, _, body) = a.handle("POST", "/api/prefs", &plain);
+        assert_eq!(st, 200, "{body}");
+        let p = &params_of(&a)["params"];
+        assert!(p["flotation"].is_null());
+        assert!(p["objective"]["displacements"].is_null());
+        assert!(p["shape_search"].is_null());
+        let saved = std::fs::read_to_string(&prefs).unwrap();
+        assert!(!saved.contains("flotation") && !saved.contains("displacements"), "{saved}");
+    }
+
     #[test]
     fn mix_endpoint_returns_fit() {
         let a = app();
