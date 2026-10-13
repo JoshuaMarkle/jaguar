@@ -28,8 +28,9 @@ answer more trustworthy first.
 
 ## B. Physics additions (need the user's approval and a SPEC update)
 
-- **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
-  dc_search / dc_verify margin.
+- **B6b. Revisit `dc_search`.** With Richardson verify (T58) the search margin 0.93 vs 0.95 is
+  conservative (bending drifts down with stations). Raising it needs a check that winners with
+  bending governing still verify; punching governs every example today, so it would not move them.
 
 ## C. Scope changes (SPEC lists these as out of scope)
 

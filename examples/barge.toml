@@ -35,7 +35,7 @@ density_pcf  = [50.0, 64.0, 1.0]
 depth_in     = [8.0, 14.0, 1.0]
 
 [gates]
-dc_search = 0.93          # = 0.95 / (1 + 0.0219 worst drift per station doubling)
+dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)
 dc_verify = 0.95          # numerical margin, not a safety factor
 freeboard_min_in = 6.0
 thickness_min_buildable_in = 0.375   # thinnest wall the team can cast

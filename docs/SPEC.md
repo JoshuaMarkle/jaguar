@@ -109,8 +109,15 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    resistance at the level draft each (hull weight + crew_lb) floats at. `objective.straight_weight`
    (default 1, needs drag + `[shape_search]`) blends in the steady-turn drag at `objective.turn_radius_in`
    (default 600), see docs/SHAPE_SEARCH.md.
-8. **Verify**: the winner is re-run at 2n-1 stations. It is VERIFIED iff D/C there <= `dc_verify`
-   (D/C drifts up 1-2% per station doubling, hence dc_search < dc_verify).
+8. **Verify**: the winner is re-run at 2n-1 and 4n-3 stations (spacing h/2, h/4; same seats).
+   Each (load case, check) D/C series, max over the seat samples, gets Richardson extrapolation
+   (`optimize::richardson`): converged (steps < 1e-6 relative) = the finest value; monotone and
+   contracting with observed order p = log2(d1/d2) in [0.5, 4] = f3 + d2/(2^p - 1); else
+   irregular. `dc_extrapolated` = max over the regular series. It is used when every irregular
+   series stays below it even at max + 2 x its largest step; then VERIFIED iff
+   max(dc_extrapolated, D/C at 4n-3) <= `dc_verify` (never below a computed value). Otherwise
+   `dc_extrapolated` is null, `convergence.note` says which series, and VERIFIED iff the 2n-1 D/C
+   <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin.
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern
    search over Michlet Series 7 shape factors within bounds. Each shape runs the wall search above,
    and the best objective wins. Optional manufacturability rules: `draft_step_in`, `length_step_in`,
@@ -121,7 +128,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points; `flexural_fit` / `compressive_fit` only when
 measured), winner_hull (shape runs) | null, candidates: [...],
-winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge,
+winner: {candidate, verify_stations, verify_dc, verified, dc_extrapolated, dc_order, convergence
+{stations, dc, extrapolated, order, governing, note}, on_grid_edge, at_mix_data_edge,
 mix_provenance, search_space, diagrams, cases} | null}`. `mix_provenance`: the winner density is
 `tested` (a tested mix within 0.05 pcf, or the tested mix itself) or `predicted` (fit line only),
 the nearest tested mixes below/above it with their signed distance, and `reach_pcf` (distance to the

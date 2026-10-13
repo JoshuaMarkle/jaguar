@@ -7,7 +7,9 @@
 //!    abort the run.
 //! 3. Winner = lightest candidate with dc <= gates.dc_search and
 //!    freeboard >= gates.freeboard_min_in.
-//! 4. Re-evaluate the winner at 2n-1 stations. `verified` = dc <= dc_verify.
+//! 4. Re-evaluate the winner at 2n-1 and 4n-3 stations and Richardson-
+//!    extrapolate its D/C ([`convergence`]); `verified` = extrapolated (or,
+//!    when irregular, the 2n-1) D/C <= dc_verify.
 //! 5. Describe every searched variable (`search_space`: range, step, count,
 //!    winner value, bound it sits on) and the winner density's lab-data
 //!    provenance. `on_grid_edge` = a wall variable on a bound that is not a
@@ -72,7 +74,16 @@ pub struct Winner {
     pub candidate: Candidate,
     pub verify_stations: usize,
     pub verify_dc: f64,
+    /// Gate: max(dc_extrapolated, D/C at 4n-3) <= dc_verify when the
+    /// extrapolation is well behaved, else verify_dc <= dc_verify.
     pub verified: bool,
+    /// Richardson-extrapolated D/C at infinite station resolution (max over
+    /// load cases and checks), None when the series is not well behaved.
+    pub dc_extrapolated: Option<f64>,
+    /// Observed convergence order of the series that sets dc_extrapolated
+    /// (None when that series had already converged).
+    pub dc_order: Option<f64>,
+    pub convergence: Convergence,
     pub on_grid_edge: bool,
     /// Winner density is at the edge of the range the mix data supports
     /// (lowest/highest tested density -/+ density_extrapolation_pcf). Not a
@@ -459,13 +470,22 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let cases =
                 all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, seats);
             let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
+            let conv = convergence(params, &axis[ri].1, hull, c, seats);
+            let verified = v.verdict.is_some()
+                && match conv.extrapolated {
+                    Some(x) => x.max(conv.dc[2]) <= params.gates.dc_verify,
+                    None => verify_dc <= params.gates.dc_verify,
+                };
             let search_space = search_space(params, &fit, c)?;
             let wall = &search_space[..3];
             Some(Winner {
                 candidate: c.clone(),
                 verify_stations: stations,
                 verify_dc,
-                verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
+                verified,
+                dc_extrapolated: conv.extrapolated,
+                dc_order: conv.order,
+                convergence: conv,
                 on_grid_edge: wall.iter().any(|a| a.at_bound.is_some() && a.limit.is_none()),
                 at_mix_data_edge: wall[1].limit == Some("mix data"),
                 mix_provenance: fit.provenance(c.density_pcf, c.mix.as_deref())?,
@@ -774,6 +794,162 @@ pub fn case_diagrams(
     };
     out.verdict = Some(verdict);
     Ok(out)
+}
+
+/// One D/C series over station refinement (spacing h, h/2, h/4).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Series {
+    /// Changes below 1e-6 relative: the value at the finest grid.
+    Converged(f64),
+    /// Monotone and contracting with observed order p in [0.5, 4]:
+    /// f3 + (f3 - f2) / (2^p - 1).
+    Extrapolated { value: f64, order: f64 },
+    /// Anything else (oscillating, diverging, order out of range, non-finite).
+    Irregular,
+}
+
+/// Richardson extrapolation of `f` at spacings h, h/2, h/4.
+pub fn richardson(f: [f64; 3]) -> Series {
+    if f.iter().any(|v| !v.is_finite()) {
+        return Series::Irregular;
+    }
+    let (d1, d2) = (f[1] - f[0], f[2] - f[1]);
+    let tol = 1e-6 * f[2].abs().max(1e-3);
+    if d2.abs() <= tol && (d1.abs() <= tol || d1.abs() > 4.0 * d2.abs()) {
+        return Series::Converged(f[2]);
+    }
+    if d1 * d2 <= 0.0 || d2.abs() >= d1.abs() {
+        return Series::Irregular;
+    }
+    let order = (d1 / d2).log2();
+    if !(0.5..=4.0).contains(&order) {
+        return Series::Irregular;
+    }
+    Series::Extrapolated { value: f[2] + d2 / (order.exp2() - 1.0), order }
+}
+
+/// Winner D/C over station refinement (`Winner.convergence`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Convergence {
+    /// n, 2n-1, 4n-3: station spacing halves each time.
+    pub stations: [usize; 3],
+    /// D/C (max over load cases, checks and seat samples) at each.
+    pub dc: [f64; 3],
+    /// max over (case, check) series of the extrapolated (or converged)
+    /// value. None = an irregular series could reach it (bound: its max + 2x
+    /// its largest step); then `note` says which and the gate falls back.
+    /// Irregular series below that bound are ignored and listed in `note`.
+    pub extrapolated: Option<f64>,
+    /// Order of the series that sets `extrapolated` (None = converged).
+    pub order: Option<f64>,
+    /// "case/check" of that series, or of the first irregular one.
+    pub governing: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Every (case, check) D/C of the winner wall at n, 2n-1 and 4n-3 stations,
+/// each the max over the seat samples, then [`richardson`] per series.
+fn convergence(
+    params: &Params,
+    fit: &StrengthFit,
+    hull: &Hull,
+    c: &Candidate,
+    seats: &[CaseSeats],
+) -> Convergence {
+    let n = params.hull.stations;
+    let stations = [n, 2 * n - 1, 4 * n - 3];
+    let mut out = Convergence {
+        stations,
+        dc: [f64::NAN; 3],
+        extrapolated: None,
+        order: None,
+        governing: None,
+        note: None,
+    };
+    // series[case][check][resolution]
+    let mut series: Vec<Vec<(&'static str, [f64; 3])>> = vec![Vec::new(); params.load_cases.len()];
+    for (r, &ns) in stations.iter().enumerate() {
+        let grid = Grid::build_flared(hull, c.depth_in, ns, params.hull.flare_deg);
+        let sec = sections(&grid, c.thickness_in);
+        for (k, (case, s)) in params.load_cases.iter().zip(seats).enumerate() {
+            for sample in seats::samples(&s.seats_in, params.seats.variance_in, &grid) {
+                let v = match eval_case(params, fit, &grid, &sec, c.density_pcf, case, &sample) {
+                    Ok(e) => e.verdict,
+                    Err(e) => {
+                        out.note =
+                            Some(format!("{} at {ns} stations: {e:#}; verify_dc gate used", case.name));
+                        return out;
+                    }
+                };
+                for (j, ch) in v.checks.iter().enumerate() {
+                    if series[k].len() <= j {
+                        series[k].push((ch.name, [f64::NEG_INFINITY; 3]));
+                    }
+                    let e = &mut series[k][j].1[r];
+                    *e = e.max(ch.dc);
+                }
+            }
+        }
+    }
+    let tagged: Vec<(String, [f64; 3])> = params
+        .load_cases
+        .iter()
+        .zip(&series)
+        .flat_map(|(case, ss)| ss.iter().map(move |&(name, f)| (format!("{}/{name}", case.name), f)))
+        .collect();
+    extrapolate(stations, &tagged)
+}
+
+/// [`Convergence`] from tagged ("case/check") D/C series at `stations`.
+pub fn extrapolate(stations: [usize; 3], series: &[(String, [f64; 3])]) -> Convergence {
+    let mut out = Convergence {
+        stations,
+        dc: [f64::NAN; 3],
+        extrapolated: None,
+        order: None,
+        governing: None,
+        note: None,
+    };
+    for r in 0..3 {
+        out.dc[r] = series.iter().map(|s| s.1[r]).fold(f64::NEG_INFINITY, f64::max);
+    }
+    let mut best: Option<(f64, Option<f64>, String)> = None;
+    // Irregular series: (tag, values, bound = max + 2 max|step|).
+    let mut irregular: Vec<(String, [f64; 3], f64)> = Vec::new();
+    for (tag, f) in series {
+        let (tag, f) = (tag.clone(), *f);
+        let (value, order) = match richardson(f) {
+            Series::Converged(v) => (v, None),
+            Series::Extrapolated { value, order } => (value, Some(order)),
+            Series::Irregular => {
+                let step = (f[1] - f[0]).abs().max((f[2] - f[1]).abs());
+                irregular.push((tag, f, f[0].max(f[1]).max(f[2]) + 2.0 * step));
+                continue;
+            }
+        };
+        if best.as_ref().is_none_or(|b| value > b.0) {
+            best = Some((value, order, tag));
+        }
+    }
+    let top = best.as_ref().map_or(f64::NEG_INFINITY, |b| b.0);
+    // An irregular series that could reach the governing value makes the
+    // whole extrapolation untrustworthy; one far below it cannot govern.
+    if let Some((tag, f, _)) = irregular.iter().find(|i| i.2.is_nan() || i.2 >= top) {
+        out.governing = Some(tag.clone());
+        out.note = Some(format!(
+            "{tag} D/C {:.4} / {:.4} / {:.4} is not monotone with an order in [0.5, 4]; verify_dc gate used",
+            f[0], f[1], f[2]
+        ));
+        return out;
+    }
+    if !irregular.is_empty() {
+        let tags: Vec<&str> = irregular.iter().map(|i| i.0.as_str()).collect();
+        out.note = Some(format!("irregular but far below the governing D/C: {}", tags.join(", ")));
+    }
+    if let Some((v, o, tag)) = best {
+        (out.extrapolated, out.order, out.governing) = (Some(v), o, Some(tag));
+    }
+    out
 }
 
 /// Is `b` a better winner than `a` (both passing) under the objective?

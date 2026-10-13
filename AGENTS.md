@@ -81,7 +81,10 @@ make serve     # web UI at http://127.0.0.1:8000
     commit. Don't add new docs for things the code and its comments already say.
 
 ## Physics notes
-* D/C drifts up about 1-2% per station doubling, so the search gates at `dc_search` (0.93) and the
-  winner is re-checked at 2n-1 stations against `dc_verify` (0.95).
+* The search gates at `dc_search` (0.93); the winner is re-run at 2n-1 and 4n-3 stations and its
+  Richardson-extrapolated D/C is gated at `dc_verify` (0.95), falling back to the 2n-1 D/C when a
+  series that could govern is irregular. Measured: punching does not move with stations; bending
+  and biaxial move under 0.5% per station doubling, mostly down (closed-form knee patch), so the
+  0.93/0.95 margin is conservative (PLAN B6b).
 * Knee punching governs every example hull, so changes to `check::punching_calc`, the mix fit or
   crew loads move the answer most. Re-run the examples and update `docs/HULLS.md`.

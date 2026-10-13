@@ -136,6 +136,21 @@ fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
     format!("        case {:<12} seats [{}] in{src}{var}  {state}", k.name, seats.join(", "))
 }
 
+/// Richardson line: the extrapolated D/C the verify gate used, or why not.
+fn convergence_line(w: &crate::optimize::Winner) -> String {
+    let c = &w.convergence;
+    let st = format!("{}/{}/{} stations", c.stations[0], c.stations[1], c.stations[2]);
+    match (w.dc_extrapolated, &c.note) {
+        (Some(x), _) => {
+            let how = w.dc_order.map_or("converged".to_string(), |p| format!("order {p:.1}"));
+            let gov = c.governing.as_deref().unwrap_or("-");
+            format!("        D/C extrapolated {x:.4} ({how}, {gov}; {st})")
+        }
+        (None, Some(n)) => format!("        no extrapolation ({st}): {n}"),
+        (None, None) => format!("        no extrapolation ({st})"),
+    }
+}
+
 /// Number with up to 4 decimals, trailing zeros dropped (0.0625, 58, 55.634).
 fn num(x: f64) -> String {
     let s = format!("{x:.4}");
@@ -349,17 +364,14 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             for k in w.cases.iter().take(MAX_CASES) {
                 out.push(case_line(k));
             }
-            if w.verified {
-                out.push(format!(
-                    "        VERIFIED at {} stations (D/C {:.3})",
-                    w.verify_stations, w.verify_dc
-                ));
-            } else {
-                out.push(format!(
-                    "        NOT VERIFIED at {} stations (D/C {:.3} > {:.3})",
-                    w.verify_stations, w.verify_dc, g.dc_verify
-                ));
-            }
+            out.push(format!(
+                "        {}VERIFIED at {} stations (D/C {:.3}){}",
+                if w.verified { "" } else { "NOT " },
+                w.verify_stations,
+                w.verify_dc,
+                if w.verified { String::new() } else { format!(", gate {:.3}", g.dc_verify) }
+            ));
+            out.push(convergence_line(w));
             out.push(provenance_line(&w.mix_provenance));
             if w.at_mix_data_edge {
                 out.push(mix_edge_note(r, w));
@@ -480,6 +492,16 @@ mod tests {
             verify_stations: 81,
             verify_dc: if verified { 0.783 } else { 1.02 },
             verified,
+            dc_extrapolated: Some(0.79),
+            dc_order: Some(2.0),
+            convergence: crate::optimize::Convergence {
+                stations: [41, 81, 161],
+                dc: [0.775, 0.783, 0.785],
+                extrapolated: Some(0.79),
+                order: Some(2.0),
+                governing: Some("race/bending_tension".into()),
+                note: None,
+            },
             on_grid_edge: edge,
             at_mix_data_edge: false,
             diagrams: Default::default(),

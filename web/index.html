@@ -971,6 +971,7 @@ function showWinner() {
     ${pocketRow(c)}
     ${kv('D/C search', `${f(v.dc, 3)}`)}
     ${kv(`D/C verify`, `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`)}
+    ${win.convergence ? kv('D/C extrapolated', win.dc_extrapolated != null ? `${f(win.dc_extrapolated, 4)} <span class="muted">${win.dc_order != null ? 'order ' + f(win.dc_order, 1) : 'converged'}, ${win.convergence.governing || ''}</span>` : `<span class="muted">none, 2n-1 gate used</span>`, `Richardson extrapolation over ${win.convergence.stations.join(' / ')} stations; the verify gate uses it when it is well behaved.${win.convergence.note ? ' ' + win.convergence.note : ''}`) : ''}
     ${kv('Governing case', esc(c.governing_case || '?'))}
     ${checksTable(v)}
     ${win.on_grid_edge ? '<div class="note-box warn">Winner is on the search grid edge. Widen the search range.</div>' : ''}
