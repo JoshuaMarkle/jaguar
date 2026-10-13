@@ -25,6 +25,10 @@ answer more trustworthy first.
 
 ## A. Improve what exists (no scope change, do in order)
 
+- **A12. CPU cost.** Auto seats + seat variance (T57) and 4n-3 verify (T58) raised `canoe.toml` to
+  ~3 CPU-s (0.23 s wall on 20 cores; budget < 1 s on a laptop) and `shape_opt.toml` to ~257 CPU-s.
+  Cut it in `seats.rs` / `equilibrium.rs` with exactness-preserving changes (byte-identical results).
+
 
 ## B. Physics additions (need the user's approval and a SPEC update)
 
