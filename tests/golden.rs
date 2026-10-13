@@ -82,7 +82,10 @@ fn golden_bending_dc() {
             knee_split: 0.5,
             knee_spacing_in: 8.0,
             pad_in: 0.0,
-            d_over_t: 0.5,
+            d_over_t: Some(0.5),
+            layers: None,
+            mesh_after_layer: None,
+            mold: None,
         };
         let v = check::check(&grid, &sec, &loads, f(i, "density"), &mat, &fit, 175.0 * 1.2, &pu);
         let bt = v.checks.iter().find(|c| c.name == "bending_tension").unwrap();

@@ -10,7 +10,10 @@
 | shape_opt.toml | shape search pick (entry 7.4 deg, rocker 3.2/2.1 in) | 216 x 23.1 (18 ft) | 0.375 | 58 | 12 | **91.7** | 1.2 | punching 0.90 |
 
 All verified at 321 stations: 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee
-punching with a 60/40 split (docs/PUNCHING.md).
+punching with a 60/40 split, mesh at mid-wall (2 passes, docs/PUNCHING.md). canoe.toml also checks
+a placeholder 2F crew (140 + 130 lb, never governs). Its 3M, 3F and 4_coed cases (placeholder
+weights) are commented out: with any of them off1 has no design, GM fails at crew CG 12 in
+(3M -0.63, 3F 0.11, 4_coed -1.03 in).
 
 * Punching needs about a 58 pcf mix (f'c about 1640 psi on the lab fit), so it sets the mix for
   every hull. Hull shape then only changes how much wall there is.

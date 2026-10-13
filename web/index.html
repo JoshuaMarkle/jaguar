@@ -277,7 +277,9 @@ const PUNCH = [
   ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
   ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
   ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
-  ['d_over_t', 'Mesh depth / wall', '-', 'How deep the reinforcing mesh sits, as a fraction of wall thickness (aci_22_6 only). 0.5 = mesh in the middle of the wall.', 'any', 0]];
+  ['layers', 'Casting passes', '-', 'Number of equal-thickness layers the wall is cast in. The mesh goes between two of them.', 1, 2],
+  ['mesh_after_layer', 'Mesh after pass', '-', 'The mesh is laid after this pass (1 = after the first). Must be less than the number of passes.', 1, 1]];
+const PUNCH_INT = ['layers', 'mesh_after_layer'];
 // [title, note shown muted next to it]
 const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
@@ -313,6 +315,8 @@ function buildForm() {
   const ot = 'What best means among designs that pass every check: weight = lightest hull, drag = least water resistance at the race speed (only matters with shape search).';
   const smt = 'fit: strength from a straight line through all your lab breaks, so the search may pick any density in the trusted range. tested_mixes: only the mixes you actually tested can be picked, each with its own measured strength.';
   const pmt = 'Which ACI rule checks a knee punching through the hull bottom. aci_22_6 = reinforced slab (mesh in the wall). plain_14_5 = plain (unreinforced) concrete, more conservative.';
+  const pmo = 'Which side of the mold the first pass is cast against. The knee presses on the inside face, and the mesh only helps by its distance from that face: male = mesh (after pass k of n) sits k/n of the wall from the inside, female = (n-k)/n. Matters only for aci_22_6.';
+  const pdt = 'Optional override (aci_22_6 only): mesh depth from the inside face as a fraction of wall thickness. Leave blank to compute it from passes and mold; if set, passes and mold are ignored.';
   const pkt = 'How many knees carry one paddler\'s weight. 1 = all on one knee (safe). 2 = kneeling on both knees (realistic), split by the knee split below.';
   const pair = ([k, label, unit, t]) => {
     const i = n => `<input type="number" id="shape.${k}.${n}" title="${esc(t)} (${['min', 'max'][n]})" step="any" min="0" placeholder="${['min', 'max'][n]}">`;
@@ -344,7 +348,9 @@ function buildForm() {
     + section('punching',
       row('punching.method', 'Method', pmt, '<select id="punching.method"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select>')
       + row('punching.knees', 'Knees per paddler', pkt, '<select id="punching.knees"><option value="1">1 (all weight on one knee)</option><option value="2">2 (weight shared)</option></select>')
-      + PUNCH.map(f => numRow('punching', f)).join(''))
+      + PUNCH.map(f => numRow('punching', f)).join('')
+      + row('punching.mold', 'Mold', pmo, '<select id="punching.mold"><option value="male">male (pass 1 = inside face)</option><option value="female">female (pass 1 = outside face)</option></select>')
+      + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
     + section('search', FIELDS.search.map(triRow).join(''))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
@@ -420,9 +426,13 @@ function fillForm(p, hulls) {
   $('objective.kind').value = p.objective.kind || 'drag';
   $('material.strength_model').value = p.material.strength_model || 'fit';
   $('material.method').value = p.material.method || 'asd';
-  const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0, d_over_t: 0.5 };
+  const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0 };
   $('punching.method').value = pu.method; $('punching.knees').value = String(pu.knees);
-  for (const [k] of PUNCH) $(`punching.${k}`).value = pu[k];
+  // No layer fields in the file = 2 passes, mesh after 1 (d = t/2), same as the engine default.
+  const lay = { layers: pu.layers ?? 2, mesh_after_layer: pu.mesh_after_layer ?? 1 };
+  for (const [k] of PUNCH) $(`punching.${k}`).value = k in lay ? lay[k] : pu[k];
+  $('punching.mold').value = pu.mold || 'male';
+  $('punching.d_over_t').value = pu.d_over_t ?? '';
   if (p.hull.flare_deg === undefined) p.hull.flare_deg = 0;
   const ss = p.shape_search;
   for (const [k, , , , d] of SHAPE) for (const n of [0, 1]) $(`shape.${k}.${n}`).value = ss ? ss[k][n] : d[n];
@@ -470,7 +480,10 @@ function formToml() {
     out.push('');
   }
   out.push('[punching]', `method = ${tstr(g('punching.method'))}`, `knees = ${int('punching.knees')}`);
-  for (const [k] of PUNCH) out.push(`${k} = ${fl(g('punching.' + k))}`);
+  const dot = g('punching.d_over_t').trim();
+  for (const [k] of PUNCH) if (!PUNCH_INT.includes(k)) out.push(`${k} = ${fl(g('punching.' + k))}`);
+  if (dot !== '') out.push(`d_over_t = ${fl(dot)}`);
+  else out.push(`layers = ${int('punching.layers')}`, `mesh_after_layer = ${int('punching.mesh_after_layer')}`, `mold = ${tstr(g('punching.mold'))}`);
   out.push('');
   if (shape) {
     out.push('[shape_search]');

@@ -18,7 +18,8 @@
 //!   station mask as bending, vs 2 lambda sqrt(f'c) / FS (ACI one-way).
 //! * `punching`: kneeling paddler on the hull bottom (docs/PUNCHING.md).
 //!   Round contact d_load = knee_patch_in + 2 pad_in, beta = 1. Two methods:
-//!   `aci_22_6` (ACI 318-19 22.6.4 / Table 22.6.5.2): d = d_over_t * t,
+//!   `aci_22_6` (ACI 318-19 22.6.4 / Table 22.6.5.2): d = d/t * t, d/t from
+//!   `Punching::d_over_t` (casting layers + mold side, or explicit override),
 //!   b0 = pi (d_load + d), v_u = P / (b0 d), v_c = min(4, 2 + 4/beta,
 //!   2 + 40 d / b0) lambda_s lambda sqrt(f'c). `plain_14_5` (Table 14.5.5.1):
 //!   h = t, b0 = pi (d_load + h), v_u = P / (b0 h), v_n = min((4/3)(1 + 2/beta),
@@ -153,7 +154,8 @@ pub fn punching_calc(
     let (beta, alpha_s) = (1.0, 40.0);
     let d_load = knee_in + 2.0 * pu.pad_in;
     let depth = match pu.method {
-        PunchingMethod::Aci22_6 => pu.d_over_t * t,
+        // validate() guarantees Ok; if not, NaN depth makes the check fail (dc = inf).
+        PunchingMethod::Aci22_6 => pu.d_over_t().unwrap_or(f64::NAN) * t,
         PunchingMethod::Plain14_5 => t,
     };
     // Critical circle: depth/2 outside the contact (22.6.4.1 / 14.5.5.2).
@@ -363,7 +365,10 @@ mod tests {
             knee_split: 0.5,
             knee_spacing_in: 8.0,
             pad_in: 0.0,
-            d_over_t: 0.5,
+            d_over_t: Some(0.5),
+            layers: None,
+            mesh_after_layer: None,
+            mold: None,
         }
     }
 
@@ -458,6 +463,38 @@ mod tests {
         // Compression past 1.25 fc exhausts the tension capacity.
         assert!(kupfer_dc(0.0, 1300.0, 1.0, 200.0, 1000.0).is_infinite());
         assert!(kupfer_dc(1.0, 1.0, 1.0, 200.0, f64::NAN).is_infinite());
+    }
+
+    #[test]
+    fn female_mold_mesh_raises_punching_dc() {
+        // Same 3-pass wall, mesh after pass 2: male d = 2t/3, female d = t/3.
+        let g = box_grid(3);
+        let sec = crate::section::sections(&g, 0.375);
+        let mut pu = pu1();
+        (pu.d_over_t, pu.layers, pu.mesh_after_layer) = (None, Some(3), Some(2));
+        let dc = |m| {
+            let mut q = pu.clone();
+            q.mold = Some(m);
+            get(&check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &q), "punching").dc
+        };
+        let (male, female) = (dc(crate::params::Mold::Male), dc(crate::params::Mold::Female));
+        assert!(female > 1.5 * male, "male {male} female {female}");
+        let c = punching_calc(210.0, 0.375, 6000.0, 1.0, 3.0, &{
+            let mut q = pu.clone();
+            q.mold = Some(crate::params::Mold::Female);
+            q
+        });
+        assert!((c.depth_in - 0.125).abs() < 1e-12);
+    }
+
+    #[test]
+    fn invalid_mesh_depth_fails_the_check() {
+        let g = box_grid(3);
+        let sec = crate::section::sections(&g, 0.5);
+        let mut pu = pu1();
+        pu.layers = Some(3); // conflicts with d_over_t: never validated, must not pass
+        let v = check(&g, &sec, &loads(3, 0.0, 0.0), 60.0, &mat(), &fit(), 210.0, &pu);
+        assert!(get(&v, "punching").dc.is_infinite());
     }
 
     #[test]
