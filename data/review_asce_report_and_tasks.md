@@ -67,6 +67,8 @@ Things the report does well that JAGUAR could borrow: per-zone allowables, mix p
 
 ## 3. Task list: done vs open
 
+Snapshot of 2026-10-12, now out of date: current status is in `docs/PLAN.md`.
+
 | task | status in JAGUAR |
 |---|---|
 | Accurate punching shear | **mostly done** (ACI 22.6 with b0 x d, round knee, 2-knee split/merge, pad, plain 14.5 lower bound). Missing: d tied to layers + mold side |

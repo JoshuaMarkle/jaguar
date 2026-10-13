@@ -6,7 +6,7 @@
 | canoe_mixes.toml (tested mixes only) | off1 | 240 x 20.7 | 0.375 | "final target" 60 | 12 | 109.0 | 0.34 | punching 0.82 |
 | sleek.toml | sleek: racing, narrow | 240 x 19 | NO DESIGN | | | | best -1.45 | stability |
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 11 | 112.3 | 8.7 | punching 0.90 |
-| barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 11 | 135.7 | 47.7 | punching 0.90 |
+| barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 126.0 | 48.5 | punching 0.90 |
 | shape_opt.toml | shape search pick (entry 7.4 deg, rocker 3.2/2.1 in) | 216 x 23.1 (18 ft) | 0.375 | 58 | 12 | **91.7** | 1.2 | punching 0.90 |
 
 All verified at 321 stations: 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee

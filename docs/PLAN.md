@@ -1,111 +1,108 @@
 # Plan
 
-## Open work (inputs the team has to measure)
+Open work only. Done tasks live in `git log` (`T<n>:` commits). Audited against the code on
+2026-10-13: all tests pass, examples re-run (`docs/HULLS.md` current), `canoe.toml` 0.09 s,
+`shape_opt.toml` 20 s.
+
+Knee punching governs every design (D/C 0.90, bending 0.3, biaxial 0.32), so bending-only work will
+not lower weight until punching is relieved. Order below = what makes the canoe lighter or the
+answer more trustworthy first.
+
+## 0. Inputs the team has to measure (no code)
 
 - **Knee load test**: load a cast panel of the design wall with a knee-sized block until it fails.
   Punching sets the mix for every hull (docs/PUNCHING.md), so this input moves the answer most.
-- **More lab mixes**: the strength fit rests on 3 points. Light mixes that are strong in punching
-  (55-60 pcf) would lower weight most (docs/MIX_DATA.md). The ASCE report lists mixes at 50.9, 51.2,
-  55.5, 56.2, 70 and 80 pcf that are not in `data/mix_tests.csv`. Get the raw breaks and add them.
-- **Measured crew CG** for the GM gate (`stability.crew_cg_in` is 12 in, assumed). The report's
-  anthropometric model gives 19.86 in, which fails every hull at `gm_min_in` 0.25. Measure a
-  kneeling paddler, then decide if GM stays a gate.
+- **More lab mixes**: the strength fit rests on 3 points (54.9-60 pcf). The ASCE report lists mixes
+  at 50.9, 51.2, 55.5, 56.2, 70 and 80 pcf that are not in `data/mix_tests.csv`; get the raw
+  breaks and add them. Light mixes strong in punching (55-60 pcf) would lower weight most.
+  Flexural and compressive breaks too, if they exist (unlocks A8).
+- **Measured crew CG** (`stability.crew_cg_in` 12 in is assumed). The report's anthropometric 19.86 in
+  fails every hull at `gm_min_in` 0.25. Measure a kneeling paddler, then decide if GM stays a gate.
+- **Team crew weights** for the ASCE race cases (2F, 2M, 3F, 3M, 4 coed), needed by A2.
+- **Mold side and mesh layer** used this year (male/female, mesh after which pass), needed by A1.
 - **ASCE length bounds** for `[shape_search]` from this year's rules.
 - **Drag reference**: run Michlet with wave drag on for one hull and compare (docs/SHAPE_SEARCH.md).
 
+## A. Improve what exists (no scope change, do in order)
+
+- **A1. Construction layers in punching.** `[punching] layers`, `mesh_after_layer`,
+  `mold = "male"|"female"` give d, replacing the guessed `d_over_t` (keep it as an override or
+  drop it; examples + SPEC either way). A female mold puts pass 1 on the outside, so the same mesh is
+  shallower from the knee face. Files: `params.rs`, `check.rs`, `docs/PUNCHING.md`, examples, web
+  form. Re-run examples, update HULLS.
+- **A2. ASCE race-case examples.** 2F, 2M, 3F, 3M, 4_coed `[[load_case]]` blocks in
+  `examples/canoe.toml` (team weights from section 0, placeholders until then). Update HULLS.
+- **A3. Golden coverage for the new physics.** `tests/golden/reference.py` does not cover LRFD
+  (T46), the biaxial check (T45) or swamped flotation (T43): those are only tested against the Rust
+  itself. Add them to the independent Python reference and the golden JSON.
+- **A4. Web form for fields already in `Params`.** Missing: all of `[flotation]`
+  (`air_pocket_max_in`, `swamp_factor`), shape-search steps (`draft_step_in`, `length_step_in`,
+  `beam_step_in`), `rocker_in`, `min_entry_angle_deg`, `symmetric`, `objective.displacements`
+  (with Regionals / Nationals / Total presets), `straight_weight`.
+- **A5. Show flotation in the web result.** `air_pocket_in` is in result.json and the terminal but
+  not in the result panel or the 3D view (draw the pocket bulkheads).
+- **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
+  biaxial check. Add it so the D/C(x) plot shows every along-hull check.
+- **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
+  tested mixes and the distance to them (the ASCE report's "reach").
+- **A8. Search-space table** in the report: range, step, count per variable, and which bound the
+  winner sits on (extends `on_grid_edge`).
+- **A9. Mix chart for every measured property**: optional `flexural_psi` / `compressive_psi`
+  columns in the CSV, fit each that has data, plot each vs density with its fit line. Derived values
+  only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.
+- **A10. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered ends
+  as wall (about 8% heavier than the exported solid on off1). Decide whether to match the export,
+  then re-run examples.
+- **A11. Air pockets in the STEP/STL export**: bulkheads at `air_pocket_in` from each tip, so the mold
+  shop sees where the foam/sealed volume goes.
+
+## B. Physics additions (need the user's approval and a SPEC update)
+
+- **B2. Auto seat solver.** Per case, seats that minimize the wall that passes, then the check
+  enveloped over +/- `seat_variance_in`; every seat ordering of the crew. Manual `seats_in` overrides.
+  Can move hogging ~40%. Pays off only after punching is relieved (A1, C1).
+- **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
+  dc_search / dc_verify margin.
+- **B7. Hoop stress from turning in the biaxial check** (k = V^2/gR, as in the ASCE report). Needs a
+  turn radius input; small effect while bending is at 0.3.
+- **B8. Turning model** to replace the lateral-profile proxy behind `straight_weight` (T32). Needed
+  before C3.
+
+## C. Scope changes (SPEC lists these as out of scope)
+
+- **C1. Multi-mix zones.** Horizontal and vertical boundaries only: I-beam (dense flanges, light
+  web) over the middle, all light mix at the ends. Separate `mixes` (count) from construction layers
+  (A1). Needs a transformed section in `section.rs`, per-zone allowables in `check.rs`, and the
+  multi-pour side-view graph. Biggest expected weight win: only the knee zone needs the punching mix.
+- **C2. Re-sweep a fixed mold for new mixes** with C1: keep the hull and depth, redo wall and zones.
+- **C3. Race simulator**: optimal path per course, straight vs turning distance, time and turn angle,
+  to replace the 0.8 straight weight. Needs B8 first.
+
 ## Team task list: status
 
-Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to_fix.docx`), checked
-against the code on 2026-10-12. Comparison with the legacy report: `data/review_asce_report_and_tasks.md`.
+Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to_fix.docx`).
 
 | task | status |
 |---|---|
-| Export canoe as STEP | **done** (T22 CLI, T23 web buttons) |
-| Draft / length / beam increments | **done** (`shape_search.*_step_in`, T30). Not in the web form |
-| Depth increments | **done** (`search.depth_in` step) |
-| Rocker in inches | **done** (`shape_search.rocker_in`, T30). Not in the web form |
-| Flare angle | **done** (`hull.flare_deg`) |
-| Min entry angle | **done** (`shape_search.min_entry_angle_deg`, T30). Not in the web form |
-| Doubly symmetric | **done** (`shape_search.symmetric`, T30). Not in the web form |
-| Buoyancy / self weight distributed | **done** (real submerged area, draft and trim solved) |
-| Displacement weighting 350/525/700 | **done** (`objective.displacements`, T31). Not in the web form, no presets |
-| Straight 80 / turning 20 | **partial** (T32): turning is a lateral-profile proxy, not a model |
-| Fixed-mold structural sweep | **done** (`run` without `[shape_search]`) |
-| Mix CSV import, editable table, row delete | **done** (T21) |
-| Density vs strength graph with fit | **partial**: split tensile measured, flexural and f'c derived from it |
-| Accurate punching shear | **mostly done** (T16: ACI b0*d, round knee, two knees, pad). d is a guessed `d_over_t` |
-| Mixes separate from construction layers | open (A1) |
-| Race cases 4/3/2 entered separately | **engine done** (`[[load_case]]`), examples use 2M only (A2) |
-| Graphs: M and V all cases with toggles | done (A3): all cases, toggles |
-| Graph: utilization along length | done (A3): D/C(x) per case |
-| LRFD 1.2 / 1.6 | done (T46, B1) |
+| Export canoe as STEP | done (T22 CLI, T23 web, T42 wall normal to surface) |
+| Draft / length / beam / depth increments, rocker in, min entry angle, symmetric | done (T30). Not in the web form (A4) |
+| Flare angle | done (`hull.flare_deg`) |
+| Buoyancy / self weight distributed | done (real submerged area, draft and trim solved) |
+| Displacement weighting 350/525/700 | done (T31). Presets commented in canoe.toml, not in the web form (A4) |
+| Straight 80 / turning 20 | partial (T32): turning is a proxy (B8) |
+| Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
+| Mix CSV import, editable table, row delete | done (T21) |
+| Density vs strength graph with fit | partial: only split tensile is measured (A9) |
+| Accurate punching shear | mostly done (T16); d is a guessed `d_over_t` (A1) |
+| Mixes separate from construction layers | open (A1, C1) |
+| Race cases 4/3/2 entered separately | engine done (`[[load_case]]`), examples use 2M only (A2) |
+| Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41); biaxial not in D/C(x) (A6) |
+| LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
-| Kupfer combined shear + moment | done (T45, B3) |
-| Air pockets / swamped flotation | done (T43, gate + result; STEP export of pockets open) |
-| Multi-mix zones, I-beam middle, light ends | open, SPEC out of scope (C1) |
-| Graph: multi-pour side view | open, needs C1 |
-| Race simulator / ML path | open, SPEC out of scope (C3) |
-
-## Roadmap
-
-Ordered by what makes the canoe lighter or the answer more trustworthy. Knee punching governs every
-design (D/C ~0.9, bending 0.3-0.56), so bending-only work (Kupfer, seats, LRFD bending) will not
-lower weight until punching is relieved. **B** and **C** change physics or scope: each needs the
-user's approval and a SPEC update before starting.
-
-### A. Improve what exists (small, no scope change)
-
-- **A1. Construction layers in punching.** `[punching] layers`, `mesh_after_layer`,
-  `mold = "male"|"female"` give d, replacing `d_over_t`. A female mold puts the first pass on the
-  outside, so the same mesh is shallower from the knee face. Files: `params.rs`, `check.rs`,
-  `docs/PUNCHING.md`, examples, web form.
-- **A2. ASCE race-case examples.** 2F, 2M, 3F, 3M, 4_coed `[[load_case]]` blocks in
-  `examples/canoe.toml` with the team's weights, and regionals / nationals / total displacement
-  presets (350/525/700 lb) commented in. Update `docs/HULLS.md`.
-- **A3. Along-hull plots for every case.** result.json `diagrams` per load case (not only the
-  governing one), with every check's D/C(x). Web: V, M and D/C(x) for all cases overlaid, a toggle
-  per case. Files: `optimize.rs` (Diagrams), `web/index.html`.
-- **A4. Web form for shape-search and objective fields** already in `Params`: step sizes,
-  `rocker_in`, `min_entry_angle_deg`, `symmetric`, `displacements`, `straight_weight`.
-- **A5. Record winning seats** (resolved seat x per case) in result.json and the terminal summary,
-  so a winning load state can be reproduced.
-- **A6. Mix provenance in the report**: per winner density, "tested" or "predicted", with the nearest
-  tested mixes and the distance to them (the report's "reach").
-- **A7. Search-space table** in the report: range, step, count per variable, and which bound the
-  winner sits on (extends `on_grid_edge`).
-- **A8. Mix chart for every measured property**: accept optional `flexural_psi` / `compressive_psi`
-  columns in the CSV, fit each that has data, plot each against density with its fit line. Derived
-  values only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.
-- **A9. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered
-  ends as wall (about 8% heavier than the exported solid on off1). Decide whether to match the
-  export, then re-run examples.
-
-### B. Physics additions (need approval)
-
-- **B1. LRFD option.** DONE (T46): `material.method = "asd"|"lrfd"`. Example 105.3 -> 129.3 lb
-  under lrfd (punching, phi 0.75).
-- **B2. Auto seat solver.** Default: per case, seats that minimize the wall that passes, then the
-  check enveloped over +/- `seat_variance_in`. Manual `seats_in` overrides. Can move hogging ~40%.
-- **B3. Kupfer-Gerstle biaxial check.** DONE (T45): `biaxial` check, bending fibre + peak shear.
-  Hoop stress from turning is not modelled (no input for it). Example D/C 0.32.
-- **B4. Swamped flotation.** DONE (T43) except pockets in the STEP export. Bow/stern air pocket length (max `air_pocket_max_in`) sized so
-  concrete volume + pockets displace >= `swamp_factor` x canoe weight. Gate, and pocket length in
-  the result and the STEP export.
-- **B5. Sign-aware bending fibre.** DONE (T44): tension at the bottom when sagging, top when
-  hogging; golden reference regenerated (`reference.py --regen`). Example tension D/C 0.56 -> 0.31.
-- **B6. Richardson extrapolation** of D/C over station refinement, to replace the fixed
-  dc_search / dc_verify margin.
-
-### C. Scope changes (SPEC lists these as out of scope)
-
-- **C1. Multi-mix zones.** Horizontal and vertical boundaries only: I-beam (dense flanges, light
-  web) over the middle, all light mix at the ends. Separate `mixes` (count) from construction
-  layers (A1). Needs a transformed section in `section.rs`, per-zone allowables in `check.rs`, and
-  the multi-pour side-view graph. Biggest expected weight win: only the knee zone needs the
-  punching mix.
-- **C2. Re-sweep a fixed mold for new mixes** with C1: keep the hull and depth, redo wall and zones.
-- **C3. Race simulator**: optimal path per course, straight vs turning distance, time and turn
-  angle, to replace the 0.8 straight weight. Needs a turning model first.
+| Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |
+| Bow/stern air pockets, swamped flotation | done (T43); web display (A5), export (A11) open |
+| Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |
+| Race simulator / ML path | open, out of scope (C3) |
 
 ## How to take a task
 

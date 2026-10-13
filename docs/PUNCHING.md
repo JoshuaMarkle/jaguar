@@ -32,8 +32,8 @@ Both treat the knee (plus pad) as a round contact of diameter
   walls this thin, computed anyway.
 * `lambda = 1`: f'c comes from YOUR lightweight mix breaks (via split tensile,
   `f_ct = 6.7 sqrt(f'c)`), so the lightweight reduction is already in the data.
-* Allowable = nominal / `factor_of_safety` (1.5). ACI's strength-design phi = 0.75
-  is NOT applied on top: the project uses one safety factor, not two.
+* `material.method = "asd"` (default): allowable = nominal / `factor_of_safety` (1.5).
+  `"lrfd"`: allowable = phi 0.75 x nominal against factored loads (1.2D+1.6L). Never both.
 
 ### `method = "plain_14_5"`: Table 14.5.5.1 (plain, unreinforced concrete)
 
