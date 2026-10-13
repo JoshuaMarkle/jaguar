@@ -55,8 +55,9 @@ Pass 1 goes against the mold, so the mesh sits k t / layers from the mold face:
 * `mold = "female"`: pass 1 is the OUTSIDE face: `d = (layers - k) / layers * t`.
 
 t = 0.375 in, 3 passes, mesh after pass 2: male d = 0.250 in, female d = 0.125 in. On off1 that
-moves the winner from 93.3 lb (male, 55 pcf; GM, not punching, stops lighter mixes) to 138.0 lb
-(female, t 0.5 in, 61 pcf).
+moves the winner from 93.3 lb (male, t 0.375 in, 55 pcf; punching D/C 0.71: lighter mixes fail
+GM at the 12 in depth freeboard needs, not punching) to 138.0 lb
+(female, t 0.5 in, 61 pcf; punching governs at D/C 0.93).
 `d_over_t` overrides all three (an error if given with them). Neither given = 2 passes, mesh
 after 1, d = t/2 on either mold; the examples spell that out.
 

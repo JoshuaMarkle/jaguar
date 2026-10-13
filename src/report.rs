@@ -50,6 +50,25 @@ pub fn mix_fit_line(f: &crate::mix::StrengthFit) -> String {
         .collect::<String>()
 }
 
+/// NOTE for a winner density at the edge of what the lab data supports:
+/// which end (from the density axis's `at_bound`) and how far past the tested
+/// densities at that end it already extrapolates.
+fn mix_edge_note(r: &RunResult, w: &crate::optimize::Winner) -> String {
+    let rho = w.candidate.density_pcf;
+    let (lo, hi) = r.strength.tested_range();
+    if w.search_space[1].at_bound == Some(crate::optimize::Bound::Max) {
+        format!(
+            "NOTE density {rho:.0} pcf is the heaviest the lab data supports (+{:.0} pcf extrapolation); test heavier, stronger mixes to go higher",
+            (rho - hi).max(0.0)
+        )
+    } else {
+        format!(
+            "NOTE density {rho:.0} pcf is the lightest the lab data supports (+{:.0} pcf extrapolation); test lighter mixes to go lower",
+            (lo - rho).max(0.0)
+        )
+    }
+}
+
 /// Strength-model header: the fit line, or (tested_mixes) up to 3 lines of mixes.
 pub fn strength_lines(r: &RunResult) -> Vec<String> {
     if r.params.material.strength_model != crate::params::StrengthModel::TestedMixes {
@@ -323,12 +342,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             }
             out.push(provenance_line(&w.mix_provenance));
             if w.at_mix_data_edge {
-                let f = &r.strength;
-                out.push(format!(
-                    "NOTE density {:.0} pcf is the lightest the lab data supports (+{:.0} pcf extrapolation); test lighter mixes to go lower",
-                    c.density_pcf,
-                    (c.density_pcf - f.density_min_pcf).abs()
-                ));
+                out.push(mix_edge_note(r, w));
             }
             if w.on_grid_edge {
                 out.push("WARNING winner is on the search grid edge; widen [search] ranges".to_string());
@@ -552,6 +566,30 @@ mod tests {
         assert!(s.contains("shape fore_wp"));
         assert!(s.contains("L in"));
         assert!(l.len() <= MAX_LINES);
+    }
+
+    #[test]
+    fn mix_edge_note_names_the_bound() {
+        // Example lab data is tested 54.9..60 pcf; extrapolation measured from the matching end.
+        let note = |rho: f64, b| {
+            let mut r = base(Some(winner(true, false)), false);
+            let w = r.winner.as_mut().unwrap();
+            w.at_mix_data_edge = true;
+            w.candidate.density_pcf = rho;
+            w.search_space[1].at_bound = Some(b);
+            summary_lines(&r).into_iter().find(|l| l.starts_with("NOTE density")).unwrap()
+        };
+        use crate::optimize::Bound;
+        let lo = note(51.0, Bound::Min);
+        assert!(
+            lo.contains("51 pcf is the lightest") && lo.contains("(+4 pcf") && lo.contains("lighter"),
+            "{lo}"
+        );
+        let hi = note(64.0, Bound::Max);
+        assert!(
+            hi.contains("64 pcf is the heaviest") && hi.contains("(+4 pcf") && !hi.contains("lighter"),
+            "{hi}"
+        );
     }
 
     #[test]
