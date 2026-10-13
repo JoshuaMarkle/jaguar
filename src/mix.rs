@@ -55,6 +55,40 @@ pub struct TestedMix {
     pub split_min_psi: f64,
 }
 
+/// A density within this of a tested mix's mean density counts as tested, pcf.
+pub const TESTED_TOL_PCF: f64 = 0.05;
+
+/// Whether a design density has lab data behind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Provenance {
+    /// A tested mix is at this density.
+    Tested,
+    /// Only the fitted line gives the strength here.
+    Predicted,
+}
+
+/// A tested mix near a design density.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NearMix {
+    pub name: String,
+    pub density_pcf: f64,
+    /// Mix density minus design density, pcf (negative = lighter mix).
+    pub distance_pcf: f64,
+}
+
+/// Lab-data provenance of one design density ([`StrengthFit::provenance`]).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MixProvenance {
+    pub density_pcf: f64,
+    pub status: Provenance,
+    /// Nearest tested mixes by density, bracketing the design density when
+    /// it lies inside the tested range.
+    pub nearest: Vec<NearMix>,
+    /// Distance to the nearest tested mix, pcf.
+    pub reach_pcf: f64,
+}
+
 /// Group name for a `mix` cell: a trailing replicate token (a single letter or
 /// a number, after a space) is stripped, so "M2 A", "M2 B" and "M2 3" are all
 /// "M2". Names without such a token ("final target") are kept as given.
@@ -137,6 +171,40 @@ impl StrengthFit {
             density_max_pcf: m.density_pcf,
             flex_over_split: self.flex_over_split,
         }
+    }
+
+    /// Where the strength at density `rho` comes from (the ASCE report's
+    /// "reach"). `mix` is the tested mix the design uses (`strength_model =
+    /// "tested_mixes"`), else None. Fit mode: the nearest tested mix at or
+    /// below and at or above `rho` (one if `rho` is outside the tested range),
+    /// and `reach_pcf` = distance to the nearest. `rho` counts as tested when a
+    /// tested mix is within [`TESTED_TOL_PCF`]; its strength is still the
+    /// fitted line's, not that mix's mean. Err if there are no tested mixes or
+    /// `mix` is not one of them.
+    pub fn provenance(&self, rho: f64, mix: Option<&str>) -> Result<MixProvenance> {
+        let m = self.tested_mixes();
+        ensure!(!m.is_empty(), "no tested mixes in the mix data");
+        let near = |x: &TestedMix| NearMix {
+            name: x.name.clone(),
+            density_pcf: x.density_pcf,
+            distance_pcf: x.density_pcf - rho,
+        };
+        let nearest: Vec<NearMix> = match mix {
+            Some(name) => {
+                vec![near(m.iter().find(|x| x.name == name).with_context(|| format!("unknown mix {name}"))?)]
+            }
+            None => {
+                let below = m.iter().rev().find(|x| x.density_pcf <= rho + TESTED_TOL_PCF);
+                let above = m.iter().find(|x| x.density_pcf >= rho - TESTED_TOL_PCF);
+                let mut v: Vec<NearMix> = below.into_iter().chain(above).map(near).collect();
+                v.dedup_by(|a, b| a.name == b.name);
+                v
+            }
+        };
+        let reach = nearest.iter().map(|n| n.distance_pcf.abs()).fold(f64::INFINITY, f64::min);
+        let status =
+            if mix.is_some() || reach <= TESTED_TOL_PCF { Provenance::Tested } else { Provenance::Predicted };
+        Ok(MixProvenance { density_pcf: rho, status, nearest, reach_pcf: reach })
     }
 
     /// Least-squares fit through the given points.
@@ -290,6 +358,33 @@ mod tests {
         assert!((f.split_psi(10.0) - 240.0).abs() < 1e-9);
         assert!((f.fc_psi(99.0) - (240.0f64 / 6.7).powi(2)).abs() < 1e-9);
         assert_eq!(f.points.len(), 2);
+    }
+
+    #[test]
+    fn provenance_reach() {
+        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let m2 = (56.408 + 54.860) / 2.0;
+        // Between M2 and the 60 pcf mix: predicted, bracketed, reach to the closer one.
+        let p = fit.provenance(58.0, None).unwrap();
+        assert_eq!(p.status, Provenance::Predicted);
+        let names: Vec<&str> = p.nearest.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["M2", "final target"]);
+        assert!((p.nearest[0].distance_pcf - (m2 - 58.0)).abs() < 1e-12);
+        assert!((p.nearest[1].distance_pcf - 2.0).abs() < 1e-12);
+        assert!((p.reach_pcf - 2.0).abs() < 1e-12);
+        // Below the tested range: only the lightest mix.
+        let p = fit.provenance(51.0, None).unwrap();
+        assert_eq!(p.nearest.len(), 1);
+        assert!((p.reach_pcf - (m2 - 51.0)).abs() < 1e-12);
+        // At a tested density: tested, one mix, reach 0.
+        let p = fit.provenance(60.0, None).unwrap();
+        assert_eq!(p.status, Provenance::Tested);
+        assert_eq!(p.nearest.len(), 1);
+        assert_eq!(p.reach_pcf, 0.0);
+        // Tested-mixes mode names the mix.
+        let p = fit.provenance(m2, Some("M2")).unwrap();
+        assert_eq!((p.status, p.nearest.len(), p.reach_pcf), (Provenance::Tested, 1, 0.0));
+        assert!(fit.provenance(m2, Some("nope")).is_err());
     }
 
     #[test]

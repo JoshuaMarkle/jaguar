@@ -41,10 +41,6 @@ answer more trustworthy first.
   (with Regionals / Nationals / Total presets), `straight_weight`.
 - **A5. Show flotation in the web result.** `air_pocket_in` is in result.json and the terminal but
   not in the result panel or the 3D view (draw the pocket bulkheads).
-- **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
-  tested mixes and the distance to them (the ASCE report's "reach").
-- **A8. Search-space table** in the report: range, step, count per variable, and which bound the
-  winner sits on (extends `on_grid_edge`).
 - **A9. Mix chart for every measured property**: optional `flexural_psi` / `compressive_psi`
   columns in the CSV, fit each that has data, plot each vs density with its fit line. Derived values
   only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.

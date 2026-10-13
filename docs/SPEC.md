@@ -96,13 +96,21 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points), winner_hull (shape runs) | null, candidates: [...],
-winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge, diagrams,
-cases} | null}`. `diagrams` is the governing case at verification resolution. `cases` has one entry
+winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_data_edge,
+mix_provenance, search_space, diagrams, cases} | null}`. `mix_provenance`: the winner density is
+`tested` (a tested mix within 0.05 pcf, or the tested mix itself) or `predicted` (fit line only),
+the nearest tested mixes below/above it with their signed distance, and `reach_pcf` (distance to the
+nearest). `search_space`: per searched variable (thickness, density, depth, then each free
+`[shape_search]` factor) the min, max, step and count actually tried, the winner value, the bound it
+sits on (`min`/`max`) and `limit` when that bound is real (`buildable floor`, `mix data`,
+`tested mixes`). `on_grid_edge` = a wall variable on a bound with no limit; shape bounds are listed,
+not flagged. `diagrams` is the governing case at verification resolution. `cases` has one entry
 per `[[load_case]]` (input order): name, `seats_in` actually used (given or evenly spaced),
 weights, draft, trim, GM, freeboard, x, V, M, tension/compression/shear stress, waterline, and
 per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at
 masked tip stations, same formulas as the checks), plus that case's verdict. A case whose equilibrium fails carries `error`
-and no numbers. The terminal prints one seats + D/C line per case under the winner. Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
+and no numbers. The terminal prints one seats + D/C line per case under the winner, the mix provenance
+line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.
