@@ -107,6 +107,9 @@ pub struct CaseDiagrams {
     pub dc_bending_tension: Vec<f64>,
     pub dc_bending_compression: Vec<f64>,
     pub dc_shear: Vec<f64>,
+    /// Kupfer-Gerstle biaxial D/C per station (`check::kupfer_dc` on this
+    /// station's tension/compression fibre stress and shear stress).
+    pub dc_biaxial: Vec<f64>,
     pub verdict: Option<Verdict>,
 }
 
@@ -436,6 +439,9 @@ pub fn case_diagrams(
     let cap = |name: &str| verdict.checks.iter().find(|c| c.name == name).map_or(f64::NAN, |c| c.capacity);
     let (ft_cap, fc_cap, v_cap) = (cap("bending_tension"), cap("bending_compression"), cap("shear"));
     let dc = |s: f64, c: f64| if c.is_finite() && c > 0.0 { s / c } else { f64::INFINITY };
+    // check.rs gives kupfer_dc f'c times the capacity factor; compression's
+    // capacity is 0.85 of that (NaN when f'c <= 0, which kupfer_dc fails).
+    let fc_kupfer = fc_cap / 0.85;
     let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
     let mut out = CaseDiagrams {
         name: case.name.clone(),
@@ -456,7 +462,12 @@ pub fn case_diagrams(
             for v in [&mut tension_psi, &mut out.compression_psi, &mut out.shear_psi] {
                 v.push(0.0);
             }
-            for v in [&mut out.dc_bending_tension, &mut out.dc_bending_compression, &mut out.dc_shear] {
+            for v in [
+                &mut out.dc_bending_tension,
+                &mut out.dc_bending_compression,
+                &mut out.dc_shear,
+                &mut out.dc_biaxial,
+            ] {
                 v.push(0.0);
             }
             continue;
@@ -474,6 +485,7 @@ pub fn case_diagrams(
         out.dc_bending_tension.push(dc(st, ft_cap));
         out.dc_bending_compression.push(dc(sc, fc_cap));
         out.dc_shear.push(dc(tau, v_cap));
+        out.dc_biaxial.push(crate::check::kupfer_dc(st, sc, tau, ft_cap, fc_kupfer));
     }
     let l = grid.x[n - 1];
     let waterline_in = grid

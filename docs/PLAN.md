@@ -41,8 +41,6 @@ answer more trustworthy first.
   (with Regionals / Nationals / Total presets), `straight_weight`.
 - **A5. Show flotation in the web result.** `air_pocket_in` is in result.json and the terminal but
   not in the result panel or the 3D view (draw the pocket bulkheads).
-- **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
-  biaxial check. Add it so the D/C(x) plot shows every along-hull check.
 - **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
   tested mixes and the distance to them (the ASCE report's "reach").
 - **A8. Search-space table** in the report: range, step, count per variable, and which bound the
@@ -96,7 +94,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Accurate punching shear | mostly done (T16); d is a guessed `d_over_t` (A1) |
 | Mixes separate from construction layers | open (A1, C1) |
 | Race cases 4/3/2 entered separately | engine done (`[[load_case]]`), examples use 2M only (A2) |
-| Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41); biaxial not in D/C(x) (A6) |
+| Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |

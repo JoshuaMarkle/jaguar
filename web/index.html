@@ -645,15 +645,15 @@ function plotStress(ctx, W, H) {
   if (c) line(ctx, a2, xr, [c.depth_in, c.depth_in], C.ink);
   legend(ctx, r2.l + 10, r2.t + 16, ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, `${k.name} waterline (trim ${k.trim_in.toFixed(2)} in, fb ${k.freeboard_in.toFixed(2)} in)`, dash]; }).concat([[C.ink, 'gunwale (mold depth)']]));
 }
-// Utilization along the hull: per case, max over bending tension/compression/shear D/C at each station.
+// Utilization along the hull: per case, max over bending tension/compression/shear/biaxial D/C at each station.
 function plotDcx(ctx, W, H) {
   const d = diag(); if (!d) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const ks = shownCases(); if (!ks.length) return msg(ctx, W, H, 'All load cases hidden.');
-  const util = k => k.x_in.map((_, i) => Math.max(k.dc_bending_tension[i], k.dc_bending_compression[i], k.dc_shear[i]));
+  const util = k => k.x_in.map((_, i) => Math.max(k.dc_bending_tension[i], k.dc_bending_compression[i], k.dc_shear[i], k.dc_biaxial ? k.dc_biaxial[i] : 0));
   const fin = v => isFinite(v) ? v : 0;
   const ymax = Math.max(dcGate, ...ks.flatMap(k => util(k).map(fin))) * 1.1;
   const r = { l: 72, t: 12, w: W - 92, h: H - 52 }, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
-  const a = axes(ctx, r, xr, [0, ymax], 'x from bow, in', 'D/C (max of bending tension, compression, shear)');
+  const a = axes(ctx, r, xr, [0, ymax], 'x from bow, in', 'D/C (max of bending tension, compression, shear, biaxial)');
   hline(ctx, r.l, r.l + r.w, a.py(dcGate), C.error, [5, 4]);
   for (const k of ks) line(ctx, a, k.x_in, util(k).map(fin), ...caseStyle(k.i));
   caseKnees(ctx, a, r, ks);

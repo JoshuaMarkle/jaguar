@@ -192,9 +192,14 @@ fn winner_has_diagrams_for_every_load_case() {
         assert_eq!(k.seats_in, want);
         let d = &k.diagrams;
         assert_eq!(d.x_in.len(), w.verify_stations);
-        for v in
-            [&k.compression_psi, &k.shear_psi, &k.dc_bending_tension, &k.dc_bending_compression, &k.dc_shear]
-        {
+        for v in [
+            &k.compression_psi,
+            &k.shear_psi,
+            &k.dc_bending_tension,
+            &k.dc_bending_compression,
+            &k.dc_shear,
+            &k.dc_biaxial,
+        ] {
             assert_eq!(v.len(), w.verify_stations);
             assert!(v.iter().all(|x| x.is_finite() && *x >= 0.0));
         }
@@ -211,6 +216,7 @@ fn winner_has_diagrams_for_every_load_case() {
             ("bending_tension", &k.dc_bending_tension),
             ("bending_compression", &k.dc_bending_compression),
             ("shear", &k.dc_shear),
+            ("biaxial", &k.dc_biaxial),
         ] {
             let c = v.checks.iter().find(|c| c.name == name).unwrap();
             let m = arr.iter().cloned().fold(0.0, f64::max);
@@ -221,6 +227,17 @@ fn winner_has_diagrams_for_every_load_case() {
     let g = w.candidate.governing_case.as_deref().unwrap();
     let gk = w.cases.iter().find(|k| k.name == g).unwrap();
     assert_eq!(gk.diagrams.moment_lbin, w.diagrams.moment_lbin);
+    // Biaxial is 0 at the masked tip stations, like the other per-station checks.
+    for k in &w.cases {
+        let masked: Vec<usize> = (0..k.dc_biaxial.len())
+            .filter(|&i| k.diagrams.inertia_in4[i] <= 1e-3 * imax(&k.diagrams))
+            .collect();
+        assert!(masked.iter().all(|&i| k.dc_biaxial[i] == 0.0 && k.dc_shear[i] == 0.0));
+    }
+}
+
+fn imax(d: &optimize::Diagrams) -> f64 {
+    d.inertia_in4.iter().cloned().fold(0.0, f64::max)
 }
 
 /// B1: LRFD factors the loads (1.2D+1.6L, 0.9D+1.6L) and uses phi on capacity.

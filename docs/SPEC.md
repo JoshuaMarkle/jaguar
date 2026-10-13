@@ -100,8 +100,8 @@ winner: {candidate, verify_stations, verify_dc, verified, on_grid_edge, at_mix_d
 cases} | null}`. `diagrams` is the governing case at verification resolution. `cases` has one entry
 per `[[load_case]]` (input order): name, `seats_in` actually used (given or evenly spaced),
 weights, draft, trim, GM, freeboard, x, V, M, tension/compression/shear stress, waterline, and
-per-station D/C for bending tension, bending compression and shear (0 at masked tip stations, same
-formulas as the checks), plus that case's verdict. A case whose equilibrium fails carries `error`
+per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at
+masked tip stations, same formulas as the checks), plus that case's verdict. A case whose equilibrium fails carries `error`
 and no numbers. The terminal prints one seats + D/C line per case under the winner. Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
