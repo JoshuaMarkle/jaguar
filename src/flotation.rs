@@ -4,8 +4,10 @@
 //! provide all buoyancy. Need (V_wall + V_pockets) * 62.4/1728 >= swamp_factor * W,
 //! W = canoe self weight (no crew). Each pocket runs from a tip inward a length l
 //! (same l both ends) and fills the hull interior up to the mold depth. The interior
-//! area per station is 2 * integral of max(y - t, 0) dz (inner half-breadth = outer - t)
-//! minus the bottom-shell strip 2 * (y_keel - t) * t.
+//! area per station is the area enclosed by the outer mold line up to D, 2 * integral
+//! of y dz, minus the shell area A (section.rs), so pocket air + pocket wall is exactly
+//! the enclosed volume (clamped at 0 at the tips, where the shell model's A exceeds it).
+//! Checked against tests/golden/reference.py.
 //! Pure: no I/O.
 
 use crate::hull::Grid;
@@ -29,13 +31,15 @@ fn trapz(x: &[f64], f: &[f64]) -> f64 {
     x.windows(2).zip(f.windows(2)).map(|(x, a)| 0.5 * (a[0] + a[1]) * (x[1] - x[0])).sum()
 }
 
-/// Interior (air-tight) area of each station, in^2.
-fn interior_area(grid: &Grid, t: f64) -> Vec<f64> {
+/// Interior (air-tight) area of each station, in^2: enclosed area minus wall area.
+/// (Offsetting the half-breadth by t horizontally instead overcounts: the shell
+/// model puts t * ds of wall along the girth, so wall + air exceeded the hull's
+/// own enclosed area and pockets came out ~6% too short on off1.)
+fn interior_area(grid: &Grid, sec: &Sections) -> Vec<f64> {
     (0..grid.nx())
         .map(|i| {
-            let w: Vec<f64> = grid.row(i).iter().map(|&y| 2.0 * (y - t).max(0.0)).collect();
-            // the bottom shell occupies z in [0, t]: remove that strip
-            trapz(&grid.z, &w) - w[0] * t
+            let w: Vec<f64> = grid.row(i).iter().map(|&y| 2.0 * y).collect();
+            (trapz(&grid.z, &w) - sec.area[i]).max(0.0)
         })
         .collect()
 }
@@ -58,7 +62,6 @@ fn integrate_to(x: &[f64], a: &[f64], from: f64, to: f64) -> f64 {
 pub fn flotation(
     grid: &Grid,
     sec: &Sections,
-    t: f64,
     rho: f64,
     swamp_factor: f64,
     max_len_in: f64,
@@ -67,7 +70,7 @@ pub fn flotation(
     let weight = wall * rho / 1728.0;
     let need = (swamp_factor * weight * 1728.0 / WATER_PCF - wall).max(0.0);
     let (x0, xn) = (grid.x[0], grid.x[grid.nx() - 1]);
-    let ai = interior_area(grid, t);
+    let ai = interior_area(grid, sec);
     let vol = |l: f64| integrate_to(&grid.x, &ai, x0, x0 + l) + integrate_to(&grid.x, &ai, xn - l, xn);
     let mut len = 0.0;
     if need > 0.0 {
@@ -105,23 +108,23 @@ mod tests {
     fn box_pocket_length_hand_computed() {
         let g = box_grid();
         let s = sections(&g, 0.5);
-        let f = flotation(&g, &s, 0.5, 100.0, 1.1, 60.0).unwrap();
+        let f = flotation(&g, &s, 100.0, 1.1, 60.0).unwrap();
         // section area = 2*10*0.5 (keel) + 2*0.5*10 (sides) = 20 in^2; wall = 4000 in^3
         // weight = 4000*100/1728; need = 1.1*4000*100/62.4 - 4000 = 3051.28 in^3
-        // interior area = 2*9.5*10 - 2*9.5*0.5 = 180.5 in^2, two ends: l = need / 361
+        // interior area = enclosed 2*10*10 - wall 20 = 180 in^2, two ends: l = need / 360
         let need = 1.1 * 4000.0 * 100.0 / 62.4 - 4000.0;
         assert!((f.wall_in3 - 4000.0).abs() < 1e-9);
         assert!((f.pocket_in3 - need).abs() < 1e-6);
-        assert!((f.pocket_len_in - need / 361.0).abs() < 1e-6, "{}", f.pocket_len_in);
+        assert!((f.pocket_len_in - need / 360.0).abs() < 1e-6, "{}", f.pocket_len_in);
     }
 
     #[test]
     fn too_long_pocket_fails_with_reason() {
         let g = box_grid();
         let s = sections(&g, 0.5);
-        let e = flotation(&g, &s, 0.5, 100.0, 1.1, 5.0).unwrap_err().to_string();
+        let e = flotation(&g, &s, 100.0, 1.1, 5.0).unwrap_err().to_string();
         assert!(e.contains("air_pocket_max_in"), "{e}");
-        let e = flotation(&g, &s, 0.5, 100.0, 20.0, 1e9).unwrap_err().to_string();
+        let e = flotation(&g, &s, 100.0, 20.0, 1e9).unwrap_err().to_string();
         assert!(e.contains("whole hull"), "{e}");
     }
 
@@ -129,7 +132,7 @@ mod tests {
     fn light_mix_needs_no_pocket() {
         let g = box_grid();
         let s = sections(&g, 0.5);
-        let f = flotation(&g, &s, 0.5, 50.0, 1.1, 0.0).unwrap();
+        let f = flotation(&g, &s, 50.0, 1.1, 0.0).unwrap();
         assert_eq!(f.pocket_len_in, 0.0);
     }
 }

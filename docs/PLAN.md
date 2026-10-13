@@ -32,9 +32,6 @@ answer more trustworthy first.
   form. Re-run examples, update HULLS.
 - **A2. ASCE race-case examples.** 2F, 2M, 3F, 3M, 4_coed `[[load_case]]` blocks in
   `examples/canoe.toml` (team weights from section 0, placeholders until then). Update HULLS.
-- **A3. Golden coverage for the new physics.** `tests/golden/reference.py` does not cover LRFD
-  (T46), the biaxial check (T45) or swamped flotation (T43): those are only tested against the Rust
-  itself. Add them to the independent Python reference and the golden JSON.
 - **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
   biaxial check. Add it so the D/C(x) plot shows every along-hull check.
 - **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest

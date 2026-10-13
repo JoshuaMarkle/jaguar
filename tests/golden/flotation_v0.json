@@ -1,0 +1,66 @@
+{
+ "generator": "tests/golden/reference.py",
+ "tolerance_rel": 0.01,
+ "cases": [
+  {
+   "inputs": {
+    "depth": 14.0,
+    "stations": 161,
+    "thickness": 0.375,
+    "density": 64.0,
+    "swamp_factor": 1.1
+   },
+   "outputs": {
+    "wall_in3": 3499.0294269567567,
+    "weight": 129.59368247987987,
+    "pocket_in3": 448.5935162765081,
+    "pocket_len_in": 7.823622090426253
+   }
+  },
+  {
+   "inputs": {
+    "depth": 14.0,
+    "stations": 161,
+    "thickness": 0.5,
+    "density": 70.0,
+    "swamp_factor": 1.1
+   },
+   "outputs": {
+    "wall_in3": 4665.372569275675,
+    "weight": 188.99078694982478,
+    "pocket_in3": 1091.577556272834,
+    "pocket_len_in": 13.04371932560155
+   }
+  },
+  {
+   "inputs": {
+    "depth": 12.0,
+    "stations": 121,
+    "thickness": 0.625,
+    "density": 80.0,
+    "swamp_factor": 1.2
+   },
+   "outputs": {
+    "wall_in3": 5232.957722948653,
+    "weight": 242.26656124762283,
+    "pocket_in3": 2817.74646620312,
+    "pocket_len_in": 26.28582611608755
+   }
+  },
+  {
+   "inputs": {
+    "depth": 16.0,
+    "stations": 161,
+    "thickness": 0.5,
+    "density": 55.0,
+    "swamp_factor": 1.0
+   },
+   "outputs": {
+    "wall_in3": 5145.609049075675,
+    "weight": 163.77806579812622,
+    "pocket_in3": 0.0,
+    "pocket_len_in": 0.0
+   }
+  }
+ ]
+}

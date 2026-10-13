@@ -596,7 +596,7 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
             }
         }
         if let Some(fp) = &params.flotation {
-            match crate::flotation::flotation(grid, sec, t, rho, fp.swamp_factor, fp.air_pocket_max_in) {
+            match crate::flotation::flotation(grid, sec, rho, fp.swamp_factor, fp.air_pocket_max_in) {
                 Ok(f) => c.air_pocket_in = Some(f.pocket_len_in),
                 Err(e) => {
                     c.error = Some(format!("{e:#}"));
