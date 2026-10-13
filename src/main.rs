@@ -77,6 +77,9 @@ enum Cmd {
         /// Points around the girth, sheer to sheer (odd)
         #[arg(long, default_value_t = 41)]
         girth: usize,
+        /// Leave out the air pocket bulkheads (result.json with [flotation])
+        #[arg(long)]
+        no_pockets: bool,
     },
     /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
@@ -211,7 +214,7 @@ fn main() -> Result<()> {
                 println!("{w}");
             }
         }
-        Cmd::Export { input, out, format, thickness, depth, flare, stations, girth } => {
+        Cmd::Export { input, out, format, thickness, depth, flare, stations, girth, no_pockets } => {
             use jaguar::export;
             let text = std::fs::read_to_string(&input)?;
             let is_result = serde_json::from_str::<serde_json::Value>(&text)
@@ -224,7 +227,14 @@ fn main() -> Result<()> {
                 let d = hull.draft_design;
                 (
                     hull,
-                    export::ExportSpec { depth_in: d, thickness_in: None, flare_deg: 0.0, stations, girth },
+                    export::ExportSpec {
+                        depth_in: d,
+                        thickness_in: None,
+                        flare_deg: 0.0,
+                        stations,
+                        girth,
+                        pocket_in: None,
+                    },
                 )
             };
             if let Some(t) = thickness {
@@ -236,6 +246,10 @@ fn main() -> Result<()> {
             if let Some(f) = flare {
                 spec.flare_deg = f;
             }
+            if no_pockets {
+                spec.pocket_in = None;
+            }
+            let pockets = spec.pocket_in.filter(|&l| l > 0.0 && spec.thickness_in.is_some());
             let fmt = format
                 .or_else(|| out.extension().map(|e| e.to_string_lossy().to_lowercase()))
                 .unwrap_or_else(|| "step".into());
@@ -256,6 +270,9 @@ fn main() -> Result<()> {
                 hi[2] - lo[2],
                 if mesh.closed { format!(", wall volume {:.0} in^3", mesh.volume()) } else { String::new() }
             );
+            if let Some(l) = pockets {
+                println!("air pocket bulkheads at {l:.1} in from each tip (--no-pockets to leave out)");
+            }
         }
         Cmd::Serve { params, port, prefs } => serve::serve(&params, port, prefs)?,
     }

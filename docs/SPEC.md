@@ -12,7 +12,7 @@ jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no v
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
-jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg]
+jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
 `serve`: the form is the only editor. Each edit is autosaved (validated, absolute paths) to
@@ -114,7 +114,8 @@ the outer mold surface to `--depth` (add `--thickness` for the solid wall). Same
 analysis grid, both sides mirrored, each station's girth resampled to `--girth` points.
 * **STEP** (AP214): a closed `MANIFOLD_SOLID_BREP` of planar triangular faces for a wall, or an
   `OPEN_SHELL` surface model for the mold surface. Verified: opens as one valid solid in
-  OpenCASCADE (gmsh 4.15, the kernel FreeCAD uses) with matching volume and bounding box.
+  OpenCASCADE (gmsh 4.15, the kernel FreeCAD uses) with matching volume and bounding box, also
+  with air pocket bulkheads (off1 and barge winners).
 * **STL** (binary): the same triangles, watertight for a wall.
 * The keel line is smooth along x: its height at each table station is fitted below the lowest
   non-zero waterline (parabolic section through the two lowest offsets), then interpolated with a
@@ -125,7 +126,15 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   closes, the ends are solid concrete closed by a bulkhead. The solid is about 8% lighter than the
   analysis weight on off1: the analysis also counts the zero-breadth waterlines of the rockered ends
   as wall (conservative).
-* `GET /api/export?format=step|stl` in the web UI exports the last run's winner.
+* **Air pockets**: when the winner has `air_pocket_in` (`[flotation]`), the wall gets a solid
+  bulkhead t thick inboard of each sealed pocket, from x0 + l to x0 + l + t and from xn - l - t to
+  xn - l (x0, xn the hull's ends, l = `air_pocket_in`), fused into the same single solid so the mold
+  shop sees where the foam/sealed volume goes. The bulkheads are not in the analysis weight
+  (2 t x interior area, 17 in^3 on the examples/canoe.toml winner). `--no-pockets` leaves them out. A
+  pocket shorter than the solid end at the export's station spacing is an error (use more
+  `--stations`, or `--no-pockets`).
+* A flat bottom (lowest offset at the keel height) keeps its chine corner.
+* `GET /api/export?format=step|stl` in the web UI exports the last run's winner (with pockets).
 
 ## Performance
 `examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.1 s on a laptop (release).

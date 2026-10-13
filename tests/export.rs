@@ -34,7 +34,7 @@ fn boxy(l: f64, half: f64, draft: f64) -> Hull {
 }
 
 fn spec(depth: f64, t: Option<f64>) -> ExportSpec {
-    ExportSpec { depth_in: depth, thickness_in: t, flare_deg: 0.0, stations: 81, girth: 41 }
+    ExportSpec { depth_in: depth, thickness_in: t, flare_deg: 0.0, stations: 81, girth: 41, pocket_in: None }
 }
 
 /// Every undirected edge used by exactly two facets, once in each direction.
@@ -255,4 +255,91 @@ fn keel_line_is_smooth() {
         assert!(inner[..=lo].windows(2).all(|w| w[1].1 <= w[0].1 + 1e-9));
         assert!(inner[lo..].windows(2).all(|w| w[1].1 >= w[0].1 - 1e-9));
     }
+}
+
+fn pockets(s: ExportSpec, l: f64) -> ExportSpec {
+    ExportSpec { pocket_in: Some(l), ..s }
+}
+
+/// Points of the mesh at x (within 1e-6).
+fn at_x(m: &Mesh, x: f64) -> Vec<[f64; 3]> {
+    m.verts.iter().copied().filter(|v| (v[0] - x).abs() < 1e-6).collect()
+}
+
+#[test]
+fn box_pocket_bulkheads_are_fused_t_thick_at_the_pocket_ends() {
+    // Box section 20 x 12, t = 0.5: inner U = 19 x 11.5 = 218.5 in^2. Pockets of 20 in from
+    // each tip: bulkheads fill x in [20, 20.5] and [79.5, 80], each exactly 218.5 * 0.5 in^3.
+    // 23 girth points: 2 in apart on the 22 in half girth, so one lands on the chine corner.
+    let h = boxy(100.0, 10.0, 6.0);
+    let s = ExportSpec { girth: 23, ..spec(12.0, Some(0.5)) };
+    let plain = build_mesh(&h, &s).unwrap();
+    let m = build_mesh(&h, &pockets(s.clone(), 20.0)).unwrap();
+    assert!(m.closed && watertight(&m), "one watertight solid with the bulkheads");
+    let dv = m.volume() - plain.volume();
+    assert!((dv - 2.0 * 218.5 * 0.5).abs() < 1e-6, "bulkhead volume {dv}");
+    assert_eq!(m.bbox(), plain.bbox());
+    for x in [20.0, 20.5, 79.5, 80.0] {
+        let p = at_x(&m, x);
+        // bulkhead face: inner U corner and its top centre
+        assert!(p.iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 12.0).abs() < 1e-9), "top centre at {x}");
+        assert!(
+            p.iter().any(|v| (v[1] - 9.5).abs() < 1e-9 && (v[2] - 0.5).abs() < 1e-9),
+            "inner bilge at {x}"
+        );
+    }
+    // zero length = no bulkheads: the same file as without
+    let z = build_mesh(&h, &pockets(s, 0.0)).unwrap();
+    assert_eq!(to_stl(&z, "b"), to_stl(&plain, "b"));
+}
+
+#[test]
+fn off1_pockets_stay_a_valid_solid() {
+    let h = off1();
+    let s = spec(12.0, Some(0.375));
+    let v0 = build_mesh(&h, &s).unwrap().volume();
+    let mut last = 0.0;
+    // 3.6 in is the examples/canoe.toml winner's pocket; longer ones reach fuller sections.
+    for l in [3.6, 12.0, 30.0] {
+        let m = build_mesh(&h, &pockets(s.clone(), l)).unwrap();
+        assert!(watertight(&m), "l {l}: watertight");
+        let dv = m.volume() - v0;
+        assert!(dv > last, "l {l}: bulkheads add {dv} in^3");
+        last = dv;
+        let a = to_step(&m, "off1");
+        assert!(a.contains("MANIFOLD_SOLID_BREP") && a.matches("CLOSED_SHELL").count() == 1);
+    }
+}
+
+#[test]
+fn bad_pockets_error() {
+    let h = boxy(100.0, 10.0, 6.0);
+    let s = spec(12.0, Some(0.5));
+    let e = build_mesh(&h, &pockets(s.clone(), 49.9)).unwrap_err().to_string();
+    assert!(e.contains("overlap"), "{e}");
+    let e = build_mesh(&h, &pockets(s.clone(), 0.1)).unwrap_err().to_string();
+    assert!(e.contains("solid concrete end") && e.contains("--no-pockets"), "{e}");
+    assert!(build_mesh(&h, &pockets(s.clone(), -1.0)).is_err());
+    assert!(build_mesh(&h, &pockets(s, f64::NAN)).is_err());
+    // the mold surface has no wall to put a bulkhead in: pockets ignored
+    let open = build_mesh(&h, &pockets(spec(12.0, None), 20.0)).unwrap();
+    assert!(!open.closed);
+}
+
+#[test]
+fn from_result_takes_the_winner_air_pocket() {
+    let h = boxy(100.0, 10.0, 6.0);
+    let doc = |pocket: serde_json::Value| {
+        serde_json::json!({
+            "format": jaguar::optimize::RESULT_FORMAT,
+            "params": {"hull": {"flare_deg": 0.0}},
+            "winner_hull": h,
+            "winner": {"candidate": {"thickness_in": 0.5, "depth_in": 12.0, "air_pocket_in": pocket}},
+        })
+        .to_string()
+    };
+    let (_, s) = jaguar::export::from_result(&doc(20.0.into()), 41, 21).unwrap();
+    assert_eq!(s.pocket_in, Some(20.0));
+    let (_, s) = jaguar::export::from_result(&doc(serde_json::Value::Null), 41, 21).unwrap();
+    assert_eq!(s.pocket_in, None);
 }
