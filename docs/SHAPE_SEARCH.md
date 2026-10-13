@@ -76,13 +76,12 @@ Measured on the off1 hull at design draft:
 
 | speed m/s | wave N | friction N |
 |---|---|---|
-| 1.5 | 2.6 | 12.3 |
-| 2.5 | 10.7 | 31.3 |
-| 3.5 | 33.6 | 58.0 |
+| 1.5 | 2.6 | 11.1 |
+| 2.5 | 10.7 | 28.3 |
+| 3.5 | 33.6 | 52.5 |
 
 * Wave drag (Michell integral) is grid-converged: within 1% of a 4x finer angle grid. There is no
   external reference yet: the Michlet `out.mlt` for this hull was run without wave drag.
-* Wetted surface is 3.52 m^2 vs Michlet's 3.19 m^2 (+10%), so friction is about 10% high
-  (conservative).
+* Wetted surface is 3.18 m^2 vs Michlet's 3.19 m^2.
 * Use drag to **rank** shapes (every shape gets the same model), not as an absolute race
   prediction. To validate it, run Michlet with wave drag on for one hull and compare.

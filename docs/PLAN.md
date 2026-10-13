@@ -25,9 +25,6 @@ answer more trustworthy first.
 
 ## A. Improve what exists (no scope change, do in order)
 
-- **A10. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered ends
-  as wall (about 8% heavier than the exported solid on off1). Decide whether to match the export,
-  then re-run examples.
 
 ## B. Physics additions (need the user's approval and a SPEC update)
 

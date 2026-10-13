@@ -45,7 +45,7 @@ use crate::equilibrium::Loads;
 use crate::hull::Grid;
 use crate::mix::StrengthFit;
 use crate::params::{DesignMethod, Material, Punching, PunchingMethod};
-use crate::section::Sections;
+use crate::section::{self, Sections};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize)]
@@ -77,14 +77,9 @@ pub struct Verdict {
 /// Wall thickness recovered from the section: area = t * (2 y0 + sum 2 ds).
 fn thickness(grid: &Grid, sec: &Sections) -> Option<f64> {
     (0..grid.nx()).find_map(|i| {
-        let p = perimeter(grid.row(i), &grid.z);
+        let p = section::perimeter(grid.row(i), &grid.z);
         (p > 1e-9).then(|| sec.area[i] / p)
     })
-}
-
-/// Shell "perimeter" per unit thickness: 2 y0 (keel strip) + 2 sum ds.
-fn perimeter(y: &[f64], z: &[f64]) -> f64 {
-    2.0 * y[0] + (0..z.len() - 1).map(|k| 2.0 * (y[k + 1] - y[k]).hypot(z[k + 1] - z[k])).sum::<f64>()
 }
 
 /// First moment about `zb` of the shell area below `zb` (same segment model
@@ -96,7 +91,7 @@ pub fn first_moment_below(y: &[f64], z: &[f64], t: f64, zb: f64) -> f64 {
         if z0 >= zb || z1 <= z0 {
             continue;
         }
-        let ds = (y[k + 1] - y[k]).hypot(z1 - z0);
+        let ds = section::segment_len(y, z, k);
         let top = z1.min(zb);
         let frac = (top - z0) / (z1 - z0);
         q += 2.0 * t * ds * frac * (zb - 0.5 * (z0 + top));

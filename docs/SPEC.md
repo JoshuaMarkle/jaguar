@@ -48,7 +48,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 ## Physics
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
-2. **Section** per station: thin shell of thickness t on both sides + keel strip: A, zbar, I.
+2. **Section** per station: thin shell of thickness t on both sides + keel strip: A, zbar, I. The
+   girth follows the hull: waterline segments with zero half-breadth at both ends (below the
+   rockered keel, the closed stem) are not wall. Same rule for the wetted surface in drag.
 3. **Equilibrium**: self weight w = A*rho/1728 lb/in. Crew = weight * `dynamic_load_factor`, each
    paddler on a `knee_patch_in` patch at their seat (default seats L*(i+1)/(n+1)). Draft and trim
    are solved by bracketing so fresh-water buoyancy (62.4 pcf) balances force and moment, then
@@ -138,9 +140,9 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
 * The inner face is the mold line offset inward by t, point for point (mitred), with the offset
   stretched where the hull tapers along x so the wall is t thick normal to the surface (off1 at
   t = 0.375: within 1% over the middle 80% of the length). At the bow and stern, where that offset
-  closes, the ends are solid concrete closed by a bulkhead. The solid is about 8% lighter than the
-  analysis weight on off1: the analysis also counts the zero-breadth waterlines of the rockered ends
-  as wall (conservative).
+  closes, the ends are solid concrete closed by a bulkhead. Its volume matches the analysis wall
+  within 0.1% on off1 at t = 0.375 (the analysis thin shell is about 1.6% heavy amidships, the
+  solid ends make up the difference).
 * **Air pockets**: when the winner has `air_pocket_in` (`[flotation]`), the wall gets a solid
   bulkhead t thick inboard of each sealed pocket, from x0 + l to x0 + l + t and from xn - l - t to
   xn - l (x0, xn the hull's ends, l = `air_pocket_in`), fused into the same single solid so the mold
@@ -149,7 +151,7 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   pocket shorter than the solid end at the export's station spacing is an error (use more
   `--stations`, or `--no-pockets`).
 * A flat bottom (lowest offset at the keel height) keeps its chine corner.
-* `GET /api/export?format=step|stl` in the web UI exports the last run's winner (with pockets).
+* `GET /api/export?format=step|stl` in the web UI exports the last run's winner (with pockets; stations refined below the pocket length).
 
 ## Performance
 `examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.1 s on a laptop (release).

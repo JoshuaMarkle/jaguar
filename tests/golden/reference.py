@@ -66,10 +66,15 @@ def build(L, T, y, depth, n):
 
 
 def section(z, y, t):
-    """Thin-shell area, centroid height, I about centroid, per station (both sides)."""
+    """Thin-shell area, centroid height, I about centroid, per station (both sides).
+
+    Only real hull girth counts: where a waterline segment has zero half-breadth at both
+    ends it lies below the keel (rocker lifts the keel at the ends) or is the closed stem,
+    so there is no wall there."""
     dz = np.diff(z)
     dy = np.diff(y, axis=1)
-    ds = np.hypot(dy, dz)
+    hull = (y[:, :-1] > 0) | (y[:, 1:] > 0)
+    ds = np.where(hull, np.hypot(dy, dz), 0.0)
     zm = (z[:-1] + z[1:]) / 2
     a = 2 * t * ds                                    # per segment, both sides
     a0 = 2 * y[:, 0] * t                              # flat strip at the keel
@@ -153,6 +158,8 @@ def shear_q(z, y, t, zb):
         z0, z1 = z[k], z[k + 1]
         if z0 >= zb:
             break
+        if y[k] <= 0 and y[k + 1] <= 0:              # below the keel: no wall (see section)
+            continue
         top = min(z1, zb)
         per_z = 2 * t * np.hypot(y[k + 1] - y[k], z1 - z0) / (z1 - z0)
         q += per_z * ((zb - z0) ** 2 - (zb - top) ** 2) / 2

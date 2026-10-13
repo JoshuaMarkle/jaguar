@@ -196,11 +196,13 @@ fn resistance_n(x: &[f64], z: &[f64], y: &[f64], v: f64, nth: usize) -> Result<R
     let sum = sum * du;
     let wave = sum * 4.0 * RHO * G * G / (std::f64::consts::PI * v * v);
 
-    // wetted surface: girth below the waterline (both sides + flat bottom)
+    // wetted surface: girth below the waterline (both sides + flat bottom); a segment with zero
+    // half-breadth at both ends is below the rockered keel, not hull (as section::segment_len)
     let girth: Vec<f64> = (0..nx)
         .map(|i| {
             let r = &ym[i * nz..(i + 1) * nz];
-            2.0 * (r[0] + r.windows(2).map(|w| (w[1] - w[0]).hypot(dz)).sum::<f64>())
+            let seg = |w: &[f64]| if w[0] <= 0.0 && w[1] <= 0.0 { 0.0 } else { (w[1] - w[0]).hypot(dz) };
+            2.0 * (r[0] + r.windows(2).map(seg).sum::<f64>())
         })
         .collect();
     let wetted = trapz(&girth, dx);
@@ -316,6 +318,23 @@ mod tests {
         let rf = 0.5 * 998.0 * 6.25 * s * 0.075 / (re.log10() - 2.0).powi(2);
         assert!((r.friction_n / rf - 1.0).abs() < 1e-9, "{} {rf}", r.friction_n);
         assert!((r.wetted_m2 / s - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn waterlines_below_a_lifted_keel_are_not_wetted() {
+        let (l, t) = (200.0, 6.0);
+        let x = linspace(0.0, l, NX);
+        let z = linspace(0.0, t, NZ);
+        let full = vec![0.001; NX * NZ];
+        // Same plate with the bottom half of every station empty (keel lifted to mid-draft).
+        let lifted: Vec<f64> = (0..NX * NZ).map(|j| if j % NZ < NZ / 2 { 0.0 } else { 0.001 }).collect();
+        let (a, b) = (
+            resistance_offsets(&x, &z, &full, 2.5).unwrap().wetted_m2,
+            resistance_offsets(&x, &z, &lifted, 2.5).unwrap().wetted_m2,
+        );
+        // Sides: NZ - NZ/2 of the NZ - 1 waterline segments remain (bottom strip negligible).
+        let want = (NZ - NZ / 2) as f64 / (NZ - 1) as f64;
+        assert!((b / a / want - 1.0).abs() < 1e-3, "{b} vs {a}");
     }
 
     #[test]
