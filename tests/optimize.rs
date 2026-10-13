@@ -278,6 +278,40 @@ fn winner_has_diagrams_for_every_load_case() {
     }
 }
 
+/// The freeboard gate covers every load case, not only the one with the
+/// highest D/C: a light crew kneeling forward (2F here) trims the bow down
+/// while the heavier 2M crew still governs on punching.
+#[test]
+fn freeboard_gate_covers_non_governing_cases() {
+    let (mut p, h) = example();
+    p.load_cases[1].seats_in = Some(vec![80.0, 130.0]);
+    let r = optimize::run(&p, &h).unwrap();
+    let fit = optimize::strength(&p).unwrap();
+    let lc = &p.load_cases[1];
+    let mut checked = 0;
+    for c in r.candidates.iter().filter(|c| c.passes) {
+        let grid = jaguar::hull::Grid::build_flared(&h, c.depth_in, p.hull.stations, p.hull.flare_deg);
+        let sec = jaguar::section::sections(&grid, c.thickness_in);
+        let seats = lc.seats_in.clone().unwrap();
+        let e = optimize::eval_case(&p, &fit, &grid, &sec, c.density_pcf, lc, &seats).unwrap();
+        assert!(
+            e.verdict.freeboard_in >= p.gates.freeboard_min_in,
+            "t {} rho {} depth {}: 2F freeboard {}",
+            c.thickness_in,
+            c.density_pcf,
+            c.depth_in,
+            e.verdict.freeboard_in
+        );
+        checked += 1;
+    }
+    assert!(checked > 0);
+    let missed = r.candidates.iter().filter(|c| {
+        c.governing_case.as_deref() == Some("2M")
+            && c.verdict.as_ref().is_some_and(|v| v.freeboard_in < p.gates.freeboard_min_in)
+    });
+    assert!(missed.count() > 0, "no candidate where only the non-governing case misses freeboard");
+}
+
 fn imax(d: &optimize::Diagrams) -> f64 {
     d.inertia_in4.iter().cloned().fold(0.0, f64::max)
 }

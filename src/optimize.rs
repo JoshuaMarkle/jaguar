@@ -700,7 +700,7 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
         passes: false,
     };
     let mut worst: Option<(Verdict, String)> = None;
-    let mut gm = f64::INFINITY;
+    let (mut gm, mut fb) = (f64::INFINITY, f64::INFINITY);
     // (crew lb, midship draft) of the heaviest load case, for drag
     let mut heaviest: Option<(f64, f64)> = None;
     for case in &params.load_cases {
@@ -724,11 +724,14 @@ fn evaluate(params: &Params, fit: &StrengthFit, grid: &Grid, sec: &Sections, t: 
             c.error = Some(format!("{}: non-finite check result", case.name));
             return c;
         }
+        fb = fb.min(v.freeboard_in);
         if worst.as_ref().is_none_or(|(w, _)| v.dc > w.dc) {
             worst = Some((v, case.name.clone()));
         }
     }
-    if let Some((v, name)) = worst {
+    if let Some((mut v, name)) = worst {
+        // The freeboard gate covers every case, not just the governing one.
+        v.freeboard_in = fb;
         c.gm_in = Some(gm);
         if params.objective.kind == ObjectiveKind::Drag {
             let draft = heaviest.map(|h| h.1).unwrap_or(f64::NAN);
