@@ -60,6 +60,15 @@ fn fixed_parameters_stay_fixed() {
         let s = c.shape.as_ref().unwrap();
         assert_eq!((s.beam_in, s.section), (24.0, 0.5));
     }
+    // Search space: wall axes, then the 8 free shape factors (fixed ones left out).
+    let w = r.winner.as_ref().expect("winner");
+    let names: Vec<&str> = w.search_space.iter().map(|a| a.name).collect();
+    assert_eq!(&names[..3], ["thickness_in", "density_pcf", "depth_in"]);
+    assert_eq!(names.len(), 3 + 8);
+    assert!(!names.contains(&"beam_in") && !names.contains(&"section"));
+    let s = w.candidate.shape.as_ref().unwrap();
+    let len = w.search_space.iter().find(|a| a.name == "length_in").unwrap();
+    assert_eq!((len.min, len.max, len.step, len.count, len.winner), (216.0, 264.0, None, None, s.length_in));
 }
 
 fn shapes(r: &jaguar::optimize::RunResult) -> Vec<&jaguar::hullgen::ShapeParams> {
@@ -98,6 +107,12 @@ fn steps_snap_draft_length_beam() {
         assert!(on(s.draft_in, 0.5) && on(s.length_in, 12.0) && on(s.beam_in, 1.0), "{s:?}");
         assert!((216.0..=264.0).contains(&s.length_in) && (4.0..=8.0).contains(&s.draft_in));
     }
+    // Stepped shape axes report their grid.
+    let w = r.winner.as_ref().expect("winner");
+    let len = w.search_space.iter().find(|a| a.name == "length_in").unwrap();
+    assert_eq!((len.step, len.count), (Some(12.0), Some(5)));
+    let at_min = len.at_bound == Some(jaguar::optimize::Bound::Min);
+    assert_eq!(at_min, len.winner == 216.0);
 }
 
 #[test]

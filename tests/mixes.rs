@@ -20,6 +20,14 @@ fn tested_mixes_uses_only_tested_densities() {
     let w = r.winner.expect("canoe_mixes.toml should have a winner");
     assert!(w.candidate.mix.is_some());
     assert!(!w.at_mix_data_edge);
+    // A tested mix: provenance names it at zero reach; the density axis is the mix list.
+    let pv = &w.mix_provenance;
+    assert_eq!(pv.status, jaguar::mix::Provenance::Tested);
+    assert_eq!(pv.nearest[0].name, *w.candidate.mix.as_ref().unwrap());
+    assert_eq!(pv.reach_pcf, 0.0);
+    let d = &w.search_space[1];
+    assert_eq!((d.step, d.count), (None, Some(mixes.len())));
+    assert!(d.at_bound.is_none() || d.limit == Some("tested mixes"));
 }
 
 #[test]

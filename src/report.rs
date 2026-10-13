@@ -2,7 +2,8 @@
 //!
 //! * `print_summary`: one line per load case header, a compact table of the
 //!   passing frontier (lightest passing design per thickness), then the
-//!   winner block (one seats/D-C line per load case) with VERIFIED / NOT VERIFIED and any grid-edge warning.
+//!   winner block (one seats/D-C line per load case) with VERIFIED / NOT VERIFIED, the mix
+//!   provenance line, any grid-edge warning, then the search-space table.
 //!   Plain text, no colours. Kept under 40 lines.
 //! * `write_json`: `jaguar-result/1`, pretty-printed, deterministic.
 
@@ -90,6 +91,74 @@ fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
         (None, None) => "-".to_string(),
     };
     format!("        case {:<12} seats [{}] in  {state}", k.name, seats.join(", "))
+}
+
+/// Number with up to 4 decimals, trailing zeros dropped (0.0625, 58, 55.634).
+fn num(x: f64) -> String {
+    let s = format!("{x:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".into() } else { s.to_string() }
+}
+
+/// Winner density's lab provenance on one line, e.g.
+/// `mix 58 pcf predicted (fit); nearest tested: M2 55.6 (-2.4), final target 60.0 (+2.0); reach 2.0 pcf`.
+fn provenance_line(p: &crate::mix::MixProvenance) -> String {
+    let status = match p.status {
+        crate::mix::Provenance::Tested => "tested",
+        crate::mix::Provenance::Predicted => "predicted (fit)",
+    };
+    let near: Vec<String> = p
+        .nearest
+        .iter()
+        .map(|n| format!("{} {:.1} ({:+.1})", n.name, n.density_pcf, n.distance_pcf))
+        .collect();
+    format!(
+        "        mix {} pcf {status}; nearest tested: {}; reach {:.1} pcf",
+        num(p.density_pcf),
+        near.join(", "),
+        p.reach_pcf
+    )
+}
+
+/// Search-space table: one row per wall variable and per shape factor on a
+/// bound; shape factors inside their bounds are counted on one line.
+fn search_space_lines(axes: &[crate::optimize::SearchAxis]) -> Vec<String> {
+    use crate::optimize::Bound;
+    let mut out = vec![format!(
+        "search space {:<8} {:>8} {:>8} {:>7} {:>4} {:>8}  bound",
+        "", "min", "max", "step", "n", "winner"
+    )];
+    let mut inside = 0;
+    for (i, a) in axes.iter().enumerate() {
+        if i >= 3 && a.at_bound.is_none() {
+            inside += 1;
+            continue;
+        }
+        let bound = match (a.at_bound, a.limit) {
+            (None, _) => String::new(),
+            (Some(b), l) => {
+                let b = if b == Bound::Min { "min" } else { "max" };
+                l.map_or(format!("{b} (widen)"), |l| format!("{b} ({l})"))
+            }
+        };
+        out.push(
+            format!(
+                "  {:<19} {:>8} {:>8} {:>7} {:>4} {:>8}  {bound}",
+                a.name,
+                num(a.min),
+                num(a.max),
+                a.step.map_or("-".into(), num),
+                a.count.map_or("-".into(), |n| n.to_string()),
+                num(a.winner),
+            )
+            .trim_end()
+            .to_string(),
+        );
+    }
+    if inside > 0 {
+        out.push(format!("  + {inside} shape factors inside their bounds"));
+    }
+    out
 }
 
 /// Pure summary text, one entry per output line, never more than `MAX_LINES`.
@@ -248,6 +317,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                     w.verify_stations, w.verify_dc, g.dc_verify
                 ));
             }
+            out.push(provenance_line(&w.mix_provenance));
             if w.at_mix_data_edge {
                 let f = &r.strength;
                 out.push(format!(
@@ -259,6 +329,8 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             if w.on_grid_edge {
                 out.push("WARNING winner is on the search grid edge; widen [search] ranges".to_string());
             }
+            // Last, so the line cap trims the table before any warning.
+            out.extend(search_space_lines(&w.search_space));
         }
         None => {
             out.push("NO DESIGN PASSES".to_string());
@@ -360,8 +432,13 @@ mod tests {
     }
 
     fn winner(verified: bool, edge: bool) -> Winner {
+        let params = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        let strength = crate::optimize::strength(&params).unwrap();
+        let candidate = cand(0.25, 70.0, 84.8, 0.786, 6.42, true);
         Winner {
-            candidate: cand(0.25, 70.0, 84.8, 0.786, 6.42, true),
+            mix_provenance: strength.provenance(70.0, None).unwrap(),
+            search_space: crate::optimize::search_space(&params, &strength, &candidate).unwrap(),
+            candidate,
             verify_stations: 81,
             verify_dc: if verified { 0.783 } else { 1.02 },
             verified,
@@ -396,6 +473,37 @@ mod tests {
         // Frontier: 0.25 row picks the lighter (84.80) candidate.
         assert!(s.contains("84.80"));
         assert!(!s.contains("96.00"));
+        assert!(l.len() <= MAX_LINES);
+    }
+
+    #[test]
+    fn provenance_and_search_space_lines() {
+        let mut w = winner(true, false);
+        w.search_space[2].at_bound = Some(crate::optimize::Bound::Max);
+        w.search_space[0].at_bound = Some(crate::optimize::Bound::Min);
+        w.search_space[0].limit = Some("buildable floor");
+        let mut shape = w.search_space[2].clone();
+        shape.name = "length_in";
+        w.search_space.push(shape.clone());
+        shape.at_bound = None;
+        w.search_space.push(shape.clone());
+        w.search_space.push(shape);
+        let l = summary_lines(&base(Some(w), false));
+        show(&l);
+        let s = l.join("\n");
+        assert!(
+            s.contains(
+                "mix 70 pcf predicted (fit); nearest tested: final target 60.0 (-10.0); reach 10.0 pcf"
+            ),
+            "{s}"
+        );
+        assert!(s.contains("thickness_in"));
+        assert!(s.contains("min (buildable floor)"));
+        assert!(s.contains("0.0625"));
+        let depth = l.iter().find(|x| x.trim_start().starts_with("depth_in")).unwrap();
+        assert!(depth.ends_with("max (widen)"), "{depth}");
+        assert!(s.contains("  length_in"));
+        assert!(s.contains("+ 2 shape factors inside their bounds"));
         assert!(l.len() <= MAX_LINES);
     }
 

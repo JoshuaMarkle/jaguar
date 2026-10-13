@@ -8,7 +8,10 @@
 //! 3. Winner = lightest candidate with dc <= gates.dc_search and
 //!    freeboard >= gates.freeboard_min_in.
 //! 4. Re-evaluate the winner at 2n-1 stations. `verified` = dc <= dc_verify.
-//! 5. Flag `on_grid_edge` if any winning coordinate is a search bound.
+//! 5. Describe every searched variable (`search_space`: range, step, count,
+//!    winner value, bound it sits on) and the winner density's lab-data
+//!    provenance. `on_grid_edge` = a wall variable on a bound that is not a
+//!    real limit (buildable floor, mix data, tested mixes).
 //!
 //! Must stay deterministic: same canoe.toml => byte-identical result.json.
 
@@ -16,7 +19,7 @@ use crate::check::{Verdict, check, first_moment_below, freeboard};
 use crate::equilibrium::{CrewLoad, Loads, solve};
 use crate::hull::{Grid, Hull};
 use crate::hullgen::ShapeParams;
-use crate::mix::StrengthFit;
+use crate::mix::{MixProvenance, StrengthFit};
 use crate::params::{LoadCase, ObjectiveKind, Params, StrengthModel, range};
 use crate::resistance::{resistance, weighted_resistance};
 use crate::section::{Sections, sections};
@@ -74,6 +77,12 @@ pub struct Winner {
     /// (lowest/highest tested density -/+ density_extrapolation_pcf). Not a
     /// search-range problem: the team needs lab data for lighter/heavier mixes.
     pub at_mix_data_edge: bool,
+    /// Lab data behind the winner density: tested or predicted, nearest
+    /// tested mixes and the distance to them ("reach").
+    pub mix_provenance: MixProvenance,
+    /// Every searched variable: thickness, density, depth, then the free
+    /// `[shape_search]` factors (shape runs). See [`search_space`].
+    pub search_space: Vec<SearchAxis>,
     /// Along-hull diagrams for the winner at verification resolution, governing
     /// load case, for plotting.
     pub diagrams: Diagrams,
@@ -107,6 +116,9 @@ pub struct CaseDiagrams {
     pub dc_bending_tension: Vec<f64>,
     pub dc_bending_compression: Vec<f64>,
     pub dc_shear: Vec<f64>,
+    /// Kupfer-Gerstle biaxial D/C per station (`check::kupfer_dc` on this
+    /// station's tension/compression fibre stress and shear stress).
+    pub dc_biaxial: Vec<f64>,
     pub verdict: Option<Verdict>,
 }
 
@@ -127,6 +139,133 @@ pub struct Diagrams {
     pub inertia_in4: Vec<f64>,
     /// Local waterline height above keel, in.
     pub waterline_in: Vec<f64>,
+}
+
+/// End of a searched range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Bound {
+    Min,
+    Max,
+}
+
+/// One searched variable and where the winner landed on it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchAxis {
+    /// `search.*` or `shape_search.*` key.
+    pub name: &'static str,
+    /// Lowest and highest value tried (wall axes after the buildable floor and
+    /// the mix-data clip; stepped shape axes snapped to their step).
+    pub min: f64,
+    pub max: f64,
+    /// Grid step. None = continuous (shape factors) or the tested-mix list.
+    pub step: Option<f64>,
+    /// Values on the axis. None = continuous.
+    pub count: Option<usize>,
+    pub winner: f64,
+    /// Range end the winner sits on. None = inside (or a one-value axis).
+    pub at_bound: Option<Bound>,
+    /// Why that end is a real limit, not a range to widen: "buildable floor",
+    /// "mix data" (no lab data further out), "tested mixes". None = widen it.
+    pub limit: Option<&'static str>,
+}
+
+/// Searched thicknesses: `search.thickness_in` from the buildable floor up.
+fn thicknesses(params: &Params) -> Vec<f64> {
+    let floor = params.gates.thickness_min_buildable_in;
+    range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect()
+}
+
+/// The search space around candidate `c`: thickness, density, depth (the
+/// values [`run`] actually tried), then for a shape run (`c.shape` set) each
+/// free `[shape_search]` factor (fixed ones and symmetric-tied aft ones are
+/// left out). Wall bounds compare exactly (the winner is a grid value); shape
+/// bounds within 1e-9 relative.
+pub fn search_space(params: &Params, fit: &StrengthFit, c: &Candidate) -> Result<Vec<SearchAxis>> {
+    let at = |x: f64, r: &[f64]| match r {
+        [lo, .., hi] if x == *lo => Some(Bound::Min),
+        [_, .., hi] if x == *hi => Some(Bound::Max),
+        _ => None,
+    };
+    let axis = |name, r: &[f64], step, x| SearchAxis {
+        name,
+        min: r[0],
+        max: r[r.len() - 1],
+        step,
+        count: Some(r.len()),
+        winner: x,
+        at_bound: at(x, r),
+        limit: None,
+    };
+    let s = &params.search;
+    let ts = thicknesses(params);
+    anyhow::ensure!(!ts.is_empty(), "no searched thickness at or above thickness_min_buildable_in");
+    let mut t = axis("thickness_in", &ts, Some(s.thickness_in[2]), c.thickness_in);
+    // Thickness at the buildable floor is a real constraint, not a range problem.
+    if (c.thickness_in - params.gates.thickness_min_buildable_in).abs() <= 1e-9 {
+        t.limit = t.at_bound.map(|_| "buildable floor");
+    }
+    let rhos: Vec<f64> = density_axis(params, fit)?.iter().map(|a| a.0).collect();
+    let rho = match params.material.strength_model {
+        StrengthModel::TestedMixes => {
+            let mut a = axis("density_pcf", &rhos, None, c.density_pcf);
+            a.limit = a.at_bound.map(|_| "tested mixes");
+            a
+        }
+        StrengthModel::Fit => {
+            // Density at the end of the trusted fit range, where the requested
+            // range extended further: the lab data, not the search range, is the limit.
+            let full = range(s.density_pcf);
+            let (lo, hi) = (rhos[0], rhos[rhos.len() - 1]);
+            let mut a = axis("density_pcf", &rhos, Some(s.density_pcf[2]), c.density_pcf);
+            if c.density_pcf == lo && full[0] < lo - 1e-9 {
+                (a.at_bound, a.limit) = (Some(Bound::Min), Some("mix data"));
+            } else if c.density_pcf == hi && full[full.len() - 1] > hi + 1e-9 {
+                (a.at_bound, a.limit) = (Some(Bound::Max), Some("mix data"));
+            }
+            a
+        }
+    };
+    let ds = range(s.depth_in);
+    let mut out = vec![t, rho, axis("depth_in", &ds, Some(s.depth_in[2]), c.depth_in)];
+    if let (Some(ss), Some(sh)) = (&params.shape_search, &c.shape) {
+        let w = [
+            sh.length_in,
+            sh.beam_in,
+            sh.draft_in,
+            sh.fore_wp,
+            sh.section,
+            sh.fore_rocker,
+            sh.aft_wp,
+            sh.aft_rocker,
+            sh.fore_len_frac,
+            sh.aft_len_frac,
+        ];
+        let steps = [ss.length_step_in, ss.beam_step_in, ss.draft_step_in];
+        for (d, (name, [lo, hi])) in ss.bounds().into_iter().enumerate() {
+            if hi <= lo || (ss.symmetric && matches!(d, 6 | 7 | 9)) {
+                continue;
+            }
+            let (min, max, step, count) = match steps.get(d).copied().flatten() {
+                // Same snapping as shapeopt::normalize.
+                Some(st) => {
+                    let (kmin, kmax) = ((lo / st - 1e-9).ceil(), (hi / st + 1e-9).floor());
+                    (kmin * st, kmax * st, Some(st), Some((kmax - kmin) as usize + 1))
+                }
+                None => (lo, hi, None, None),
+            };
+            let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+            let at_bound = if near(w[d], min) {
+                Some(Bound::Min)
+            } else if near(w[d], max) {
+                Some(Bound::Max)
+            } else {
+                None
+            };
+            out.push(SearchAxis { name, min, max, step, count, winner: w[d], at_bound, limit: None });
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -238,12 +377,10 @@ pub fn run_inner(
 }
 
 fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
-    let floor = params.gates.thickness_min_buildable_in;
-    let ts: Vec<f64> = range(params.search.thickness_in).into_iter().filter(|&t| t >= floor - 1e-9).collect();
+    let ts = thicknesses(params);
     let fit = strength(params)?;
     let axis = density_axis(params, &fit)?;
     let rhos: Vec<f64> = axis.iter().map(|a| a.0).collect();
-    let mixes_mode = params.material.strength_model == StrengthModel::TestedMixes;
     let ds = range(params.search.depth_in);
     let total = ts.len() * rhos.len() * ds.len();
     on_progress(Progress::Started { total });
@@ -278,42 +415,37 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
 
     let best = candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
 
-    let winner = best.map(|c| {
-        let stations = 2 * n - 1;
-        on_progress(Progress::Verifying { stations });
-        let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
-        let sec = sections(&grid, c.thickness_in);
-        let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
-        let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
-        let cases = all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
-        let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
-        let edge = |x: f64, r: &[f64]| r.len() > 1 && (x == r[0] || x == r[r.len() - 1]);
-        // Density at the end of the trusted fit range, where the full search range
-        // extended further: the lab data, not the search range, is the limit.
-        let full = range(params.search.density_pcf);
-        let mix_edge = |x: f64| {
-            !mixes_mode
-                && ((x == rhos[0] && full[0] < rhos[0] - 1e-9)
-                    || (x == rhos[rhos.len() - 1] && full[full.len() - 1] > rhos[rhos.len() - 1] + 1e-9))
-        };
-        Winner {
-            candidate: c.clone(),
-            verify_stations: stations,
-            verify_dc,
-            verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
-            // Thickness at the buildable floor is a real constraint, not a range problem.
-            on_grid_edge: (edge(c.thickness_in, &ts) && (c.thickness_in - floor).abs() > 1e-9)
-                || (!mixes_mode && edge(c.density_pcf, &rhos) && !mix_edge(c.density_pcf))
-                || edge(c.depth_in, &ds),
-            at_mix_data_edge: mix_edge(c.density_pcf),
-            diagrams: cases
-                .iter()
-                .find(|d| v.governing_case.as_deref() == Some(d.name.as_str()) && d.error.is_none())
-                .map(|d| d.diagrams.clone())
-                .unwrap_or_default(),
-            cases,
+    let winner = match best {
+        None => None,
+        Some(c) => {
+            let stations = 2 * n - 1;
+            on_progress(Progress::Verifying { stations });
+            let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
+            let sec = sections(&grid, c.thickness_in);
+            let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
+            let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
+            let cases = all_case_diagrams(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf);
+            let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
+            let search_space = search_space(params, &fit, c)?;
+            let wall = &search_space[..3];
+            Some(Winner {
+                candidate: c.clone(),
+                verify_stations: stations,
+                verify_dc,
+                verified: v.verdict.is_some() && verify_dc <= params.gates.dc_verify,
+                on_grid_edge: wall.iter().any(|a| a.at_bound.is_some() && a.limit.is_none()),
+                at_mix_data_edge: wall[1].limit == Some("mix data"),
+                mix_provenance: fit.provenance(c.density_pcf, c.mix.as_deref())?,
+                search_space,
+                diagrams: cases
+                    .iter()
+                    .find(|d| v.governing_case.as_deref() == Some(d.name.as_str()) && d.error.is_none())
+                    .map(|d| d.diagrams.clone())
+                    .unwrap_or_default(),
+                cases,
+            })
         }
-    });
+    };
 
     let winner_hull = winner.as_ref().map(|_| hull.clone());
     Ok(RunResult {
@@ -436,6 +568,9 @@ pub fn case_diagrams(
     let cap = |name: &str| verdict.checks.iter().find(|c| c.name == name).map_or(f64::NAN, |c| c.capacity);
     let (ft_cap, fc_cap, v_cap) = (cap("bending_tension"), cap("bending_compression"), cap("shear"));
     let dc = |s: f64, c: f64| if c.is_finite() && c > 0.0 { s / c } else { f64::INFINITY };
+    // check.rs gives kupfer_dc f'c times the capacity factor; compression's
+    // capacity is 0.85 of that (NaN when f'c <= 0, which kupfer_dc fails).
+    let fc_kupfer = fc_cap / 0.85;
     let imax = sec.inertia.iter().cloned().fold(0.0, f64::max);
     let mut out = CaseDiagrams {
         name: case.name.clone(),
@@ -456,7 +591,12 @@ pub fn case_diagrams(
             for v in [&mut tension_psi, &mut out.compression_psi, &mut out.shear_psi] {
                 v.push(0.0);
             }
-            for v in [&mut out.dc_bending_tension, &mut out.dc_bending_compression, &mut out.dc_shear] {
+            for v in [
+                &mut out.dc_bending_tension,
+                &mut out.dc_bending_compression,
+                &mut out.dc_shear,
+                &mut out.dc_biaxial,
+            ] {
                 v.push(0.0);
             }
             continue;
@@ -474,6 +614,7 @@ pub fn case_diagrams(
         out.dc_bending_tension.push(dc(st, ft_cap));
         out.dc_bending_compression.push(dc(sc, fc_cap));
         out.dc_shear.push(dc(tau, v_cap));
+        out.dc_biaxial.push(crate::check::kupfer_dc(st, sc, tau, ft_cap, fc_kupfer));
     }
     let l = grid.x[n - 1];
     let waterline_in = grid

@@ -66,8 +66,50 @@ fn example_finds_verified_winner() {
     // not a too-narrow search range.
     assert!(!w.on_grid_edge);
     assert!(!w.at_mix_data_edge);
+    // Search space: thickness on its min, but that is the buildable floor.
+    use optimize::Bound;
+    let ax: Vec<_> =
+        w.search_space.iter().map(|a| (a.name, a.min, a.max, a.step, a.count, a.winner)).collect();
+    assert_eq!(
+        ax,
+        [
+            ("thickness_in", 0.375, 0.75, Some(0.0625), Some(7), 0.375),
+            ("density_pcf", 51.0, 64.0, Some(1.0), Some(14), 58.0),
+            ("depth_in", 10.0, 16.0, Some(1.0), Some(7), 12.0),
+        ]
+    );
+    assert_eq!(w.search_space[0].at_bound, Some(Bound::Min));
+    assert_eq!(w.search_space[0].limit, Some("buildable floor"));
+    assert!(w.search_space[1..].iter().all(|a| a.at_bound.is_none()));
+    // 58 pcf is between the tested M2 (55.6) and the 60 pcf mix: predicted, reach 2 pcf.
+    let pv = &w.mix_provenance;
+    assert_eq!(pv.status, jaguar::mix::Provenance::Predicted);
+    assert_eq!(pv.nearest.len(), 2);
+    assert!((pv.reach_pcf - 2.0).abs() < 1e-9);
     assert!(r.candidates.iter().all(|c| c.density_pcf >= 51.0 - 1e-9));
     assert!(r.candidates.iter().all(|c| c.thickness_in >= 0.375 - 1e-9));
+}
+
+/// Winner on a search bound that is not a real limit -> on_grid_edge, and the
+/// axis says which bound; a density clipped by the mix data -> "mix data".
+#[test]
+fn search_space_flags_bounds() {
+    use optimize::Bound;
+    let (mut p, h) = example_gm0();
+    p.search.depth_in = [12.0, 14.0, 1.0];
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    assert_eq!(w.candidate.depth_in, 12.0);
+    assert_eq!((w.search_space[2].at_bound, w.search_space[2].limit), (Some(Bound::Min), None));
+    assert!(w.on_grid_edge);
+    // Thick wall: lightest density wins, and 51 pcf is as light as the lab data allows.
+    let (mut p, h) = example_gm0();
+    p.search.thickness_in = [0.625, 0.625, 0.0625];
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    assert_eq!(w.candidate.density_pcf, 51.0);
+    assert_eq!((w.search_space[1].at_bound, w.search_space[1].limit), (Some(Bound::Min), Some("mix data")));
+    assert!(w.at_mix_data_edge && !w.on_grid_edge);
+    // One-value thickness axis: no bound.
+    assert_eq!(w.search_space[0].at_bound, None);
 }
 
 #[test]
@@ -192,9 +234,14 @@ fn winner_has_diagrams_for_every_load_case() {
         assert_eq!(k.seats_in, want);
         let d = &k.diagrams;
         assert_eq!(d.x_in.len(), w.verify_stations);
-        for v in
-            [&k.compression_psi, &k.shear_psi, &k.dc_bending_tension, &k.dc_bending_compression, &k.dc_shear]
-        {
+        for v in [
+            &k.compression_psi,
+            &k.shear_psi,
+            &k.dc_bending_tension,
+            &k.dc_bending_compression,
+            &k.dc_shear,
+            &k.dc_biaxial,
+        ] {
             assert_eq!(v.len(), w.verify_stations);
             assert!(v.iter().all(|x| x.is_finite() && *x >= 0.0));
         }
@@ -211,6 +258,7 @@ fn winner_has_diagrams_for_every_load_case() {
             ("bending_tension", &k.dc_bending_tension),
             ("bending_compression", &k.dc_bending_compression),
             ("shear", &k.dc_shear),
+            ("biaxial", &k.dc_biaxial),
         ] {
             let c = v.checks.iter().find(|c| c.name == name).unwrap();
             let m = arr.iter().cloned().fold(0.0, f64::max);
@@ -221,6 +269,17 @@ fn winner_has_diagrams_for_every_load_case() {
     let g = w.candidate.governing_case.as_deref().unwrap();
     let gk = w.cases.iter().find(|k| k.name == g).unwrap();
     assert_eq!(gk.diagrams.moment_lbin, w.diagrams.moment_lbin);
+    // Biaxial is 0 at the masked tip stations, like the other per-station checks.
+    for k in &w.cases {
+        let masked: Vec<usize> = (0..k.dc_biaxial.len())
+            .filter(|&i| k.diagrams.inertia_in4[i] <= 1e-3 * imax(&k.diagrams))
+            .collect();
+        assert!(masked.iter().all(|&i| k.dc_biaxial[i] == 0.0 && k.dc_shear[i] == 0.0));
+    }
+}
+
+fn imax(d: &optimize::Diagrams) -> f64 {
+    d.inertia_in4.iter().cloned().fold(0.0, f64::max)
 }
 
 /// B1: LRFD factors the loads (1.2D+1.6L, 0.9D+1.6L) and uses phi on capacity.

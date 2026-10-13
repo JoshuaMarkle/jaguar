@@ -69,6 +69,14 @@ sit at about 58 pcf: the lightest mix that is strong enough, not the lightest th
 What would lower weight is a light mix with higher strength (more data around 55-60 pcf), or a
 knee pad.
 
+## Provenance of the winner density
+
+The summary prints e.g. `mix 58 pcf predicted (fit); nearest tested: M2 55.6 (-2.4), final target
+60.0 (+2.0); reach 2.0 pcf` (`winner.mix_provenance` in result.json). `tested` means a tested mix
+sits at that density (within 0.05 pcf); in fit mode its strength is still the fitted line's.
+`reach` is how far the design is from real lab data: the larger it is, the more the answer rests
+on the straight line.
+
 ## Adding rows
 
 Append one line per cylinder, e.g.

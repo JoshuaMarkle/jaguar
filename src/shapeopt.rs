@@ -324,6 +324,8 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     }
     if let Some(w) = &mut r.winner {
         w.candidate.shape = Some(shape);
+        // Now that the winner carries its shape, add the shape axes.
+        w.search_space = crate::optimize::search_space(params, &r.strength, &w.candidate)?;
     }
     if r.winner.is_some() {
         r.winner_hull = Some(hull);

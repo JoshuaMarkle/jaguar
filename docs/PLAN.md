@@ -25,12 +25,6 @@ answer more trustworthy first.
 
 ## A. Improve what exists (no scope change, do in order)
 
-- **A6. Biaxial D/C(x).** `cases[].dc_*` has tension, compression and shear per station, not the
-  biaxial check. Add it so the D/C(x) plot shows every along-hull check.
-- **A7. Mix provenance in the report**: per winner density, "tested" or "predicted", the nearest
-  tested mixes and the distance to them (the ASCE report's "reach").
-- **A8. Search-space table** in the report: range, step, count per variable, and which bound the
-  winner sits on (extends `on_grid_edge`).
 - **A9. Mix chart for every measured property**: optional `flexural_psi` / `compressive_psi`
   columns in the CSV, fit each that has data, plot each vs density with its fit line. Derived values
   only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.
@@ -80,7 +74,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Accurate punching shear | done (T16, T47: d from casting passes and mold side) |
 | Mixes separate from construction layers | layers done (T47); multi-mix open (C1) |
 | Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |
-| Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41); biaxial not in D/C(x) (A6) |
+| Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | manual done, auto open (B2) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress open (B7) |
