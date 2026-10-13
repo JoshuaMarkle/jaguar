@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use jaguar::{hull::Hull, mix::StrengthFit, optimize, params::Params, report, serve};
+use jaguar::mix::{Property, StrengthFit};
+use jaguar::{hull::Hull, optimize, params::Params, report, serve};
 use std::path::PathBuf;
 
 /// JAGUAR: find the lightest concrete canoe wall that survives the crew.
@@ -94,20 +95,6 @@ enum Cmd {
     },
 }
 
-/// Warn when the strength fit rests on too little or too scattered data.
-fn weak_fit_warning(fit: &StrengthFit) -> Option<String> {
-    let n = fit.points.len();
-    let mean = fit.points.iter().map(|p| p.final_psi).sum::<f64>() / n as f64;
-    let mut why = vec![];
-    if n < 5 {
-        why.push(format!("only {n} lab points (want >= 5)"));
-    }
-    if fit.rms_residual_psi > 0.15 * mean {
-        why.push(format!("rms {:.0} psi is > 15% of mean {:.0} psi", fit.rms_residual_psi, mean));
-    }
-    (!why.is_empty()).then(|| format!("WARNING strength fit is weak: {}; add lab tests", why.join(", ")))
-}
-
 fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run { params, out } => {
@@ -150,8 +137,8 @@ fn main() -> Result<()> {
                 rhos[0],
                 rhos[rhos.len() - 1]
             );
-            if let Some(w) = weak_fit_warning(&fit) {
-                println!("{w}");
+            for l in fit.source_lines().iter().chain(&fit.weak_fit_warnings()) {
+                println!("{l}");
             }
         }
         Cmd::ImportMichlet { off1, out_mlt, out } => {
@@ -169,37 +156,58 @@ fn main() -> Result<()> {
         }
         Cmd::Mix { data, flex_over_split } => {
             let fit = StrengthFit::load(&data, flex_over_split)?;
+            // Final measured flexural / f'c columns only when the CSV has any.
+            let extra = fit.points.iter().any(|p| p.flexural_psi.is_some() || p.compressive_psi.is_some());
+            let cell = |v: Option<f64>| v.map_or_else(|| "-".to_string(), |x| format!("{x:.0}"));
             println!(
-                "{:<16} {:>8} {:>10} {:>9} {:>10} {:>10}",
-                "mix", "rho pcf", "measured", "fraction", "final psi", "fit psi"
+                "{:<16} {:>8} {:>10} {:>9} {:>10} {:>10}{}",
+                "mix",
+                "rho pcf",
+                "measured",
+                "fraction",
+                "final psi",
+                "fit psi",
+                if extra { format!(" {:>10} {:>10}", "flex final", "f'c final") } else { String::new() }
             );
             for pt in &fit.points {
                 println!(
-                    "{:<16} {:>8.1} {:>10.0} {:>9.2} {:>10.0} {:>10.0}",
+                    "{:<16} {:>8.1} {:>10.0} {:>9.2} {:>10.0} {:>10.0}{}",
                     pt.mix,
                     pt.density_pcf,
                     pt.measured_psi,
                     pt.fraction_of_final,
                     pt.final_psi,
-                    fit.split_psi(pt.density_pcf)
+                    fit.split_psi(pt.density_pcf),
+                    if extra {
+                        format!(
+                            " {:>10} {:>10}",
+                            cell(pt.flexural_final_psi()),
+                            cell(pt.compressive_final_psi())
+                        )
+                    } else {
+                        String::new()
+                    }
                 );
             }
             println!("{}", report::mix_fit_line(&fit));
             println!(
-                "tested mixes (strength_model = \"tested_mixes\"; design = mean final split):\n{:<16} {:>3} {:>8} {:>10} {:>10} {:>10} {:>8}",
+                "tested mixes (strength_model = \"tested_mixes\"; design = mean final split; m = mix mean of measured values, else derived):\n{:<16} {:>3} {:>8} {:>10} {:>10} {:>10} {:>8}",
                 "mix", "n", "rho pcf", "split mean", "split min", "flexural", "f'c"
             );
             for m in fit.tested_mixes() {
                 let f = fit.for_mix(&m);
+                // Trailing "m" = mean of this mix's measured values, else derived.
+                let tag =
+                    |p: Property, v: f64| format!("{v:.0}{}", if f.measured(p).is_some() { "m" } else { "" });
                 println!(
-                    "{:<16} {:>3} {:>8.1} {:>10.0} {:>10.0} {:>10.0} {:>8.0}",
+                    "{:<16} {:>3} {:>8.1} {:>10.0} {:>10.0} {:>10} {:>8}",
                     m.name,
                     m.n,
                     m.density_pcf,
                     m.split_mean_psi,
                     m.split_min_psi,
-                    f.flexural_psi(m.density_pcf),
-                    f.fc_psi(m.density_pcf)
+                    tag(Property::Flexural, f.flexural_psi(m.density_pcf)),
+                    tag(Property::Compressive, f.fc_psi(m.density_pcf))
                 );
             }
             for rho in [fit.density_min_pcf, fit.density_max_pcf] {
@@ -210,8 +218,8 @@ fn main() -> Result<()> {
                     fit.fc_psi(rho)
                 );
             }
-            if let Some(w) = weak_fit_warning(&fit) {
-                println!("{w}");
+            for l in fit.source_lines().iter().chain(&fit.weak_fit_warnings()) {
+                println!("{l}");
             }
         }
         Cmd::Export { input, out, format, thickness, depth, flare, stations, girth, no_pockets } => {

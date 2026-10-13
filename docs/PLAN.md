@@ -25,9 +25,6 @@ answer more trustworthy first.
 
 ## A. Improve what exists (no scope change, do in order)
 
-- **A9. Mix chart for every measured property**: optional `flexural_psi` / `compressive_psi`
-  columns in the CSV, fit each that has data, plot each vs density with its fit line. Derived values
-  only where no measurement exists. Files: `mix.rs`, `docs/MIX_DATA.md`, web mix panel.
 - **A10. Analysis vs export weight.** The analysis counts zero-breadth waterlines at the rockered ends
   as wall (about 8% heavier than the exported solid on off1). Decide whether to match the export,
   then re-run examples.
@@ -68,7 +65,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Straight 80 / turning 20 | partial (T32): turning is a proxy (B8) |
 | Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
 | Mix CSV import, editable table, row delete | done (T21) |
-| Density vs strength graph with fit | partial: only split tensile is measured (A9) |
+| Density vs strength graph with fit | done (T54): split, flexural, f'c; measured fits solid, derived dashed |
 | Accurate punching shear | done (T16, T47: d from casting passes and mold side) |
 | Mixes separate from construction layers | layers done (T47); multi-mix open (C1) |
 | Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |

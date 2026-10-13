@@ -968,6 +968,8 @@ function parseCsv(text) {
     const f = csvSplit(l); while (f.length < header.length) f.push(''); rows.push(f.slice(0, header.length));
   }
   if (!header) throw new Error('no header line');
+  // Optional measured strengths (blank = not tested): always offer them in the table.
+  for (const k of ['flexural_psi', 'compressive_psi']) if (!header.includes(k)) { header.push(k); for (const r of rows) r.push(''); }
   return { pre, header, rows };
 }
 const csvText = c => [...c.pre, c.header.join(','), ...c.rows.map(r => r.map(csvCell).join(','))].join('\n') + '\n';
@@ -982,18 +984,25 @@ function mixTable() {
       <button type="button" class="btn" id="mixsave" ${mixDirty ? '' : 'disabled'}>Save</button>
       <span class="hint" id="mixnote" style="align-self:center"></span></div>`;
 }
+// Final strength of an optional measured column of a lab point (null when blank).
+const finalOf = (p, k) => p[k] == null ? null : p[k] / p.fraction_of_final;
 function drawMix() {
   const cv = $('mixplot'); if (!cv || !mixFit) return;
   const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
   cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
-  const m = mixFit, showFc = $('mixfc') && $('mixfc').checked;
+  const m = mixFit, showFc = $('mixfc') && $('mixfc').checked, lf = (f, x) => f.slope_psi_per_pcf * x + f.intercept_psi;
+  // Measured fits are solid with their points; derived curves are dashed.
+  const ff = m.flexural_fit, cf = m.compressive_fit;
   const pts = m.points.map(p => [p.density_pcf, p.final_psi]);
-  const xr = range2([m.density_min_pcf - 5, m.density_max_pcf + 5, ...pts.map(p => p[0])], 0);
-  const split = x => m.split_slope_psi_per_pcf * x + m.split_intercept_psi, flex = x => m.flex_over_split * split(x);
-  const fc = x => { const s = split(x); return s <= 0 ? 0 : (s / 6.7) ** 2; };
+  const fpts = m.points.filter(p => p.flexural_psi != null).map(p => [p.density_pcf, finalOf(p, 'flexural_psi')]);
+  const cpts = m.points.filter(p => p.compressive_psi != null).map(p => [p.density_pcf, finalOf(p, 'compressive_psi')]);
+  const xr = range2([m.density_min_pcf - 5, m.density_max_pcf + 5, ...pts.map(p => p[0]), ...fpts.map(p => p[0]), ...cpts.map(p => p[0])], 0);
+  const split = x => m.split_slope_psi_per_pcf * x + m.split_intercept_psi;
+  const flex = ff ? x => lf(ff, x) : x => m.flex_over_split * split(x), showFlex = ff || m.flex_over_split !== 1;
+  const fc = cf ? x => lf(cf, x) : x => { const s = split(x); return s <= 0 ? 0 : (s / 6.7) ** 2; };
   const r = { l: 56, t: 22, w: W - 56 - (showFc ? 52 : 12), h: H - 22 - 40 };
-  const ys = [...pts.map(p => p[1]), split(xr[0]), split(xr[1]), flex(xr[0]), flex(xr[1]), 0];
+  const ys = [...pts.map(p => p[1]), ...fpts.map(p => p[1]), split(xr[0]), split(xr[1]), ...(showFlex ? [flex(xr[0]), flex(xr[1])] : []), 0];
   const yr = range2(ys);
   const { px, py } = axes(ctx, r, xr, yr, 'density, pcf', 'final strength, psi');
   ctx.save(); ctx.beginPath(); ctx.rect(r.l, r.t, r.w, r.h); ctx.clip();
@@ -1002,29 +1011,38 @@ function drawMix() {
   const line = (f, col, dash, py2 = py) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash); ctx.beginPath();
     for (let i = 0; i <= 60; i++) { const x = xr[0] + (xr[1] - xr[0]) * i / 60; i ? ctx.lineTo(px(x), py2(f(x))) : ctx.moveTo(px(x), py2(f(x))); } ctx.stroke(); ctx.setLineDash([]); };
   line(split, C.ink, []);
-  if (m.flex_over_split !== 1) line(flex, C.muted, [5, 3]);
+  if (showFlex) line(flex, C.muted, ff ? [] : [5, 3]);
   let fy = null;
   if (showFc) {
-    const fr = range2([0, fc(xr[0]), fc(xr[1])]);
+    const fr = range2([0, fc(xr[0]), fc(xr[1]), ...cpts.map(p => p[1])]);
     fy = y => r.t + r.h - (y - fr[0]) / (fr[1] - fr[0] || 1) * r.h;
-    line(fc, C.faint, [2, 3], fy);
+    line(fc, C.faint, cf ? [] : [2, 3], fy);
     ctx.restore(); ctx.save();
     ctx.font = font(11); ctx.fillStyle = C.muted; ctx.textAlign = 'left';
     for (const v of niceTicks(fr[0], fr[1], 4)) ctx.fillText(fmt(v), r.l + r.w + 6, fy(v) + 4);
     ctx.translate(r.l + r.w + 46, r.t + r.h / 2); ctx.rotate(Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText("f'c, psi", 0, 0);
   }
   ctx.restore();
+  // Points: split = filled circle, flexural = filled square, f'c = open circle (right axis).
   for (const [x, y] of pts) { ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(px(x), py(y), 3, 0, 2 * Math.PI); ctx.fill(); }
-  const items = [[C.ink, 'split fit'], ...(m.flex_over_split !== 1 ? [[C.muted, 'flexural', [5, 3]]] : []), ...(showFc ? [[C.faint, "f'c (right)", [2, 3]]] : [])];
+  for (const [x, y] of fpts) { ctx.fillStyle = C.muted; ctx.fillRect(px(x) - 3, py(y) - 3, 6, 6); }
+  if (showFc) for (const [x, y] of cpts) { ctx.strokeStyle = C.muted; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(px(x), fy(y), 3.5, 0, 2 * Math.PI); ctx.stroke(); ctx.lineWidth = 1; }
+  const items = [[C.ink, 'split fit'], ...(showFlex ? [[C.muted, ff ? 'flexural fit' : 'flexural (derived)', ff ? [] : [5, 3]]] : []),
+    ...(showFc ? [[C.faint, cf ? "f'c fit (right)" : "f'c derived (right)", cf ? [] : [2, 3]]] : [])];
   legend(ctx, r.l + 6, 14, items);
 }
 function renderMix() {
   const m = mixFit, f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
-  $('mix').innerHTML = `<canvas id="mixplot" style="width:100%;height:200px;display:block" title="Dots = lab breaks scaled to final strength. Line = fitted split tensile. Shaded = tested density range."></canvas>
-    ${row('mixfc', "Show f'c", "Overlay compressive strength f'c = (split / 6.7)^2 on a right-hand axis.", '<input type="checkbox" class="switch" id="mixfc">')}
-    ${m ? kv('Split tensile', `${f(m.split_slope_psi_per_pcf, 2)} &times; density ${m.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(m.split_intercept_psi), 1)} psi`, 'Straight line through the final split tensile strengths. Flexural = this x flex/split ratio.')
-      + kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`) : ''}
+  const eq = (a, b) => `${f(a, 2)} &times; density ${b < 0 ? '&minus;' : '+'} ${f(Math.abs(b), 1)} psi`;
+  const meas = pf => `measured: ${eq(pf.slope_psi_per_pcf, pf.intercept_psi)} (${pf.n} tests, rms ${f(pf.rms_residual_psi, 1)} psi)`;
+  $('mix').innerHTML = `<canvas id="mixplot" style="width:100%;height:200px;display:block" title="Dots = lab breaks scaled to final strength (circle split, square flexural, open circle f'c). Solid = fit through measured data; dashed = derived from split. Shaded = tested density range."></canvas>
+    ${row('mixfc', "Show f'c", "Overlay compressive strength f'c on a right-hand axis: the fit through measured compressive_psi when there is one, else (split / 6.7)^2.", '<input type="checkbox" class="switch" id="mixfc">')}
+    ${m ? kv('Split tensile', eq(m.split_slope_psi_per_pcf, m.split_intercept_psi), 'Straight line through the final split tensile strengths.')
+      + kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)
+      + kv('Flexural', m.flexural_fit ? meas(m.flexural_fit) : `derived: ${f(m.flex_over_split, 2)} &times; split`, 'Bending tension capacity. Fitted from the flexural_psi column when it has data at 2 or more densities, else split x flex/split ratio.')
+      + kv("f'c", m.compressive_fit ? meas(m.compressive_fit) : 'derived: (split / 6.7)&sup2;', 'Compression, shear and punching capacity. Fitted from the compressive_psi column when it has data at 2 or more densities, else from split (ACI).') : ''}
     ${mixCsv ? mixTable() : ''}`;
+  if (m && m.compressive_fit) $('mixfc').checked = true;
   $('mixfc').onchange = drawMix; drawMix();
   if (!mixCsv) return;
   const dirty = () => { mixDirty = true; $('mixsave').disabled = false; $('mixnote').textContent = 'unsaved'; };

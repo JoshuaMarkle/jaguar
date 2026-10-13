@@ -1,6 +1,7 @@
 # Mix data: where concrete strength comes from
 
-JAGUAR does not guess concrete strength. It reads the team's lab breaks and fits a line.
+JAGUAR does not guess concrete strength. It reads the team's lab breaks and fits a line per
+measured property.
 
 ## The file
 
@@ -16,7 +17,9 @@ does not matter, extra columns are ignored):
 | `cured_days` | age at the break (informational) |
 | `density_pcf` | wet density of the cylinder, pcf (the raw sheet's "Wet Density" column; the "final target" row's 60 pcf is also in that column). Hull weight uses the same density, so if your mold-day concrete is lighter once dry, reported weights are conservative. |
 | `split_tensile_psi` | measured split-cylinder tensile strength, psi ("7,191" style commas ok) |
-| `fraction_of_final` | share of final strength reached at test age (see below) |
+| `fraction_of_final` | share of final strength reached at test age (see below); applies to every strength in the row |
+| `flexural_psi` | optional measured flexural strength (modulus of rupture), psi. Blank = not tested |
+| `compressive_psi` | optional measured compressive strength f'c, psi. Blank = not tested |
 | `note` | anything else |
 
 ## fraction_of_final
@@ -28,15 +31,20 @@ A row that already is a final (28-day or design) strength has `1.0`.
 ## How strength is derived
 
 1. Fit, by least squares, final split tensile strength vs density: `f_sp = a * rho + b`.
-2. Bending tension capacity (modulus of rupture) = `flex_over_split * f_sp`. Default 1.0, which is
-   conservative (ACI relations give about 1.12).
-3. Compressive strength f'c from ACI 318 `f_sp = 6.7 sqrt(f'c)`, so `f'c = (f_sp / 6.7)^2`.
-   Used by compression, shear and punching checks.
+2. Bending tension capacity (modulus of rupture): if `flexural_psi` has data at 2 or more distinct
+   densities, its own least-squares line of final values. Otherwise `flex_over_split * f_sp`.
+   Default 1.0, which is conservative (ACI relations give about 1.12).
+3. Compressive strength f'c, used by compression, shear and punching checks: likewise the
+   `compressive_psi` line when it has data at 2 or more densities, otherwise from ACI 318
+   `f_sp = 6.7 sqrt(f'c)`, so `f'c = (f_sp / 6.7)^2`.
 4. Every capacity is divided by `factor_of_safety`.
 
 Check the fit any time with `jaguar mix` (or `jaguar mix path/to.csv`): it prints every point
-(measured, fraction, final, fitted) and the line. `jaguar check` warns when the fit is weak
-(fewer than 5 points, or rms scatter above 15% of the mean).
+(measured, fraction, final, fitted) and the line, then one line per property saying whether it is
+measured or derived (and why). `jaguar check` prints the same source lines and warns, per fitted
+property, when the fit is weak (fewer than 5 points, or rms scatter above 15% of the mean).
+result.json's `strength` block has `flexural_fit` / `compressive_fit` only for measured properties.
+The web mix panel plots each measured property with its fit line (solid) and derived curves dashed.
 
 ## Choosing between tested mixes (`strength_model = "tested_mixes"`)
 
@@ -50,7 +58,8 @@ optimizer choose only among the mixes actually tested:
   the scatter;
 * the density axis is the list of mixes (ordered by density then name). `search.density_pcf` and
   `density_extrapolation_pcf` are ignored and there are no grid-edge/mix-edge flags for density;
-* flexural and f'c come from the mix's mean split strength exactly as in fit mode.
+* flexural and f'c are the mix's mean measured values when any of its rows has them, else derived
+  from the mix's mean split strength as in fit mode (`m` after the value in `jaguar mix`).
 
 The winner line reads e.g. `mix M2 (55.6 pcf)`. `jaguar mix` prints the per-mix table. The
 "final target" row (60 pcf, 300 psi, final) has no replicate token so it is its own mix; it is the
