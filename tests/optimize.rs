@@ -517,3 +517,37 @@ fn flare_axis_takes_the_demolding_minimum_unless_needed() {
     p.search.flare_deg = Some([3.0, 5.0, 1.0]);
     assert!(p.validate().unwrap_err().to_string().contains("not both"));
 }
+
+/// hull.keel_fillet_radius_in: the run analyses the nosed hull (tips kept, so the same length;
+/// concrete only added), the winner hull is that table, and the STEP export keeps its refined
+/// stations so the noses are in the file.
+#[test]
+fn keel_fillet_keeps_length_and_reaches_the_export() {
+    let (mut p, h) = example();
+    p.search.thickness_in = [0.375, 0.5, 0.125];
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    let plain = jaguar::run(&p, &|_| {}).unwrap();
+    p.hull.keel_fillet_radius_in = Some(0.5);
+    p.validate().unwrap();
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    let (a, b) = (plain.winner.as_ref().unwrap(), r.winner.as_ref().unwrap());
+    let wh = r.winner_hull.as_ref().unwrap();
+    assert!(wh.x.len() > h.x.len() && wh.name.ends_with("-f0.5"));
+    assert_eq!(a.candidate.length_in, b.candidate.length_in);
+    let key = |c: &optimize::Candidate| (c.thickness_in, c.density_pcf, c.depth_in);
+    for (c0, c1) in plain.candidates.iter().zip(&r.candidates) {
+        assert_eq!(key(c0), key(c1));
+        assert!(c1.hull_weight_lb >= c0.hull_weight_lb - 1e-9, "a nose only adds concrete");
+        assert!(c1.hull_weight_lb < c0.hull_weight_lb * 1.01, "and only a little");
+    }
+    let text = serde_json::to_string(&r).unwrap();
+    let (hull, spec) = jaguar::export::from_result(&text, 161, 41).unwrap();
+    let nosed = jaguar::export::build_mesh(&hull, &spec).unwrap();
+    let (hp, sp) = jaguar::export::from_result(&serde_json::to_string(&plain).unwrap(), 161, 41).unwrap();
+    let smooth = jaguar::export::build_mesh(&hp, &sp).unwrap();
+    assert!(nosed.closed && nosed.tris.len() > smooth.tris.len());
+    let (lo, hi) = (nosed.bbox(), smooth.bbox());
+    assert!((lo.1[0] - lo.0[0] - (hi.1[0] - hi.0[0])).abs() < 1e-6, "same exported length");
+    p.hull.keel_fillet_radius_in = Some(0.0);
+    assert!(p.validate().is_err());
+}

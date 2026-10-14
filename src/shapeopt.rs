@@ -284,17 +284,14 @@ fn representative(r: &RunResult) -> Option<Candidate> {
         .cloned()
 }
 
-/// The hull analysed for shape `v`: generated, then reduced to `hull.templates`
-/// cross-section templates when set (the search then tunes the buildable loft).
+/// The hull analysed for shape `v`: generated, then `Hull::prepared` (templates, keel
+/// fillet), so the search tunes the hull as it will be built.
 fn hull_for(params: &Params, v: &[f64; SHAPE_DIMS], index: usize) -> Result<Hull> {
     templated(params, generate(&to_shape(v), STATIONS, WATERLINES, &format!("opt-{index}"))?)
 }
 
 fn templated(params: &Params, h: Hull) -> Result<Hull> {
-    Ok(match params.hull.templates {
-        Some(n) => h.templated(n),
-        None => h,
-    })
+    h.prepared(&params.hull)
 }
 
 /// `params` for one shape: its searched gunwale radius becomes `hull.gunwale_radius_in`

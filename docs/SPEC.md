@@ -56,6 +56,17 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    analysed, so the search tunes the buildable loft (not an approximation of a smooth optimum,
    which sits on its gates and falls off them when simplified). The winner hull, export and web
    view are the loft. Topsides follow it with the constant flare (draft everywhere).
+   **Stem / keel radius** (optional `hull.keel_fillet_radius_in = r`, applied after templates):
+   the sharp centreline crease at the ends (where port and starboard meet) gets a round nose of
+   radius r with the tip and keel kept in place (same length and draft; concrete only added):
+   in plan on every waterline whose tip is on the stem (it runs to the end station, or the keel
+   profile rises steeper than 45 deg there), and in section on every station's keel V. The hull
+   is held at least as wide as a capsule on the tip (half-round of radius r, then half-breadth r)
+   until it is wider than r by itself; a fine entry of half-angle a is r wide only r / tan a behind
+   the tip, so the nose reaches that far. A hull already wider than r is unchanged. The table is
+   refined (waterlines every r/4 to the design draft, stations on an r/4 lattice from each end
+   over the stem noses) and the STEP/STL export keeps those stations. off1 at r 0.5 in: +0.03 lb,
+   drag and the winner unchanged; the shape search pick 90.9 lb vs 90.8 lb.
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`

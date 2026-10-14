@@ -236,7 +236,25 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         gunwale_radius_in: spec.gunwale_radius_in,
         gunwale_max_flare_deg: 89.9,
     };
-    let (grid, unbuildable) = Grid::build_topsides(hull, spec.depth_in, spec.stations, ts);
+    // Table stations closer together than half the even spacing (the refined noses of a
+    // filleted hull) are kept as well, so the noses survive; other tables export as before.
+    let even = hull.length / (spec.stations - 1) as f64;
+    let fine: Vec<f64> = (0..hull.x.len())
+        .filter(|&i| {
+            let gap = |a: usize, b: usize| (hull.x[b] - hull.x[a]) < 0.5 * even;
+            (i > 0 && gap(i - 1, i)) || (i + 1 < hull.x.len() && gap(i, i + 1))
+        })
+        .map(|i| hull.x[i])
+        .collect();
+    let (grid, unbuildable) = if !fine.is_empty() {
+        let mut xs = crate::hull::linspace(0.0, hull.length, spec.stations);
+        xs.extend(&fine);
+        xs.sort_by(f64::total_cmp);
+        xs.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        Grid::build_topsides_at(hull, spec.depth_in, &xs, ts)
+    } else {
+        Grid::build_topsides(hull, spec.depth_in, spec.stations, ts)
+    };
     if let Some(why) = unbuildable {
         anyhow::bail!("export: {why}");
     }

@@ -56,6 +56,138 @@ impl Hull {
             .with_context(|| format!("writing {}", path.display()))
     }
 
+    /// The hull as the run builds it: `hull.templates`, then `hull.keel_fillet_radius_in`.
+    pub fn prepared(self, hp: &crate::params::HullParams) -> Result<Hull> {
+        let h = match hp.templates {
+            Some(n) => self.templated(n),
+            None => self,
+        };
+        match hp.keel_fillet_radius_in {
+            Some(r) => h.filleted(r),
+            None => Ok(h),
+        }
+    }
+
+    /// The hull with the sharp centreline crease at the bow and stern (where port and starboard
+    /// meet) given a round nose of radius `r`, in, tip and keel kept where they are (length and
+    /// draft unchanged; concrete is only added, see [`nose_at_start`]): the stem in plan, on
+    /// every waterline whose tip is on the stem (tip line steeper than 45 deg; the trace of each
+    /// stacked foam sheet), and the keel V in each station's section. Where the hull is already
+    /// wider than r it is left alone. The
+    /// table is refined to resolve the noses: waterlines every r/4 up to the design draft,
+    /// stations every r/4 over each stem nose. Err past `FILLET_MAX_STATIONS` stations.
+    pub fn filleted(&self, r: f64) -> Result<Hull> {
+        ensure!(r.is_finite() && r > 0.0, "fillet radius must be > 0, got {r}");
+        let (z0, dd) = (self.z[0], self.draft_design);
+        let mut z = self.z.clone();
+        z.extend(linspace(z0, dd, ((dd - z0) / (0.25 * r)).ceil() as usize + 1));
+        z.sort_by(f64::total_cmp);
+        z.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+        // Source waterline at height zz (linear between the table's waterlines), at its stations.
+        let column = |zz: f64| -> Vec<f64> {
+            let k = self.z.partition_point(|&v| v <= zz).clamp(1, self.z.len() - 1);
+            let t = ((zz - self.z[k - 1]) / (self.z[k] - self.z[k - 1])).clamp(0.0, 1.0);
+            self.half_breadth.iter().map(|row| row[k - 1] * (1.0 - t) + row[k] * t).collect()
+        };
+        let cols: Vec<Vec<f64>> = z.iter().map(|&zz| column(zz)).collect();
+        // Keel height of each table station (None = no breadth), the hull's side profile.
+        let kz: Vec<Option<f64>> = self
+            .half_breadth
+            .iter()
+            .map(|row| row.iter().position(|v| *v > 0.0).map(|k| self.z[k.saturating_sub(1)]))
+            .collect();
+        // A waterline's tip crease is on the stem when the waterline runs to the hull's end
+        // station, or the keel profile rises steeper than 45 deg behind its tip; otherwise it is
+        // the keel crease, which the section nose rounds.
+        let stem = |c: &[f64], bow: bool| -> bool {
+            let n = c.len();
+            let first = if bow { c.iter().position(|v| *v > 0.0) } else { c.iter().rposition(|v| *v > 0.0) };
+            let Some(j) = first else { return false };
+            let (end, next) =
+                if bow { (j == 0 || j == 1, j + 1) } else { (j + 1 == n || j + 2 == n, j.wrapping_sub(1)) };
+            if end {
+                return true;
+            }
+            match (kz.get(j).copied().flatten(), kz.get(next).copied().flatten()) {
+                (Some(a), Some(b)) => (a - b).abs() >= (self.x[j] - self.x[next]).abs(),
+                _ => false,
+            }
+        };
+        let plans: Vec<[Option<(f64, f64)>; 2]> = (0..z.len())
+            .map(|k| {
+                let [b, s] = nose_both(&self.x, &cols[k], r);
+                [b.filter(|_| stem(&cols[k], true)), s.filter(|_| stem(&cols[k], false))]
+            })
+            .collect();
+        // Stations: the table's, plus every r/4 over each stem nose.
+        let mut x = self.x.clone();
+        let (xa, xb) = (self.x[0], self.x[self.x.len() - 1]);
+        for p in &plans {
+            // One lattice of r/4 steps from each end, so the waterlines share stations.
+            let h = 0.25 * r;
+            for (from, sign, span) in [(xa, 1.0, p[0]), (xb, -1.0, p[1].map(|(tip, end)| (-end, -tip)))] {
+                let Some((lo, hi)) = span else { continue };
+                // Refine at most 40 r into the hull (a waterline that never reaches r).
+                let (lo, hi) = (lo.max(xa).max(hi - 40.0 * r), hi.min(xb).min(lo + 40.0 * r));
+                let (m0, m1) = if sign > 0.0 {
+                    ((lo - from) / h, (hi - from) / h)
+                } else {
+                    ((from - hi) / h, (from - lo) / h)
+                };
+                for m in (m0.floor().max(0.0) as usize)..=(m1.ceil() as usize) {
+                    x.push((from + sign * m as f64 * h).clamp(xa, xb));
+                }
+            }
+        }
+        x.sort_by(f64::total_cmp);
+        x.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        ensure!(
+            x.len() <= FILLET_MAX_STATIONS,
+            "keel fillet of {r} in needs {} stations (max {FILLET_MAX_STATIONS}): use a larger radius",
+            x.len()
+        );
+        // Stem noses per waterline, then the keel nose per station.
+        let mut rows = vec![vec![0.0; z.len()]; x.len()];
+        for (k, col) in cols.iter().enumerate() {
+            for (i, &xi) in x.iter().enumerate() {
+                let j = self.x.partition_point(|&v| v <= xi).clamp(1, self.x.len() - 1);
+                let t = ((xi - self.x[j - 1]) / (self.x[j] - self.x[j - 1])).clamp(0.0, 1.0);
+                rows[i][k] = nosed_both(&plans[k], r, xi, col[j - 1] * (1.0 - t) + col[j] * t);
+            }
+        }
+        // The keel nose of a station within r of a tip is capped by the stem nose's width there
+        // (the rounded edge is one tube following the crease; a section just behind the stem
+        // cuts its vertical part), so the stem keeps a round front.
+        let width = |xi: f64| -> f64 {
+            let d = (xi - xa).min(xb - xi);
+            if d <= 0.0 {
+                0.0
+            } else if d < r {
+                (r * r - (r - d) * (r - d)).sqrt()
+            } else {
+                r
+            }
+        };
+        for (row, &xi) in rows.iter_mut().zip(&x) {
+            if let Some(nose) = nose_at_start(&z, row, r) {
+                let cap = width(xi);
+                for (k, v) in row.iter_mut().enumerate() {
+                    *v = v.max(nosed_value(Some(nose), r, z[k], 0.0).min(cap));
+                }
+            }
+        }
+        let h = Hull {
+            name: format!("{}-f{r}", self.name),
+            source: format!("{}, round nose r = {r} in at the stem and keel", self.source),
+            x,
+            z,
+            half_breadth: rows,
+            ..self.clone()
+        };
+        h.validate()?;
+        Ok(h)
+    }
+
     /// The hull as `n` cross-section templates with a straight (ruled) loft
     /// between neighbours: the exact sections of this hull at `n` stations,
     /// cosine-spaced (closer at the ends, where the shape changes fastest), tips
@@ -353,7 +485,12 @@ impl Grid {
     /// built (sides would lean in, arc past a tip, depth not above the design
     /// draft); the grid is then still the real geometry, so weights stay real.
     pub fn build_topsides(hull: &Hull, depth: f64, n: usize, ts: Topsides) -> (Grid, Option<String>) {
-        let mut g = Self::build_flared(hull, depth, n, ts.flare_deg);
+        Self::build_topsides_at(hull, depth, &linspace(0.0, hull.length, n), ts)
+    }
+
+    /// [`Grid::build_topsides`] at the given stations `xs` (increasing) instead of `n` even ones.
+    pub fn build_topsides_at(hull: &Hull, depth: f64, xs: &[f64], ts: Topsides) -> (Grid, Option<String>) {
+        let mut g = Self::build_flared_at(hull, depth, xs, ts.flare_deg);
         let Some(r) = ts.gunwale_radius_in else { return (g, None) };
         let dd = hull.draft_design;
         if depth <= dd {
@@ -408,8 +545,13 @@ impl Grid {
     /// 0 = vertical sides (as in the golden reference). Flare adds wall area (weight), raises
     /// reserve buoyancy and widens the gunwale (stability, freeboard).
     pub fn build_flared(hull: &Hull, depth: f64, n: usize, flare_deg: f64) -> Grid {
+        Self::build_flared_at(hull, depth, &linspace(0.0, hull.length, n), flare_deg)
+    }
+
+    fn build_flared_at(hull: &Hull, depth: f64, xs: &[f64], flare_deg: f64) -> Grid {
         let flare = flare_deg.to_radians().tan();
-        let x = linspace(0.0, hull.length, n);
+        let x = xs.to_vec();
+        let n = x.len();
         let mut z = hull.z.clone();
         let extrude = depth > hull.draft_design;
         if extrude {
@@ -437,6 +579,57 @@ pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
         return vec![a];
     }
     (0..n).map(|i| a + (b - a) * i as f64 / (n - 1) as f64).collect()
+}
+
+/// Largest station count a filleted table may reach (guards a tiny radius on a long hull).
+const FILLET_MAX_STATIONS: usize = 6000;
+
+/// Round nose of radius `r` on the crease where a profile (s along the centreline, y >= 0
+/// half-breadth, piecewise linear) leaves the centreline at its start, keeping the tip where it
+/// is: the profile is held at least as wide as a capsule on the tip (a half-round of radius r,
+/// then half-breadth r) until it is wider than r by itself. A radius-r nose is 2r wide, and a
+/// fine entry of half-angle a only reaches that r / tan a behind the tip, so that is how far the
+/// nose reaches; it is the least concrete that gives the tip radius r. Returns (tip, end of the
+/// nose); None when the profile starts off the centreline (no crease).
+fn nose_at_start(s: &[f64], y: &[f64], r: f64) -> Option<(f64, f64)> {
+    let j = y.iter().position(|v| *v > 0.0)?;
+    if j == 0 {
+        return None;
+    }
+    let tip = s[j - 1];
+    // First point behind tip + r where the profile reaches r (linear between vertices).
+    let mut end = s[s.len() - 1];
+    for k in j..s.len() {
+        if s[k] >= tip + r && y[k] >= r {
+            let (a, b) = ((s[k - 1], y[k - 1]), (s[k], y[k]));
+            end = if a.1 < r && b.1 > a.1 { a.0 + (r - a.1) / (b.1 - a.1) * (b.0 - a.0) } else { b.0 };
+            end = end.max(tip + r);
+            break;
+        }
+    }
+    Some((tip, end))
+}
+
+/// Profile value at `s` with the nose (from [`nose_at_start`]) applied.
+fn nosed_value(nose: Option<(f64, f64)>, r: f64, s: f64, y: f64) -> f64 {
+    match nose {
+        Some((tip, _)) if s >= tip && s <= tip + r => {
+            y.max((r * r - (s - tip - r) * (s - tip - r)).max(0.0).sqrt())
+        }
+        Some((tip, end)) if s > tip + r && s <= end => y.max(r),
+        _ => y,
+    }
+}
+
+/// Bow and stern noses of a profile along x (the stern by mirroring).
+fn nose_both(s: &[f64], y: &[f64], r: f64) -> [Option<(f64, f64)>; 2] {
+    let rs: Vec<f64> = s.iter().rev().map(|v| -v).collect();
+    let ry: Vec<f64> = y.iter().rev().copied().collect();
+    [nose_at_start(s, y, r), nose_at_start(&rs, &ry, r)]
+}
+
+fn nosed_both(n: &[Option<(f64, f64)>; 2], r: f64, s: f64, y: f64) -> f64 {
+    nosed_value(n[1], r, -s, nosed_value(n[0], r, s, y))
 }
 
 /// Linear interpolation of column `k` of `table` (rows at `xs`) at `x`, clamped.
@@ -596,6 +789,114 @@ mod tests {
         assert!(lean > 60.0 && lx > 0.0 && lx < h.length, "{lean} at {lx}");
         let (_, why) = Grid::build_topsides(&h, h.draft_design, 161, ts);
         assert!(why.is_some_and(|w| w.contains("above the design draft")));
+    }
+
+    /// Table hull from a half-breadth function, x over [0, l], z over [0, d].
+    fn table(l: f64, d: f64, nx: usize, nz: usize, f: impl Fn(f64, f64) -> f64) -> Hull {
+        let x = linspace(0.0, l, nx);
+        let z = linspace(0.0, d, nz);
+        let half_breadth = x.iter().map(|&xi| z.iter().map(|&zk| f(xi, zk).max(0.0)).collect()).collect();
+        Hull {
+            format: FORMAT.into(),
+            units: "in".into(),
+            name: "t".into(),
+            source: "test".into(),
+            length: l,
+            draft_design: d,
+            x,
+            z,
+            half_breadth,
+        }
+    }
+
+    /// Filleted half-breadth at (x, z), linear in the refined table.
+    fn at(h: &Hull, x: f64, z: f64) -> f64 {
+        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
+        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
+        interp_col(&h.x, &h.half_breadth, k - 1, x) * (1.0 - t) + interp_col(&h.x, &h.half_breadth, k, x) * t
+    }
+
+    #[test]
+    fn nose_rounds_a_wedge_stem_and_keeps_the_tip() {
+        // Wedge ends (half-angle 10 deg), vertical sides: a vertical stem, the plan crease.
+        let th = 10f64.to_radians();
+        let h = table(100.0, 4.0, 41, 5, |x, _| (x.min(100.0 - x) * th.tan()).min(6.0));
+        let r = 0.5;
+        let f = h.filleted(r).unwrap();
+        // Tip kept at x = 0 (length unchanged); a half-round of radius r there, then at least r
+        // wide until the wedge is (r / tan 10 = 2.8 in); never narrower; untouched beyond.
+        let first = f.x.iter().zip(&f.half_breadth).find(|(_, row)| row[2] > 0.0).map(|(x, _)| *x).unwrap();
+        assert!(first > 0.0 && first <= 0.25 * r + 1e-9, "tip stays at the bow: first breadth at {first}");
+        assert!((at(&f, r, 2.0) - r).abs() < 0.03 * r, "{}", at(&f, r, 2.0));
+        let want = (r * r - (0.5 * r) * (0.5 * r)).sqrt();
+        assert!((at(&f, 0.5 * r, 2.0) - want).abs() < 0.03 * r, "{} vs {want}", at(&f, 0.5 * r, 2.0));
+        for (i, &x) in f.x.iter().enumerate() {
+            for (k, &z) in f.z.iter().enumerate() {
+                assert!(f.half_breadth[i][k] >= at(&h, x, z) - 1e-9);
+            }
+        }
+        assert!((at(&f, 100.0 - r, 2.0) - r).abs() < 0.03 * r, "stern mirrors the bow");
+        assert!(at(&f, 2.0, 2.0) >= r - 1e-9);
+        assert!((at(&f, 3.5, 2.0) - at(&h, 3.5, 2.0)).abs() < 1e-12);
+        // Away from the ends: untouched.
+        assert_eq!(at(&f, 50.0, 2.0), at(&h, 50.0, 2.0));
+    }
+
+    #[test]
+    fn nose_rounds_a_v_keel_and_leaves_a_round_bottom() {
+        // V sections (half-angle 30 deg from vertical) the whole length, open (non-zero) ends.
+        let ph = 30f64.to_radians();
+        let v = table(60.0, 6.0, 7, 25, |_, z| z * ph.tan());
+        let r = 1.0;
+        let f = v.filleted(r).unwrap();
+        // Keel kept at z = 0, round of radius r on it.
+        let keel = f.z.iter().zip(&f.half_breadth[3]).find(|(_, y)| **y > 0.0).map(|(z, _)| *z).unwrap();
+        assert!(keel <= 0.25 * r + 1e-9, "keel stays: first breadth at z = {keel}");
+        assert!((at(&f, 30.0, r) - r).abs() < 0.03, "{}", at(&f, 30.0, r));
+        // At least r wide until the V is r wide by itself (z = r / tan 30), untouched above.
+        assert!(at(&f, 30.0, 1.5) >= r - 1e-9);
+        assert!(at(&f, 30.0, 4.0) == at(&v, 30.0, 4.0), "above the nose: untouched");
+        // Round bottom of radius 3 > r: unchanged.
+        let rr = 3.0;
+        let round = table(60.0, 3.0, 7, 61, |_, z| (rr * rr - (z - rr) * (z - rr)).max(0.0).sqrt());
+        let g = round.filleted(r).unwrap();
+        for &z in &[0.2, 0.5, 1.0, 2.0] {
+            assert!(
+                (at(&g, 30.0, z) - at(&round, 30.0, z)).abs() < 0.01,
+                "z {z}: {} vs {}",
+                at(&g, 30.0, z),
+                at(&round, 30.0, z)
+            );
+        }
+    }
+
+    #[test]
+    fn nose_on_off1_keeps_length_adds_little_and_stays_compact() {
+        let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        let f = h.filleted(0.5).unwrap();
+        assert!(f.z.len() > h.z.len() && f.x.len() < 400, "{} stations", f.x.len());
+        for (i, &x) in f.x.iter().enumerate() {
+            for (k, &z) in f.z.iter().enumerate() {
+                assert!(f.half_breadth[i][k] >= at(&h, x, z) - 1e-9, "x {x} z {z}");
+            }
+        }
+        // Same overall extent: the tips do not move.
+        let ext = |h: &Hull| {
+            let nz = h.z.len();
+            let xs: Vec<f64> =
+                h.x.iter().zip(&h.half_breadth).filter(|(_, r)| r[nz - 1] > 0.0).map(|(x, _)| *x).collect();
+            (xs[0], xs[xs.len() - 1])
+        };
+        let (a, b) = (ext(&h), ext(&f));
+        assert!(b.0 <= a.0 + 1e-9 && b.1 >= a.1 - 1e-9, "{a:?} vs {b:?}");
+        // Round stem front: 0.25 in behind the tip the half-breadth is the circle's, not r
+        // (the keel nose of the first stations is capped by the stem nose).
+        let g = h.filleted(1.0).unwrap();
+        let want = (1.0f64 - 0.75 * 0.75).sqrt();
+        for z in [5.0, 5.8] {
+            assert!((at(&g, 0.25, z) - want).abs() < 0.05, "z {z}: {} vs {want}", at(&g, 0.25, z));
+        }
+        assert!(h.filleted(0.0).is_err());
     }
 
     #[test]

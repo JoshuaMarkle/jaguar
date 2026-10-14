@@ -249,6 +249,11 @@ pub struct HullParams {
     /// so the search tunes the buildable hull. >= 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<usize>,
+    /// Present = round the sharp centreline crease at the bow and stern (stem and keel,
+    /// where port and starboard meet) to this radius, in (`Hull::filleted`), so the wall
+    /// has no knife edge (stress concentration, mold). Applied after `templates`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keel_fillet_radius_in: Option<f64>,
     /// With a gunwale outline: steepest outward side lean allowed anywhere
     /// along the hull, deg from vertical (default 30). Steeper = rejected.
     #[serde(default = "gunwale_max_flare")]
@@ -889,6 +894,9 @@ impl Params {
             && !(r.is_finite() && r > 0.0)
         {
             bail!("hull.gunwale_radius_in must be > 0");
+        }
+        if self.hull.keel_fillet_radius_in.is_some_and(|r| !(r.is_finite() && r > 0.0 && r <= 6.0)) {
+            bail!("hull.keel_fillet_radius_in must be in (0, 6] in");
         }
         if self.hull.templates.is_some_and(|n| n < 3) {
             bail!("hull.templates must be >= 3 (bow tip, one section, stern tip)");

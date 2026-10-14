@@ -8,6 +8,8 @@
 [hull]
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
+# keel_fillet_radius_in = 0.5  # round the sharp stem / keel edge at the bow and stern to this radius, in
+#                         # (tips stay put: same length; the hull is kept >= 2r wide near the tips)
 # templates = 11          # constructable mold: the hull as 11 cross-section templates, straight between
 #                         # (docs/SPEC.md Physics 0; with [shape_search] the search tunes that loft)
 flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical (demolding draft, e.g. 3-5)

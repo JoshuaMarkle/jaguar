@@ -59,7 +59,11 @@ form (today they come from canoe.toml).
 T65 (constructable line-arc-line gunwale, `hull.gunwale_radius_in` / `shape_search.gunwale_radius_in`,
 side lean limit `hull.gunwale_max_flare_deg`) is done. On full-ended hulls such as off1 no buildable
 radius exists at 30 deg; the team should confirm the lean limit the mold shop can build.
-T67 (`hull.templates`): the recommended simplification. The hull is N cross-section templates with
+T68 (`hull.keel_fillet_radius_in`): round nose at the stem and keel, tips kept. The mold is
+stacked traced foam sheets (2026-10-13): smooth outlines cost nothing to cut, so `templates` is not
+needed for this shop; a useful next export would be each sheet's outline (a waterline at every
+sheet thickness) as a 1:1 tracing pattern.
+T67 (`hull.templates`): the recommended simplification (for hot-wire / frame molds). The hull is N cross-section templates with
 straight lofts between (hot-wire foam / frames and battens); the shape search tunes that loft.
 9-11 templates cost about 1% race time (docs/HULLS.md). Topsides keep the constant flare, so the
 demolding draft holds everywhere and the gunwale is a polyline of straight runs: the line-arc-line

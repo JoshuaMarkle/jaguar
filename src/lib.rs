@@ -45,11 +45,7 @@ use params::Params;
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
     match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => {
-            let h = hull::Hull::load(f)?;
-            let h = match params.hull.templates {
-                Some(n) => h.templated(n),
-                None => h,
-            };
+            let h = hull::Hull::load(f)?.prepared(&params.hull)?;
             optimize::run_with_progress(params, &h, on_progress)
         }
         (None, Some(_)) => shapeopt::run(params, on_progress),
