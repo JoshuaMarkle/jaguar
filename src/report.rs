@@ -226,19 +226,68 @@ fn search_space_lines(axes: &[crate::optimize::SearchAxis]) -> Vec<String> {
     out
 }
 
-/// The two-mix layout: `zones  dense 58.0 pcf over x 60..180 in: bottom 2.0 in, top 1.0 in; light elsewhere`.
-pub fn zone_line(z: &crate::section::ZoneLayout, dense_mix: Option<&str>) -> String {
-    let band = |h: f64| if h > 0.0 { format!("{h:.1} in") } else { "none".into() };
-    format!(
-        "        zones  dense {}{:.1} pcf over x {:.0}..{:.0} in: bottom {}, top {}; light {:.1} pcf elsewhere",
+/// Inches as a mold mark: `60 1/8` when on a 1/16 in mark, else 3 decimals.
+pub fn inch(x: f64) -> String {
+    let s = (x * 16.0).round();
+    if (x * 16.0 - s).abs() > 1e-6 {
+        return format!("{x:.3}");
+    }
+    let (whole, mut num, mut den) = ((s / 16.0).floor() as i64, s.rem_euclid(16.0) as i64, 16);
+    while num > 0 && num % 2 == 0 {
+        (num, den) = (num / 2, den / 2);
+    }
+    match (whole, num) {
+        (w, 0) => w.to_string(),
+        (0, n) => format!("{n}/{den}"),
+        (w, n) => format!("{w} {n}/{den}"),
+    }
+}
+
+/// Most dense rectangles listed in the terminal (all are in result.json).
+const MAX_RECTS: usize = 6;
+
+/// The two-mix layout: a header, then one line per dense rectangle (x from the bow, z above
+/// the keel).
+pub fn zone_lines(z: &crate::section::ZoneLayout, dense_mix: Option<&str>) -> Vec<String> {
+    let mut out = vec![format!(
+        "        zones  dense {}{:.1} pcf in {} rectangle{}; light {:.1} pcf elsewhere",
         dense_mix.map_or(String::new(), |m| format!("mix {m} ")),
         z.dense_pcf,
-        z.x0_in,
-        z.x1_in,
-        band(z.bottom_in),
-        band(z.top_in),
+        z.dense.len(),
+        if z.dense.len() == 1 { "" } else { "s" },
         z.light_pcf
-    )
+    )];
+    for r in z.dense.iter().take(MAX_RECTS) {
+        out.push(format!(
+            "          x {} .. {} in, z {} .. {} in",
+            inch(r.x0_in),
+            inch(r.x1_in),
+            inch(r.z0_in),
+            inch(r.z1_in)
+        ));
+    }
+    if z.dense.len() > MAX_RECTS {
+        out.push(format!(
+            "          ... {} more (result.json winner.candidate.zones)",
+            z.dense.len() - MAX_RECTS
+        ));
+    }
+    out
+}
+
+/// What two mixes bought over the single-mix pick.
+pub fn saving_line(z: &crate::optimize::ZoneSearch, zoned_winner: bool, weight: f64) -> String {
+    match (z.single_mix_lb, zoned_winner) {
+        (None, _) => "        two mixes: no single-mix wall passes; this design needs both mixes".into(),
+        (Some(_), false) => {
+            "        two mixes: none lighter passes; the single-mix wall stands (saves 0 lb)".into()
+        }
+        (Some(s), true) => format!(
+            "        two mixes save {:.2} lb ({:.1}%) vs the single-mix pick {s:.2} lb",
+            s - weight,
+            100.0 * (s - weight) / s
+        ),
+    }
 }
 
 /// Pure summary text, one entry per output line, never more than `MAX_LINES`.
@@ -266,13 +315,12 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
     out.push(format!("candidates {n}  passed {passed}  errored {}", errs.len()));
     if let Some(z) = &r.zones {
         out.push(format!(
-            "  zones: {} two-mix walls; skipped {} not lighter, {} punching, {} freeboard/GM; checked {}{}",
+            "  zones: {} two-mix walls; skipped {} not lighter, {} punching; placed {}{}",
             z.walls,
             z.heavier,
             z.punching,
-            z.service,
             z.checked,
-            if z.capped { " (zones.max_checks reached, none passed)" } else { "" }
+            if z.capped { " (zones.max_checks reached: lighter ones left unplaced)" } else { "" }
         ));
     }
     if !errs.is_empty() {
@@ -331,7 +379,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 fmt_opt(v.map(|v| v.dc), 3),
                 fmt_opt(v.map(|v| v.freeboard_in), 2),
                 c.governing_case.as_deref().unwrap_or("-"),
-                c.zones.map_or(String::new(), |z| format!("  zoned, dense {:.1} pcf", z.dense_pcf))
+                c.zones.as_ref().map_or(String::new(), |z| format!("  zoned, dense {:.1} pcf", z.dense_pcf))
             ));
         }
         if frontier.len() > MAX_FRONTIER {
@@ -354,7 +402,10 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 c.thickness_in, c.depth_in, c.hull_weight_lb
             ));
             if let Some(z) = &c.zones {
-                out.push(zone_line(z, c.dense_mix.as_deref()));
+                out.extend(zone_lines(z, c.dense_mix.as_deref()));
+            }
+            if let Some(z) = &r.zones {
+                out.push(saving_line(z, c.zones.is_some(), c.hull_weight_lb));
             }
             out.push(format!(
                 "        D/C {}  freeboard {} in  governing {}",
@@ -831,6 +882,14 @@ mod tests {
         assert!(s.contains("shape fore_wp"));
         assert!(s.contains("L in"));
         assert!(l.len() <= MAX_LINES);
+    }
+
+    #[test]
+    fn inches_print_as_mold_marks() {
+        assert_eq!(
+            [inch(60.125), inch(0.5), inch(12.0), inch(1.75), inch(240.118)],
+            ["60 1/8", "1/2", "12", "1 3/4", "240.118"]
+        );
     }
 
     #[test]

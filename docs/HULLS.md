@@ -3,7 +3,7 @@
 | run file | hull | L x B (in) | t (in) | mix (pcf) | depth (in) | weight (lb) | GM (in) | governs |
 |---|---|---|---|---|---|---|---|---|
 | canoe.toml | off1 (real, Michlet import) | 240 x 20.7 | 0.375 | 58 | 12 | 98.4 | 0.26 | punching 0.90 |
-| canoe.toml with its `[zones]` block on | off1, two mixes: 58 pcf 2 in keel band over x 60..180 in | 240 x 20.7 | 0.375 | 51 / 58 | 12 | **89.2** | 0.26 | punching 0.90 |
+| canoe.toml with its `[zones]` block on | off1, two mixes: 62 pcf in 6 rectangles (knee pads + 1/2 in keel strip x 60..180 in) | 240 x 20.7 | 0.375 | 51 / 62 | 12 | **88.5** | 0.25 | punching 0.77 |
 | canoe_mixes.toml (tested mixes only) | off1 | 240 x 20.7 | 0.375 | "final target" 60 | 12 | 101.8 | 0.27 | punching 0.82 |
 | sleek.toml | sleek: racing, narrow | 240 x 19 | NO DESIGN | | | | best -1.56 | stability |
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 11 | 109.3 | 8.7 | punching 0.90 |
@@ -31,10 +31,12 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
   a long hull, 12 lb heavier than the weight pick but faster: weighted race time 99.9 s vs
   105.6 s for the weight pick and 100.6 s for off1 (`jaguar race`, ASCE figure courses in `races/`). Length cuts wave drag more than
   the extra wall costs. Re-check once paddler power is calibrated and the crews are real.
-* Two mixes (`[zones]`): punching only needs the strong mix under the knees, so a 58 pcf band
-  2 in up from the keel over x 60..180 in (both knees on it at +/- 3 in) with 51 pcf everywhere
-  else passes at 89.2 lb, 9% lighter than one 58 pcf mix. The light mix sits at the low end of the
-  lab data (51 pcf, +4 pcf extrapolation): lighter tested mixes would cut more.
+* Two mixes (`[zones]`): punching only needs the strong mix under the knees. 62 pcf pads under
+  each knee footprint (x about 73..88 and 155..165 in, up to 1 3/4 in above the keel, covering the
+  +/- 3 in seat range) and a 1/2 in keel strip from x 60 to 180 in (it lifts GM to the 0.25 in
+  gate; the lighter wall alone is at 0.24) with 51 pcf everywhere else: 88.5 lb, 9.9 lb (10%)
+  lighter than the single-mix pick. The light mix sits at the low end of the lab data (51 pcf,
+  +4 pcf extrapolation): lighter tested mixes would cut more.
 * With `strength_model = "tested_mixes"` only real mixes are allowed. M2 (55.6 pcf) is too weak in
   punching, so the 60 pcf "final target" mix wins.
 

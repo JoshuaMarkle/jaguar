@@ -50,24 +50,26 @@ pub struct Params {
     pub zones: Option<Zones>,
 }
 
-/// Two-mix zone axes (docs/SPEC.md). Each is an inclusive `[min, max, step]` range, inches
-/// along the hull from the bow (x) or up from the keel (z). The light mix is `search.density_pcf`.
+/// Two-mix walls (docs/SPEC.md): the light mix is `search.density_pcf`; the dense mix is placed
+/// where the checks need it, as side-view rectangles with edges on multiples of `increment_in`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Zones {
-    /// Dense mix densities, pcf (fit mode: clipped to the mix data like search.density_pcf;
-    /// tested_mixes: the tested mixes inside [min, max]). Only ones heavier than the light mix.
+    /// Dense mix densities [min, max, step], pcf (fit mode: clipped to the mix data like
+    /// search.density_pcf; tested_mixes: the tested mixes inside [min, max]). Only ones heavier
+    /// than the light mix are paired with it.
     pub dense_pcf: [f64; 3],
-    /// Where the dense span starts and ends, in from the bow (start < end).
-    pub start_in: [f64; 3],
-    pub end_in: [f64; 3],
-    /// Height of the dense bottom band above the keel and depth of the top band below the
-    /// gunwale, in (0 = no band; not both 0).
-    pub bottom_in: [f64; 3],
-    pub top_in: [f64; 3],
-    /// Most zoned walls fully checked, lightest first (the search stops at the first pass).
+    /// Rectangle edges are multiples of this, in, so they can be measured on the mold.
+    /// Default 1/8 in.
+    #[serde(default = "default_increment")]
+    pub increment_in: f64,
+    /// Most (wall, light, dense) combinations placed, lightest first.
     #[serde(default = "default_max_checks")]
     pub max_checks: usize,
+}
+
+fn default_increment() -> f64 {
+    0.125
 }
 
 fn default_max_checks() -> usize {
@@ -934,24 +936,12 @@ impl Params {
             r.validate()?;
         }
         if let Some(z) = &self.zones {
-            for (name, [lo, hi, st], min) in [
-                ("dense_pcf", z.dense_pcf, f64::MIN_POSITIVE),
-                ("start_in", z.start_in, 0.0),
-                ("end_in", z.end_in, 0.0),
-                ("bottom_in", z.bottom_in, 0.0),
-                ("top_in", z.top_in, 0.0),
-            ] {
-                if !(lo.is_finite() && hi.is_finite() && lo >= min && hi >= lo && st > 0.0) {
-                    bail!(
-                        "zones.{name} must be [min >= {min}, max >= min, step > 0], got [{lo}, {hi}, {st}]"
-                    );
-                }
+            let [lo, hi, st] = z.dense_pcf;
+            if !(lo.is_finite() && hi.is_finite() && lo > 0.0 && hi >= lo && st > 0.0) {
+                bail!("zones.dense_pcf must be [min > 0, max >= min, step > 0], got [{lo}, {hi}, {st}]");
             }
-            if z.start_in[0] >= z.end_in[1] {
-                bail!("zones: start_in must be able to lie before end_in");
-            }
-            if z.bottom_in[1] <= 0.0 && z.top_in[1] <= 0.0 {
-                bail!("zones: bottom_in or top_in must allow a band > 0");
+            if !(z.increment_in.is_finite() && z.increment_in > 0.0 && z.increment_in <= 6.0) {
+                bail!("zones.increment_in must be in (0, 6] in, got {}", z.increment_in);
             }
             if z.max_checks < 1 {
                 bail!("zones.max_checks must be >= 1");

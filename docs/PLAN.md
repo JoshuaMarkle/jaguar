@@ -80,10 +80,11 @@ tips (overhang, longer LOA).
 T70 (`jaguar import-mesh`, web "Import CAD mesh"): CAD canoes as STL / OBJ, analysed as drawn.
 STEP is not read directly (it needs a CAD kernel: export STL from the CAD instead).
 
-T71 (`[zones]`, web "Two-mix zones" + "Mix zones" side view): two mixes, dense bottom and top
-flanges over the middle, light web and ends (re-requested 2026-10-14 after the 2026-10-13 decline).
-Open: more than two mixes; the team's real pour limits (minimum band height, span ends at
-bulkheads); a lab check of the dense/light bond line.
+T71/T72 (`[zones]`, web "Two-mix zones" + "Mix zones" side view): two mixes; the dense mix is
+placed where checks need it as side-view rectangles on `increment_in` marks (T72, 2026-10-14:
+"mix densities can go anywhere ... rectangular segments ... nearest 1/8 in"), with the saving
+against single mix reported. Open: more than two mixes; the team's real pour limits (smallest
+rectangle, fewest rectangles); a lab check of the dense/light bond line.
 
 ## Team task list: status
 
@@ -109,7 +110,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Auto seat solver + variance, manual override | done (T57, `[seats]`) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
-| Multi-mix zones, I-beam middle, light ends; multi-pour graph | done for 2 mixes (T71 `[zones]`, web Mix zones tab) |
+| Multi-mix zones, I-beam middle, light ends; multi-pour graph | done for 2 mixes (T71/T72 `[zones]`, rectangles anywhere, web Mix zones tab) |
 | Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective, T63 web tab) |
 | LRFD factors as inputs (1.2 / 1.6 blanks) | done (T64: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`) |
 

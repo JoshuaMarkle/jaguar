@@ -57,29 +57,88 @@ pub fn sections(grid: &Grid, t: f64) -> Sections {
     Sections { area, zbar, inertia }
 }
 
-/// Two-mix zones (an I-beam over the middle, docs/SPEC.md): over `x0_in..x1_in` a dense
-/// bottom flange (wall at z <= `bottom_in` above the table keel z = 0) and a dense top flange
-/// (z >= depth - `top_in`); the web between them and everything outside the span is light.
-/// Boundaries are vertical and horizontal lines only. `bottom_in` / `top_in` = 0: no flange.
+/// A side-view rectangle of dense mix: x from the bow, z above the table keel (z = 0), in.
+/// It covers the whole girth between those heights, both sides.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Rect {
+    pub x0_in: f64,
+    pub x1_in: f64,
+    pub z0_in: f64,
+    pub z1_in: f64,
+}
+
+impl Rect {
+    pub fn has_x(&self, x: f64) -> bool {
+        x >= self.x0_in - 1e-9 && x <= self.x1_in + 1e-9
+    }
+}
+
+/// Two-mix wall (docs/SPEC.md): the dense mix inside the side-view rectangles `dense`
+/// (non-overlapping), the light mix everywhere else.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ZoneLayout {
     pub light_pcf: f64,
     pub dense_pcf: f64,
-    pub x0_in: f64,
-    pub x1_in: f64,
-    pub bottom_in: f64,
-    pub top_in: f64,
+    pub dense: Vec<Rect>,
 }
 
 impl ZoneLayout {
-    pub fn spans(&self, x: f64) -> bool {
-        x >= self.x0_in - 1e-9 && x <= self.x1_in + 1e-9
+    /// Is the wall at (x, z) dense?
+    pub fn dense_at(&self, x: f64, z: f64) -> bool {
+        self.dense.iter().any(|r| r.has_x(x) && z >= r.z0_in - 1e-12 && z <= r.z1_in + 1e-12)
     }
-    /// Is the wall at (x, z) dense, on a mold of depth `depth`?
-    pub fn dense_at(&self, x: f64, z: f64, depth: f64) -> bool {
-        self.spans(x)
-            && (z <= self.bottom_in + 1e-12 || (self.top_in > 0.0 && z >= depth - self.top_in - 1e-12))
+    /// Is the whole of x, z0..z1 dense?
+    pub fn covers(&self, x: f64, z0: f64, z1: f64) -> bool {
+        let mut iv: Vec<(f64, f64)> =
+            self.dense.iter().filter(|r| r.has_x(x)).map(|r| (r.z0_in, r.z1_in)).collect();
+        iv.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut reach = z0;
+        for (a, b) in iv {
+            if a > reach + 1e-9 {
+                break;
+            }
+            reach = reach.max(b);
+        }
+        reach >= z1 - 1e-9
     }
+}
+
+/// An x slice (x0, x1) and its dense z-intervals.
+type Slice = (f64, f64, Vec<(f64, f64)>);
+
+/// `rects` as non-overlapping rectangles covering the same union: cut at every x edge, take
+/// the z-union in each slice, and join neighbouring slices with the same z-intervals.
+pub fn normalize(rects: &[Rect]) -> Vec<Rect> {
+    let mut xs: Vec<f64> = rects.iter().flat_map(|r| [r.x0_in, r.x1_in]).collect();
+    xs.sort_by(f64::total_cmp);
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    // (x0, x1, z-intervals) per slice
+    let mut slices: Vec<Slice> = Vec::new();
+    for w in xs.windows(2) {
+        let xm = 0.5 * (w[0] + w[1]);
+        let mut iv: Vec<(f64, f64)> =
+            rects.iter().filter(|r| r.x0_in < xm && r.x1_in > xm).map(|r| (r.z0_in, r.z1_in)).collect();
+        iv.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        let mut u: Vec<(f64, f64)> = Vec::new();
+        for (a, b) in iv {
+            match u.last_mut() {
+                Some(l) if a <= l.1 + 1e-9 => l.1 = l.1.max(b),
+                _ => u.push((a, b)),
+            }
+        }
+        match slices.last_mut() {
+            Some(l) if (l.1 - w[0]).abs() < 1e-9 && l.2 == u => l.1 = w[1],
+            _ => slices.push((w[0], w[1], u)),
+        }
+    }
+    let mut out: Vec<Rect> = slices
+        .into_iter()
+        .flat_map(|(x0, x1, u)| {
+            u.into_iter().map(move |(z0, z1)| Rect { x0_in: x0, x1_in: x1, z0_in: z0, z1_in: z1 })
+        })
+        .collect();
+    out.sort_by(|a, b| a.x0_in.total_cmp(&b.x0_in).then(a.z0_in.total_cmp(&b.z0_in)));
+    out
 }
 
 /// Section of a zoned wall per station, with the light mix as the reference material.
@@ -111,12 +170,12 @@ struct Piece {
 
 /// Wall pieces of station `i`: the keel strip and each girth segment, cut at the zone lines.
 fn pieces(grid: &Grid, i: usize, t: f64, zl: &ZoneLayout) -> Vec<Piece> {
-    let (y, z, x, d) = (grid.row(i), &grid.z, grid.x[i], grid.depth);
+    let (y, z, x) = (grid.row(i), &grid.z, grid.x[i]);
     let mut out = Vec::new();
     if y[0] > 0.0 {
-        out.push(Piece { a: 2.0 * y[0] * t, lo: z[0], hi: z[0], dense: zl.dense_at(x, z[0], d) });
+        out.push(Piece { a: 2.0 * y[0] * t, lo: z[0], hi: z[0], dense: zl.dense_at(x, z[0]) });
     }
-    let cuts = [zl.bottom_in, d - zl.top_in];
+    let cuts: Vec<f64> = zl.dense.iter().filter(|r| r.has_x(x)).flat_map(|r| [r.z0_in, r.z1_in]).collect();
     for k in 0..z.len() - 1 {
         let len = segment_len(y, z, k);
         if len <= 0.0 {
@@ -124,15 +183,13 @@ fn pieces(grid: &Grid, i: usize, t: f64, zl: &ZoneLayout) -> Vec<Piece> {
         }
         let (z0, z1) = (z[k], z[k + 1]);
         let mut b: Vec<f64> = vec![z0];
-        if zl.spans(x) {
-            b.extend(cuts.iter().copied().filter(|c| *c > z0 && *c < z1));
-        }
+        b.extend(cuts.iter().copied().filter(|c| *c > z0 && *c < z1));
         b.push(z1);
         b.sort_by(f64::total_cmp);
         for w in b.windows(2) {
             let (lo, hi) = (w[0], w[1]);
             let a = 2.0 * t * len * (hi - lo) / (z1 - z0);
-            out.push(Piece { a, lo, hi, dense: zl.dense_at(x, 0.5 * (lo + hi), d) });
+            out.push(Piece { a, lo, hi, dense: zl.dense_at(x, 0.5 * (lo + hi)) });
         }
     }
     out
@@ -181,7 +238,7 @@ pub fn zoned_sections(grid: &Grid, t: f64, zl: &ZoneLayout, n: f64) -> ZonedSec 
                 }
             })
             .sum();
-        s.dense_at_na[i] = zl.dense_at(grid.x[i], zb, grid.depth);
+        s.dense_at_na[i] = zl.dense_at(grid.x[i], zb);
         for q in &p {
             let slot = if q.dense { &mut s.dense_z[i] } else { &mut s.light_z[i] };
             *slot = Some(slot.map_or((q.lo, q.hi), |(a, b)| (a.min(q.lo), b.max(q.hi))));
@@ -212,6 +269,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_makes_disjoint_rectangles_of_the_same_union() {
+        let r = |x0, x1, z0, z1| Rect { x0_in: x0, x1_in: x1, z0_in: z0, z1_in: z1 };
+        // Two overlapping knee patches and a band under them.
+        let n = normalize(&[r(10.0, 20.0, 0.0, 2.0), r(15.0, 30.0, 0.0, 2.0), r(0.0, 40.0, 0.0, 1.0)]);
+        assert_eq!(n, vec![r(0.0, 10.0, 0.0, 1.0), r(10.0, 30.0, 0.0, 2.0), r(30.0, 40.0, 0.0, 1.0)]);
+        let zl = ZoneLayout { light_pcf: 50.0, dense_pcf: 60.0, dense: n };
+        assert!(zl.covers(12.0, 0.0, 2.0) && !zl.covers(5.0, 0.0, 2.0) && zl.covers(5.0, 0.0, 1.0));
+        assert!(zl.dense_at(35.0, 0.5) && !zl.dense_at(35.0, 1.5) && !zl.dense_at(41.0, 0.5));
+    }
+
+    #[test]
     fn zoned_with_equal_mixes_is_the_plain_section() {
         let h = crate::hull::Hull::load(std::path::Path::new("tests/golden/off1_hull.json")).unwrap();
         let g = Grid::build(&h, 12.0, 61);
@@ -219,10 +287,10 @@ mod tests {
         let zl = ZoneLayout {
             light_pcf: 58.0,
             dense_pcf: 58.0,
-            x0_in: 60.0,
-            x1_in: 180.0,
-            bottom_in: 2.0,
-            top_in: 1.5,
+            dense: vec![
+                Rect { x0_in: 60.0, x1_in: 180.0, z0_in: 0.0, z1_in: 2.0 },
+                Rect { x0_in: 90.0, x1_in: 120.0, z0_in: 5.0, z1_in: 12.0 },
+            ],
         };
         let z = zoned_sections(&g, 0.375, &zl, 1.0);
         for i in 0..g.nx() {
@@ -244,10 +312,10 @@ mod tests {
         let zl = ZoneLayout {
             light_pcf: 50.0,
             dense_pcf: 75.0,
-            x0_in: 25.0,
-            x1_in: 75.0,
-            bottom_in: 2.0,
-            top_in: 2.0,
+            dense: vec![
+                Rect { x0_in: 25.0, x1_in: 75.0, z0_in: 0.0, z1_in: 2.0 },
+                Rect { x0_in: 25.0, x1_in: 75.0, z0_in: 8.0, z1_in: 10.0 },
+            ],
         };
         let s = zoned_sections(&g, t, &zl, n);
         // Strips: bottom plate (z = 0, area 12 t, dense) + two walls of 1e5 strips each.

@@ -25,7 +25,9 @@ use crate::mix::{MixProvenance, StrengthFit};
 use crate::params::{LoadCase, ObjectiveKind, Params, StrengthModel, range};
 use crate::resistance::{resistance, weighted_resistance};
 use crate::seats::{self, CaseSeats, SeatSource};
-use crate::section::{Sections, ZoneLayout, ZonedSec, modulus_psi, sections, zoned_sections};
+use crate::section::{
+    Rect, Sections, ZoneLayout, ZonedSec, modulus_psi, normalize, sections, zoned_sections,
+};
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -699,18 +701,6 @@ pub fn search_space(params: &Params, fit: &StrengthFit, c: &Candidate) -> Result
         let ds: Vec<f64> = dense_axis(params, fit)?.iter().map(|a| a.0).collect();
         let tested = params.material.strength_model == StrengthModel::TestedMixes;
         out.push(axis("zones.dense_pcf", &ds, (!tested).then_some(z.dense_pcf[2]), zl.dense_pcf));
-        for (name, r, x) in [
-            ("zones.start_in", z.start_in, zl.x0_in),
-            ("zones.end_in", z.end_in, zl.x1_in),
-            ("zones.bottom_in", z.bottom_in, zl.bottom_in),
-            ("zones.top_in", z.top_in, zl.top_in),
-        ] {
-            let mut a = axis(name, &range(r), Some(r[2]), x);
-            if x == 0.0 {
-                a.limit = a.at_bound.map(|_| "no band");
-            }
-            out.push(a);
-        }
     }
     if let (Some(ss), Some(sh)) = (&params.shape_search, &c.shape) {
         let w = [
@@ -779,19 +769,22 @@ pub struct RunResult {
 /// The two-mix search's bookkeeping (`zoned_search`).
 #[derive(Debug, Clone, Serialize)]
 pub struct ZoneSearch {
-    /// Zoned walls enumerated: layouts x light x heavier dense mixes x (wall, depth, flare).
+    /// (wall, depth, flare, light mix, heavier dense mix) combinations.
     pub walls: usize,
-    /// Skipped: not lighter than the lightest passing single-mix wall.
+    /// Skipped: its all-light weight is not below the lightest pass found so far.
     pub heavier: usize,
-    /// Skipped: knee punching over gates.dc_search (closed form, same as the full check).
+    /// Skipped: knee punching fails even in the dense mix, or a knee footprint is wider than
+    /// the hull.
     pub punching: usize,
-    /// Skipped: freeboard or GM under the gate at the nominal seats (one service float per
-    /// case, the first thing the full check computes).
-    pub service: usize,
-    /// Fully checked, lightest first; the search stops after the batch with the first pass.
+    /// Placed (`max_checks` counts these), lightest first.
     pub checked: usize,
-    /// `max_checks` was reached before a zoned wall passed.
+    /// `max_checks` was reached with lighter combinations left.
     pub capped: bool,
+    /// Weight of the single-mix pick (the winner had there been no `[zones]`); None = no
+    /// single-mix wall passes.
+    pub single_mix_lb: Option<f64>,
+    /// single_mix_lb - winner weight (0 when the winner is single-mix). None without both.
+    pub saved_lb: Option<f64>,
 }
 
 pub const RESULT_FORMAT: &str = "jaguar-result/1";
@@ -978,6 +971,9 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
 
     let mut zone_stats = None;
     let dense = dense_axis(params, &fit)?;
+    let single =
+        candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
+    let single_mix_lb = single.map(|c| c.hull_weight_lb);
     if let Some(z) = &params.zones {
         let lightest = candidates.iter().filter(|c| c.passes).map(|c| c.hull_weight_lb).reduce(f64::min);
         let space = ZoneSpace {
@@ -992,7 +988,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         let (zc, stats) =
             zoned_search(params, z, &space, &unbuildable, lightest, (&done, total), on_progress);
         candidates.extend(zc);
-        zone_stats = Some(stats);
+        zone_stats = Some(ZoneSearch { single_mix_lb, ..stats });
     }
 
     let best = candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
@@ -1014,8 +1010,10 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                         .ok_or_else(|| anyhow::anyhow!("winner dense mix not on the zones axis"))?;
                     let fits = [axis[ri].1.clone(), dense[di].1.clone()];
                     let seats = plans[pi].as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
-                    let (t, zl) = (c.thickness_in, *zl);
-                    Some(Box::new(move |g: &Grid| ZonedWall::new(params, g, t, zl, fits.clone(), seats)))
+                    let (t, zl) = (c.thickness_in, zl.clone());
+                    Some(Box::new(move |g: &Grid| {
+                        ZonedWall::new(params, g, t, zl.clone(), fits.clone(), seats)
+                    }))
                 }
             };
             Some(finish_winner(
@@ -1031,6 +1029,9 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         }
     };
 
+    if let (Some(st), Some(w)) = (&mut zone_stats, &winner) {
+        st.saved_lb = st.single_mix_lb.map(|s| s - w.candidate.hull_weight_lb);
+    }
     let winner_hull = winner.as_ref().map(|_| hull.clone());
     Ok(RunResult {
         format: RESULT_FORMAT,
@@ -1044,7 +1045,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     })
 }
 
-/// The wall search grid `zoned_search` enumerates zone layouts over.
+/// The wall search grid `zoned_search` places zones on.
 struct ZoneSpace<'a> {
     axis: &'a [(f64, StrengthFit, Option<String>)],
     dense: &'a [(f64, StrengthFit, Option<String>)],
@@ -1055,13 +1056,12 @@ struct ZoneSpace<'a> {
     plans: &'a [Result<Vec<CaseSeats>, String>],
 }
 
-/// One zoned wall to check: wall pair, light and dense mix index, layout, weight.
+/// One combination to place: wall pair, light and dense mix index, all-light weight.
 struct ZoneTry {
     pi: usize,
     ri: usize,
     di: usize,
-    zl: ZoneLayout,
-    weight: f64,
+    light_lb: f64,
 }
 
 /// Knee punching D/C of a `t` wall of mix `rho` under the heaviest paddler (every case), as
@@ -1082,39 +1082,183 @@ fn punching_dc(params: &Params, fit: &StrengthFit, rho: f64, t: f64) -> f64 {
     pc.v_u / (pc.v_nominal * kp)
 }
 
-/// Does zoned wall `tr` float every load case at its nominal seats (service loads) with the
-/// freeboard and GM gates met? The full check starts with exactly these floats, so a false
-/// here is a certain fail. An analysis error is left for the full check to report.
-fn service_gates(params: &Params, sp: &ZoneSpace, tr: &ZoneTry) -> bool {
-    let (gi, ti) = sp.pairs[tr.pi];
-    let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
-    let Ok(plan) = &sp.plans[tr.pi] else { return true };
-    let n = modulus_psi(tr.zl.dense_pcf, sp.dense[tr.di].1.fc_psi(tr.zl.dense_pcf))
-        / modulus_psi(tr.zl.light_pcf, sp.axis[tr.ri].1.fc_psi(tr.zl.light_pcf));
-    let zs = zoned_sections(grid, t, &tr.zl, n);
-    let mat = &params.material;
-    let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
-    params.load_cases.iter().zip(plan).all(|(case, seats)| {
-        let crew: Vec<CrewLoad> = seats
-            .seats_in
-            .iter()
-            .zip(&case.weights_lb)
-            .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor })
-            .collect();
-        match solve_weights(grid, &zs.weight, &zs.zg, &crew, patch, cg) {
-            Ok(l) => {
-                freeboard(grid, &l) >= params.gates.freeboard_min_in && l.gm_in >= params.stability.gm_min_in
-            }
-            Err(_) => true,
-        }
-    })
+/// Snap `x` down / up to a multiple of `inc` (a measurable mark), with float slack.
+fn snap_down(x: f64, inc: f64) -> f64 {
+    (x / inc + 1e-9).floor() * inc
+}
+fn snap_up(x: f64, inc: f64) -> f64 {
+    (x / inc - 1e-9).ceil() * inc
 }
 
-/// Two-mix search over `[zones]`: every layout (span start/end, bottom/top band) on every
-/// (wall, depth, flare) with resolved seats, every light mix and every heavier dense mix.
-/// Walls not lighter than `lightest` (the best single-mix pass) or failing knee punching are
-/// skipped; the rest are fully checked lightest first, in fixed batches (deterministic), until
-/// a batch has a pass or `max_checks` are done. Seats are the single-mix plan of the same wall.
+/// Dense rectangles a failing check asks for: at every station (any case, seat sample and load
+/// combination) where bending tension, compression, biaxial or shear is over `gate` in the light
+/// mix, the light wall at that fibre (bending: `step` in from the extreme fibre; shear: `step`
+/// around the neutral axis), one station wide, edges snapped outward to `inc`. A check failing
+/// in the dense mix asks for nothing (more dense does not fix it).
+#[allow(clippy::too_many_arguments)]
+fn station_needs(
+    params: &Params,
+    grid: &Grid,
+    sec: &Sections,
+    zw: &ZonedWall,
+    plan: &[CaseSeats],
+    t: f64,
+    inc: f64,
+    gate: f64,
+) -> Vec<Rect> {
+    let mat = &params.material;
+    let (k, _) = crate::check::capacity_factors(mat, &params.punching);
+    let caps = [
+        crate::check::MixCaps::of(&zw.fits[0], zw.zl.light_pcf, k),
+        crate::check::MixCaps::of(&zw.fits[1], zw.zl.dense_pcf, k),
+    ];
+    let step = snap_up(0.5, inc).max(inc);
+    let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
+    let wall = Wall::Zoned(zw);
+    let (xs, n) = (&grid.x, grid.nx());
+    let mut need: Vec<Rect> = Vec::new();
+    let over = |(d, c): (f64, f64)| !(c.is_finite() && c > 0.0) || d / c > gate;
+    for (case, seats) in params.load_cases.iter().zip(plan) {
+        for sample in seats::samples(&seats.seats_in, params.seats.variance_in, grid) {
+            for (dead, live) in mat.combos() {
+                let crew: Vec<CrewLoad> = sample
+                    .iter()
+                    .zip(&case.weights_lb)
+                    .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor * live })
+                    .collect();
+                let Ok(loads) = wall.solve(grid, sec, dead, &crew, patch, cg) else { continue };
+                for (i, st) in
+                    crate::check::zoned_stations(grid, &zw.zs, &loads, zw.n, caps, t, params.turning.as_ref())
+                        .into_iter()
+                        .enumerate()
+                {
+                    if st.masked {
+                        continue;
+                    }
+                    let zb = zw.zs.zbar[i];
+                    let mut zr: Vec<(f64, f64)> = Vec::new();
+                    let fibre = |(z, _): (f64, bool)| if z <= zb { (z, z + step) } else { (z - step, z) };
+                    for (fails, at) in [
+                        (over(st.tension), st.tension_at),
+                        (over(st.compression), st.compression_at),
+                        (st.biaxial.is_nan() || st.biaxial > gate, st.biaxial_at),
+                    ] {
+                        if fails && !at.1 {
+                            zr.push(fibre(at));
+                        }
+                    }
+                    if over(st.shear) && !zw.zs.dense_at_na[i] {
+                        zr.push((zb - 0.5 * step, zb + 0.5 * step));
+                    }
+                    let x0 = if i == 0 { xs[0] } else { 0.5 * (xs[i - 1] + xs[i]) };
+                    let x1 = if i + 1 == n { xs[n - 1] } else { 0.5 * (xs[i] + xs[i + 1]) };
+                    for (z0, z1) in zr {
+                        need.push(Rect {
+                            x0_in: snap_down(x0, inc).max(xs[0]),
+                            x1_in: snap_up(x1, inc).min(xs[n - 1]),
+                            z0_in: snap_down(z0, inc).max(0.0),
+                            z1_in: snap_up(z1, inc).min(grid.depth),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    need
+}
+
+/// Place the dense mix for one combination: start all light; if the light mix fails knee
+/// punching, make every knee footprint dense; then, while the wall fails a D/C check that more
+/// dense can fix (`station_needs`), add those rectangles; while only GM is short, add a keel
+/// strip (dense concrete lowest in the hull lowers G most): z 0..h centred on midships, 24 in
+/// longer each round, and once it spans the hull, h one step higher. Returns the final candidate (passing
+/// or failing with its reason); None when the all-light wall already passes (that is the
+/// single-mix candidate) or punching cannot pass.
+fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &ZoneTry) -> Option<Candidate> {
+    const MAX_ROUNDS: usize = 80;
+    const GROW_IN: f64 = 24.0;
+    let (gi, ti) = sp.pairs[tr.pi];
+    let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
+    let plan = &sp.plans[tr.pi];
+    let seats = plan.as_ref().ok()?;
+    let (light, dense) = (&sp.axis[tr.ri], &sp.dense[tr.di]);
+    let (gate, inc) = (params.gates.dc_search, z.increment_in);
+    let sec = sections(grid, t);
+    let mut rects: Vec<Rect> = Vec::new();
+    if punching_dc(params, &light.1, light.0, t) > gate {
+        rects = knee_regions(params, grid, t, seats)?
+            .into_iter()
+            .map(|r| Rect {
+                x0_in: snap_down(r.x0_in, inc).max(grid.x[0]),
+                x1_in: snap_up(r.x1_in, inc).min(grid.x[grid.nx() - 1]),
+                z0_in: 0.0,
+                // One increment of margin so the footprint stays covered on a finer grid.
+                z1_in: (snap_up(r.z1_in, inc) + inc).min(grid.depth),
+            })
+            .collect();
+    }
+    let (xa, xb) = (grid.x[0], grid.x[grid.nx() - 1]);
+    let step = snap_up(0.5, inc).max(inc);
+    // keel strip: (rounds of growth, height)
+    let (mut grow, mut h) = (0usize, step);
+    let mut last: Option<Candidate> = None;
+    for _ in 0..MAX_ROUNDS {
+        let zl = ZoneLayout { light_pcf: light.0, dense_pcf: dense.0, dense: normalize(&rects) };
+        let empty = zl.dense.is_empty();
+        let zw = ZonedWall::new(params, grid, t, zl, [light.1.clone(), dense.1.clone()], seats);
+        let mut c = evaluate_wall(params, &light.1, grid, &sec, t, Wall::Zoned(&zw), plan, true);
+        c.mix = light.2.clone();
+        c.dense_mix = dense.2.clone();
+        c.flare_deg = sp.geoms[gi].1;
+        if c.passes && empty {
+            return None;
+        }
+        let fb_ok = c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= params.gates.freeboard_min_in);
+        let dc_over = c.verdict.as_ref().is_some_and(|v| v.dc > gate);
+        let gm_short = c.gm_in.is_some_and(|g| g < params.stability.gm_min_in);
+        let need = if c.passes || c.error.is_some() || !fb_ok {
+            Vec::new()
+        } else if dc_over {
+            if c.verdict.as_ref().is_some_and(|v| v.governing_check == "punching") {
+                Vec::new()
+            } else {
+                station_needs(params, grid, &sec, &zw, seats, t, inc, gate)
+            }
+        } else if gm_short && h <= 0.5 * grid.depth {
+            grow += 1;
+            let half = GROW_IN * grow as f64 / 2.0;
+            let mid = 0.5 * (xa + xb);
+            if mid - half <= xa && mid + half >= xb {
+                (grow, h) = (0, h + step);
+            }
+            vec![Rect {
+                x0_in: snap_down(mid - half, inc).max(xa),
+                x1_in: snap_up(mid + half, inc).min(xb),
+                z0_in: 0.0,
+                z1_in: h.min(grid.depth),
+            }]
+        } else {
+            Vec::new()
+        };
+        if need.is_empty() {
+            return if empty { None } else { Some(c) };
+        }
+        let before = normalize(&rects);
+        rects.extend(need);
+        rects = normalize(&rects);
+        last = Some(c);
+        if rects == before {
+            break;
+        }
+    }
+    last.filter(|c| c.zones.as_ref().is_some_and(|z| !z.dense.is_empty()))
+}
+
+/// Two-mix search over `[zones]`: every (wall, depth, flare) with resolved seats x light mix x
+/// heavier dense mix, placed by [`place_zones`], lightest all-light weight first in fixed
+/// batches (deterministic). A combination whose all-light weight is not below the lightest pass
+/// so far (single-mix or zoned) cannot win and is not placed; the search ends there or after
+/// `max_checks` placements.
 fn zoned_search(
     params: &Params,
     z: &crate::params::Zones,
@@ -1125,131 +1269,76 @@ fn zoned_search(
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> (Vec<Candidate>, ZoneSearch) {
     const BATCH: usize = 32;
-    let mut layouts = Vec::new();
-    for x0 in range(z.start_in) {
-        for x1 in range(z.end_in).into_iter().filter(|&x1| x1 > x0) {
-            for b in range(z.bottom_in) {
-                for tp in range(z.top_in).into_iter().filter(|&tp| b > 0.0 || tp > 0.0) {
-                    layouts.push((x0, x1, b, tp));
+    let gate = params.gates.dc_search;
+    let mut stats = ZoneSearch {
+        walls: 0,
+        heavier: 0,
+        punching: 0,
+        checked: 0,
+        capped: false,
+        single_mix_lb: None,
+        saved_lb: None,
+    };
+    let mut tries = Vec::new();
+    for (pi, &(gi, ti)) in sp.pairs.iter().enumerate() {
+        if unbuildable[gi].is_some() || sp.plans[pi].is_err() {
+            continue;
+        }
+        let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
+        let light_v = hull_weight(grid, &sections(grid, t), 1.0);
+        for (ri, l) in sp.axis.iter().enumerate() {
+            for (di, d) in sp.dense.iter().enumerate().filter(|(_, d)| d.0 > l.0) {
+                stats.walls += 1;
+                if punching_dc(params, &l.1, l.0, t) > gate && punching_dc(params, &d.1, d.0, t) > gate {
+                    stats.punching += 1;
+                    continue;
                 }
+                tries.push(ZoneTry { pi, ri, di, light_lb: light_v * l.0 });
             }
         }
     }
-    let gate = params.gates.dc_search;
-    let per_pair: Vec<(Vec<ZoneTry>, usize, usize, usize)> = (0..sp.pairs.len())
-        .into_par_iter()
-        .map(|pi| {
-            let (gi, ti) = sp.pairs[pi];
-            let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
-            let (mut tries, mut walls, mut heavier, mut punch) = (Vec::new(), 0, 0, 0);
-            let Ok(seats) = &sp.plans[pi] else { return (tries, 0, 0, 0) };
-            if unbuildable[gi].is_some() {
-                return (tries, 0, 0, 0);
-            }
-            let sec = sections(grid, t);
-            let vol: f64 = grid
-                .x
-                .windows(2)
-                .zip(sec.area.windows(2))
-                .map(|(x, a)| 0.5 * (a[0] + a[1]) * (x[1] - x[0]))
-                .sum();
-            let pl: Vec<f64> = sp.axis.iter().map(|a| punching_dc(params, &a.1, a.0, t)).collect();
-            let pd: Vec<f64> = sp.dense.iter().map(|a| punching_dc(params, &a.1, a.0, t)).collect();
-            for &(x0, x1, b, tp) in &layouts {
-                // Volumes of each mix: light weighs 1, dense 0.
-                let unit = ZoneLayout {
-                    light_pcf: 1.0,
-                    dense_pcf: 0.0,
-                    x0_in: x0,
-                    x1_in: x1,
-                    bottom_in: b,
-                    top_in: tp,
-                };
-                let zs = zoned_sections(grid, t, &unit, 1.0);
-                let light_v: f64 = grid
-                    .x
-                    .windows(2)
-                    .zip(zs.weight.windows(2))
-                    .map(|(x, w)| 0.5 * (w[0] + w[1]) * (x[1] - x[0]))
-                    .sum::<f64>()
-                    * 1728.0;
-                let dense_v = vol - light_v;
-                if dense_v <= 1e-9 * vol {
-                    continue; // the bands hold no wall here
-                }
-                let knee_dense = knees_on_flange(
-                    params,
-                    grid,
-                    t,
-                    &ZoneLayout { light_pcf: 1.0, dense_pcf: 2.0, ..unit },
-                    seats,
-                );
-                for (ri, l) in sp.axis.iter().enumerate() {
-                    for (di, d) in sp.dense.iter().enumerate().filter(|(_, d)| d.0 > l.0) {
-                        walls += 1;
-                        let weight = (l.0 * light_v + d.0 * dense_v) / 1728.0;
-                        if lightest.is_some_and(|w| weight >= w) {
-                            heavier += 1;
-                            continue;
-                        }
-                        if (if knee_dense { pd[di] } else { pl[ri] }) > gate {
-                            punch += 1;
-                            continue;
-                        }
-                        let zl = ZoneLayout { light_pcf: l.0, dense_pcf: d.0, ..unit };
-                        tries.push(ZoneTry { pi, ri, di, zl, weight });
-                    }
-                }
-            }
-            (tries, walls, heavier, punch)
-        })
-        .collect();
-    let mut stats = ZoneSearch { walls: 0, heavier: 0, punching: 0, service: 0, checked: 0, capped: false };
-    let mut tries = Vec::new();
-    for (t, w, h, p) in per_pair {
-        tries.extend(t);
-        (stats.walls, stats.heavier, stats.punching) =
-            (stats.walls + w, stats.heavier + h, stats.punching + p);
-    }
-    tries.sort_by(|a, b| a.weight.total_cmp(&b.weight));
-    let floats: Vec<bool> = tries.par_iter().map(|tr| service_gates(params, sp, tr)).collect();
-    stats.service = floats.iter().filter(|ok| !**ok).count();
-    let tries: Vec<ZoneTry> = tries.into_iter().zip(floats).filter_map(|(t, ok)| ok.then_some(t)).collect();
-    let cap = z.max_checks.min(tries.len());
-    let total = total0 + cap;
+    tries.sort_by(|a, b| a.light_lb.total_cmp(&b.light_lb));
+    let mut best = lightest;
     let mut out = Vec::new();
-    let mut found = false;
-    for chunk in tries[..cap].chunks(BATCH) {
-        let cs: Vec<Candidate> = chunk
+    let mut next = 0;
+    while next < tries.len() {
+        let room = z.max_checks - stats.checked;
+        let batch: Vec<&ZoneTry> = tries[next..]
+            .iter()
+            .take_while(|tr| best.is_none_or(|b| tr.light_lb < b))
+            .take(BATCH.min(room))
+            .collect();
+        if batch.is_empty() {
+            break;
+        }
+        next += batch.len();
+        let total = total0 + stats.checked + batch.len();
+        let cs: Vec<Option<Candidate>> = batch
             .par_iter()
             .map(|tr| {
-                let (gi, ti) = sp.pairs[tr.pi];
-                let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
-                let sec = sections(grid, t);
-                let plan = &sp.plans[tr.pi];
-                let fits = [sp.axis[tr.ri].1.clone(), sp.dense[tr.di].1.clone()];
-                let zw = ZonedWall::new(params, grid, t, tr.zl, fits, plan.as_deref().unwrap_or(&[]));
-                let mut c =
-                    evaluate_wall(params, &sp.axis[tr.ri].1, grid, &sec, t, Wall::Zoned(&zw), plan, true);
-                c.mix = sp.axis[tr.ri].2.clone();
-                c.dense_mix = sp.dense[tr.di].2.clone();
-                c.flare_deg = sp.geoms[gi].1;
+                let c = place_zones(params, z, sp, tr);
                 let k = done.fetch_add(1, Ordering::SeqCst) + 1;
-                on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
+                if let Some(c) = &c {
+                    on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
+                }
                 c
             })
             .collect();
         stats.checked += cs.len();
-        found = cs.iter().any(|c| c.passes);
-        out.extend(cs);
-        if found {
+        for c in cs.into_iter().flatten() {
+            if c.passes && best.is_none_or(|b| c.hull_weight_lb < b) {
+                best = Some(c.hull_weight_lb);
+            }
+            out.push(c);
+        }
+        if stats.checked >= z.max_checks {
             break;
         }
     }
-    stats.capped = !found && tries.len() > cap;
-    if stats.checked < cap {
-        on_progress(Progress::Started { total: total0 + stats.checked });
-    }
+    let left = &tries[next..];
+    stats.heavier = left.iter().filter(|tr| best.is_some_and(|b| tr.light_lb >= b)).count();
+    stats.capped = left.len() > stats.heavier;
+    on_progress(Progress::Started { total: total0 + stats.checked });
     (out, stats)
 }
 
@@ -1410,7 +1499,7 @@ pub struct ZonedWall {
     pub n: f64,
     /// Strength of the light and the dense mix.
     pub fits: [StrengthFit; 2],
-    /// Every paddler's knees (nominal and +/- seat variance) bear on the dense bottom flange.
+    /// Every paddler's knee footprint (nominal and +/- seat variance) is dense ([`knees_dense`]).
     pub knee_dense: bool,
 }
 
@@ -1426,7 +1515,7 @@ impl ZonedWall {
         let n = modulus_psi(zl.dense_pcf, fits[1].fc_psi(zl.dense_pcf))
             / modulus_psi(zl.light_pcf, fits[0].fc_psi(zl.light_pcf));
         let zs = zoned_sections(grid, t, &zl, n);
-        let knee_dense = knees_on_flange(params, grid, t, &zl, seats);
+        let knee_dense = knees_dense(params, grid, t, &zl, seats);
         ZonedWall { zl, zs, n, fits, knee_dense }
     }
 }
@@ -1489,23 +1578,71 @@ fn half_breadth_at(grid: &Grid, x: f64, z: f64) -> f64 {
     at(i - 1) * (1.0 - u) + at(i) * u
 }
 
-/// Do all paddlers' knees bear on the dense bottom flange? Each knee footprint (the knee spacing
-/// across, the punching perimeter around each knee: patch + d over 2) at every seat sample
-/// (nominal, +/- seat variance) must lie inside the I-beam span and within the flange's width
-/// at its top (half-breadth at z = bottom_in). Otherwise punching uses the light mix.
-pub fn knees_on_flange(params: &Params, grid: &Grid, t: f64, zl: &ZoneLayout, seats: &[CaseSeats]) -> bool {
-    if zl.bottom_in <= 0.0 || zl.dense_pcf <= zl.light_pcf {
-        return false;
-    }
+/// Knee punching footprint: (r, across) = reach along the hull around each knee ((patch + d)/2,
+/// the punching perimeter) and half-width across it (half the knee spacing with two knees, + r).
+fn knee_footprint(params: &Params, t: f64) -> (f64, f64) {
     let pu = &params.punching;
     let d = pu.d_over_t().unwrap_or(0.5) * t;
     let r = 0.5 * (params.material.knee_patch_in + d);
-    let across = if pu.knees == 2 { 0.5 * pu.knee_spacing_in } else { 0.0 } + r;
+    (r, if pu.knees == 2 { 0.5 * pu.knee_spacing_in } else { 0.0 } + r)
+}
+
+/// Height at station x below which all the wall lies within `across` of the centreline (the
+/// first z where the half-breadth reaches it, linear between waterlines); None if it never does.
+fn footprint_top(grid: &Grid, x: f64, across: f64) -> Option<f64> {
+    let z = &grid.z;
+    let hb = |k: usize| half_breadth_at(grid, x, z[k]);
+    if hb(0) >= across {
+        return Some(z[0]);
+    }
+    (1..z.len()).find(|&k| hb(k) >= across).map(|k| {
+        let (a, b) = (hb(k - 1), hb(k));
+        z[k - 1] + (z[k] - z[k - 1]) * ((across - a) / (b - a)).clamp(0.0, 1.0)
+    })
+}
+
+/// Sample positions over x0..x1: both ends and the stations between.
+fn xs_over(grid: &Grid, x0: f64, x1: f64) -> Vec<f64> {
+    let mut v = vec![x0];
+    v.extend(grid.x.iter().copied().filter(|&x| x > x0 && x < x1));
+    v.push(x1);
+    v
+}
+
+/// Side-view region of each knee's punching footprint over its seat range (nominal +/- seat
+/// variance), one per paddler and case: x = seat -/+ (variance + r), z from the keel up to the
+/// highest [`footprint_top`] over it. None if a footprint is wider than the hull somewhere.
+pub fn knee_regions(params: &Params, grid: &Grid, t: f64, seats: &[CaseSeats]) -> Option<Vec<Rect>> {
+    let (r, across) = knee_footprint(params, t);
     let var = params.seats.variance_in;
+    let (lo, hi) = (grid.x[0], grid.x[grid.nx() - 1]);
+    seats
+        .iter()
+        .flat_map(|s| &s.seats_in)
+        .map(|&x| {
+            let (x0, x1) = ((x - var - r).max(lo), (x + var + r).min(hi));
+            let top = xs_over(grid, x0, x1)
+                .into_iter()
+                .map(|xx| footprint_top(grid, xx, across))
+                .try_fold(0.0_f64, |m, z| z.map(|z| m.max(z)))?;
+            Some(Rect { x0_in: x0, x1_in: x1, z0_in: 0.0, z1_in: top })
+        })
+        .collect()
+}
+
+/// Is every knee's punching footprint dense, over its whole seat range (see [`knee_regions`])?
+/// Then punching uses the dense mix, else the light one.
+pub fn knees_dense(params: &Params, grid: &Grid, t: f64, zl: &ZoneLayout, seats: &[CaseSeats]) -> bool {
+    if zl.dense_pcf <= zl.light_pcf || zl.dense.is_empty() {
+        return false;
+    }
+    let (r, across) = knee_footprint(params, t);
+    let var = params.seats.variance_in;
+    let (lo, hi) = (grid.x[0], grid.x[grid.nx() - 1]);
     seats.iter().flat_map(|s| &s.seats_in).all(|&x| {
-        [x - var, x, x + var]
-            .iter()
-            .all(|&k| zl.spans(k - r) && zl.spans(k + r) && half_breadth_at(grid, k, zl.bottom_in) >= across)
+        xs_over(grid, (x - var - r).max(lo), (x + var + r).min(hi))
+            .into_iter()
+            .all(|xx| footprint_top(grid, xx, across).is_some_and(|top| zl.covers(xx, 0.0, top)))
     })
 }
 
@@ -2085,7 +2222,7 @@ fn evaluate_wall(
         passes: false,
         zones: match wall {
             Wall::Uniform(_) => None,
-            Wall::Zoned(z) => Some(z.zl),
+            Wall::Zoned(z) => Some(z.zl.clone()),
         },
         dense_mix: None,
     };

@@ -314,15 +314,11 @@ function triRow(f, sec = 'search') {
   const i = n => `<input type="number" id="${sec}.${k}.${n}" title="${esc(t)} (${['min', 'max', 'step'][n]})" step="any" min="0" placeholder="${['min', 'max', 'step'][n]}">`;
   return row(`${sec}.${k}.0`, label, t, `<div class="multi">${i(0)}${i(1)}${i(2)}</div>`, unit);
 }
-// [zones] axes (min, max, step) and their defaults. The light mix is the Search density range.
-const ZONES = [
-  ['dense_pcf', 'Dense mix density', 'pcf', 'Density of the dense (stronger) mix poured in the flanges: min, max, step. Only mixes heavier than the light one are tried; with tested_mixes, the tested mixes inside min..max.', [56, 64, 2]],
-  ['start_in', 'Dense span start', 'in', 'Where the dense flanges start, inches from the bow: min, max, step. Ahead of it the wall is all light mix.', [40, 80, 20]],
-  ['end_in', 'Dense span end', 'in', 'Where the dense flanges end, inches from the bow: min, max, step. Aft of it the wall is all light mix.', [160, 200, 20]],
-  ['bottom_in', 'Bottom band height', 'in', 'Dense bottom flange: wall from the keel up to this height (a horizontal line). The knees punch through it when they are all inside the span and on its flat. 0 = no bottom band.', [0, 3, 1]],
-  ['top_in', 'Top band depth', 'in', 'Dense top flange: wall from this far below the gunwale up to it (a horizontal line). 0 = no top band.', [0, 2, 1]]];
-const ZONES_T = 'Search two-mix walls too: a dense mix in a bottom band along the keel and a top band along the gunwale over the middle of the hull (an I-beam in side view), light mix in the web between and in both ends. Boundaries are vertical and horizontal lines only. Re-run with a fixed hull and new lab mixes to re-place the zones. Off = one mix.';
-const ZMAX_T = 'Most two-mix walls fully checked, lightest first; the search stops at the first one that passes. Walls heavier than the best one-mix wall, or that fail knee punching, freeboard or GM at the nominal seats, are skipped before this count.';
+// [zones]: dense mix range (min, max, step), rectangle increment, placement cap. The light mix is the Search density range.
+const ZONES_D = ['dense_pcf', 'Dense mix density', 'pcf', 'Density of the dense (stronger) mix: min, max, step. Only mixes heavier than the light one are paired with it; with tested_mixes, the tested mixes inside min..max.'];
+const ZONES_T = 'Search two-mix walls too: JAGUAR places the dense mix only where a check needs it (under the knees for punching, at a failing fibre for bending or shear, a strip along the keel for stability) and the light mix everywhere else. The dense mix is given as side-view rectangles (x from the bow, height above the keel) you can mark on the mold. Re-run with a fixed hull and new lab mixes to re-place them. Off = one mix.';
+const ZINC_T = 'Rectangle edges are multiples of this, so every boundary is a measurable mark on the mold (1/8 in = 0.125).';
+const ZMAX_T = 'Most (wall, light mix, dense mix) combinations placed, lightest first. Combinations that cannot beat the lightest design found so far are never placed.';
 function lcBlock(lc) {
   const d = document.createElement('div'); d.className = 'lc';
   const tn = 'Name of this crew arrangement.';
@@ -400,8 +396,9 @@ function buildForm() {
       + `<div id="turnbody" style="display:grid;gap:var(--s1)">${FIELDS.turning.map(f => numRow('turning', f)).join('')}</div>`)
     + section('zones',
       row('zones.on', 'Two-mix walls', ZONES_T, '<input type="checkbox" class="switch" id="zones.on">')
-      + `<div id="zonebody" style="display:grid;gap:var(--s1)">${ZONES.map(f => triRow(f, 'zones')).join('')}`
-      + `${row('zones.max_checks', 'Max full checks', ZMAX_T, '<input type="number" id="zones.max_checks" step="1" min="1">')}</div>`)
+      + `<div id="zonebody" style="display:grid;gap:var(--s1)">${triRow(ZONES_D, 'zones')}`
+      + `${row('zones.increment_in', 'Mark increment', ZINC_T, '<input type="number" id="zones.increment_in" step="any" min="0">', 'in')}`
+      + `${row('zones.max_checks', 'Max placements', ZMAX_T, '<input type="number" id="zones.max_checks" step="1" min="1">')}</div>`)
     + section('objective',
       row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option><option value="race">race (shortest weighted race time, needs [race])</option></select>')
       + FIELDS.objective.map(f => numRow('objective', f)).join('')
@@ -532,7 +529,8 @@ function fillForm(p, hulls) {
   for (const [k] of FIELDS.turning) $(`turning.${k}`).value = tp ? tp[k] : { speed_mps: 2.5, radius_in: 394 }[k];
   const zp = p.zones;
   $('zones.on').checked = !!zp; setZones();
-  for (const [k, , , , d] of ZONES) for (let n = 0; n < 3; n++) $(`zones.${k}.${n}`).value = zp ? zp[k][n] : d[n];
+  for (let n = 0; n < 3; n++) $(`zones.dense_pcf.${n}`).value = zp ? zp.dense_pcf[n] : [56, 64, 2][n];
+  $('zones.increment_in').value = zp && zp.increment_in != null ? zp.increment_in : 0.125;
   $('zones.max_checks').value = zp && zp.max_checks != null ? zp.max_checks : 400;
   if (p.objective.straight_weight == null) p.objective.straight_weight = 1;
   if (p.objective.turn_radius_in == null) p.objective.turn_radius_in = 600;
@@ -628,7 +626,7 @@ function formToml() {
   }
   if ($('zones.on').checked) {
     out.push('[zones]');
-    for (const [k] of ZONES) out.push(`${k} = [${[0, 1, 2].map(n => fl(g(`zones.${k}.${n}`))).join(', ')}]`);
+    out.push(`dense_pcf = [${[0, 1, 2].map(n => fl(g(`zones.dense_pcf.${n}`))).join(', ')}]`, `increment_in = ${fl(g('zones.increment_in'))}`);
     out.push(`max_checks = ${int('zones.max_checks')}`, '');
   }
   if (loadedRace) out.push(...raceToml(loadedRace));
@@ -1085,13 +1083,19 @@ function plotXsec(ctx, W, H) {
   });
   legend(ctx, W - 260, 16, [[C.ink, 'hull wall'], [C.muted, 'loaded waterline', [5, 3]]]);
 }
-// Two-mix wall in side view: hull profile (keel line to gunwale), dense flanges shaded dark
-// over the span, light mix pale. Heights are exaggerated to read the bands.
+// Inches as a mold mark: 60 1/8 on a 1/16 in mark, else 3 decimals (report::inch).
+function inch(x) {
+  const s = Math.round(x * 16); if (Math.abs(x * 16 - s) > 1e-6) return x.toFixed(3);
+  let w = Math.floor(s / 16), n = s - 16 * w, d = 16; while (n && n % 2 === 0) { n /= 2; d /= 2; }
+  return n ? (w ? `${w} ${n}/${d}` : `${n}/${d}`) : String(w);
+}
+// Two-mix wall in side view: hull profile (keel line to gunwale), the dense rectangles dark
+// (numbered as listed in the winner panel), light mix pale. Heights are exaggerated.
 function plotZones(ctx, W, H) {
   const w = winC(), h = result && result.winner_hull;
   if (!w || !h) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const z = w.zones;
-  if (!z) return msg(ctx, W, H, 'Single-mix wall. Turn on Two-mix zones to search dense flanges.');
+  if (!z) return msg(ctx, W, H, 'Single-mix wall. Turn on Two-mix zones to place a dense mix.');
   const depth = w.depth_in, xs = h.x;
   // Keel height per station: lowest table row with breadth (the stem rises at the ends).
   const keel = h.half_breadth.map(row => { const k = row.findIndex(y => y > 1e-6); return k < 0 ? depth : h.z[k]; });
@@ -1100,18 +1104,20 @@ function plotZones(ctx, W, H) {
   const poly = (top, bot, col) => { ctx.fillStyle = col; ctx.beginPath(); top.forEach(([x, y], i) => i ? ctx.lineTo(a.px(x), a.py(y)) : ctx.moveTo(a.px(x), a.py(y)));
     for (const [x, y] of bot.slice().reverse()) ctx.lineTo(a.px(x), a.py(y)); ctx.closePath(); ctx.fill(); };
   const at = x => interp(xs, keel, x);
-  const span = [z.x0_in, ...xs.filter(x => x > z.x0_in && x < z.x1_in), z.x1_in];
   poly(xs.map(x => [x, depth]), xs.map((x, i) => [x, keel[i]]), '#e6e6e6');
-  if (z.bottom_in > 0) poly(span.map(x => [x, Math.max(at(x), z.bottom_in)]), span.map(x => [x, at(x)]), C.ink);
-  if (z.top_in > 0) poly(span.map(x => [x, depth]), span.map(x => [x, Math.max(at(x), depth - z.top_in)]), C.ink);
+  ctx.font = font(10);
+  z.dense.forEach((q, n) => {
+    const span = [q.x0_in, ...xs.filter(x => x > q.x0_in && x < q.x1_in), q.x1_in];
+    poly(span.map(x => [x, Math.max(at(x), q.z1_in)]), span.map(x => [x, Math.max(at(x), q.z0_in)]), C.ink);
+    ctx.strokeStyle = C.muted; ctx.setLineDash([2, 2]); ctx.strokeRect(a.px(q.x0_in), a.py(q.z1_in), a.px(q.x1_in) - a.px(q.x0_in), a.py(q.z0_in) - a.py(q.z1_in)); ctx.setLineDash([]);
+    ctx.fillStyle = C.soft; ctx.textAlign = 'center'; ctx.fillText(String(n + 1), a.px(0.5 * (q.x0_in + q.x1_in)), a.py(q.z1_in) - 4); ctx.textAlign = 'left';
+  });
   ctx.strokeStyle = C.ink; ctx.beginPath(); xs.forEach((x, i) => i ? ctx.lineTo(a.px(x), a.py(keel[i])) : ctx.moveTo(a.px(x), a.py(keel[i]))); ctx.stroke();
   hline(ctx, a.px(xs[0]), a.px(xs[xs.length - 1]), a.py(depth), C.ink);
-  for (const x of [z.x0_in, z.x1_in]) { ctx.strokeStyle = C.muted; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(a.px(x), r.t); ctx.lineTo(a.px(x), r.t + r.h); ctx.stroke(); ctx.setLineDash([]); }
-  for (const k of shownCases()) for (const x of k.seats_in) { ctx.fillStyle = C.accent; ctx.beginPath(); ctx.moveTo(a.px(x), a.py(0) - 2); ctx.lineTo(a.px(x) - 4, a.py(0) - 9); ctx.lineTo(a.px(x) + 4, a.py(0) - 9); ctx.fill(); }
+  for (const k of shownCases()) for (const x of k.seats_in) { ctx.fillStyle = C.accent; ctx.beginPath(); ctx.moveTo(a.px(x), a.py(0) + 12); ctx.lineTo(a.px(x) - 4, a.py(0) + 19); ctx.lineTo(a.px(x) + 4, a.py(0) + 19); ctx.fill(); }
   ctx.fillStyle = C.muted; ctx.font = font(11);
-  const b = v => v > 0 ? `${v.toFixed(1)} in` : 'none';
-  ctx.fillText(`Dense ${z.dense_pcf.toFixed(1)} pcf${w.dense_mix ? ' (' + w.dense_mix + ')' : ''} over x ${z.x0_in.toFixed(0)}..${z.x1_in.toFixed(0)} in: bottom band ${b(z.bottom_in)}, top band ${b(z.top_in)}. Light ${z.light_pcf.toFixed(1)} pcf${w.mix ? ' (' + w.mix + ')' : ''} elsewhere. Heights exaggerated.`, 12, 16);
-  legend(ctx, r.l + 10, r.t + 16, [[C.ink, `dense ${z.dense_pcf.toFixed(1)} pcf`], ['#c8c8c8', `light ${z.light_pcf.toFixed(1)} pcf`], [C.accent, 'knees'], [C.muted, 'span ends', [3, 3]]]);
+  ctx.fillText(`Dense ${z.dense_pcf.toFixed(1)} pcf${w.dense_mix ? ' (' + w.dense_mix + ')' : ''} in ${z.dense.length} rectangle${z.dense.length === 1 ? '' : 's'} (dashed, numbered); light ${z.light_pcf.toFixed(1)} pcf${w.mix ? ' (' + w.mix + ')' : ''} elsewhere. Heights exaggerated.`, 12, 16);
+  legend(ctx, r.l + 10, r.t + 16, [[C.ink, `dense ${z.dense_pcf.toFixed(1)} pcf`], ['#c8c8c8', `light ${z.light_pcf.toFixed(1)} pcf`], [C.accent, 'knees']]);
 }
 function plotShape(ctx, W, H) {
   const sh = cands.filter(k => k.shape);
@@ -1350,6 +1356,14 @@ function pocketRow(c) {
   const max = fp ? ` <span class="muted">max ${fp.air_pocket_max_in.toFixed(1)}, swamp factor ${fp.swamp_factor}</span>` : '';
   return kv('Air pocket', `${typeof c.air_pocket_in === 'number' ? c.air_pocket_in.toFixed(1) + ' in each end' : 'not computed'}${max}`, t);
 }
+// What two mixes saved over the single-mix pick of the same run (result.zones).
+function savingRow(c) {
+  const z = result && result.zones; if (!z) return '';
+  const t = 'Weight of this design against the lightest single-mix design that passes in the same run (what a run without [zones] picks).';
+  if (z.single_mix_lb == null) return kv('Two-mix saving', 'no single-mix wall passes', t);
+  const s = z.saved_lb || 0;
+  return kv('Two-mix saving', `${s.toFixed(1)} lb <span class="muted">${(100 * s / z.single_mix_lb).toFixed(1)}% vs single mix ${z.single_mix_lb.toFixed(1)} lb</span>`, t);
+}
 function showWinner() {
   const box = $('winner');
   if (!result) { box.innerHTML = '<span class="muted">No result yet.</span>'; return; }
@@ -1375,9 +1389,10 @@ function showWinner() {
     ${kv('Thickness', `${f(c.thickness_in, 3)} in`)}
     ${kv(c.zones ? 'Light density' : 'Density', `${f(c.density_pcf, 1)} pcf`)}
     ${c.mix ? kv('Mix', esc(c.mix)) : ''}
-    ${c.zones ? kv('Dense density', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' <span class="muted">' + esc(c.dense_mix) + '</span>' : ''}`, 'Two-mix wall: the dense mix in the flanges (see the Mix zones tab).')
-      + kv('Dense span', `${f(c.zones.x0_in, 0)} to ${f(c.zones.x1_in, 0)} in <span class="muted">from the bow</span>`)
-      + kv('Dense bands', `bottom ${c.zones.bottom_in > 0 ? f(c.zones.bottom_in, 1) + ' in' : 'none'}, top ${c.zones.top_in > 0 ? f(c.zones.top_in, 1) + ' in' : 'none'}`, 'Bottom: wall from the keel up to this height. Top: wall this far below the gunwale up to it.') : ''}
+    ${c.zones ? kv('Dense density', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' <span class="muted">' + esc(c.dense_mix) + '</span>' : ''}`, 'Two-mix wall: the dense mix inside the rectangles below (see the Mix zones tab).') : ''}
+    ${savingRow(c)}
+    ${c.zones ? `<div class="group">Dense rectangles <span class="hint">x from the bow, z above the keel, in</span></div>` + c.zones.dense.map((q, n) =>
+      kv(`${n + 1}`, `x ${inch(q.x0_in)} to ${inch(q.x1_in)}, z ${inch(q.z0_in)} to ${inch(q.z1_in)}`, 'Dense mix over this length, from this height to that one, the whole girth on both sides.')).join('') : ''}
     ${kv('Side flare', `${f(flareDeg(), 1)} deg`)}
     ${kv('Depth', `${f(c.depth_in, 2)} in`)}
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
@@ -1438,7 +1453,7 @@ function reportCharts() {
       add('Freeboard', 'Gunwale above the local waterline per load case and with no crew aboard (worst seat sample in the legend). Dashed: freeboard gate.', plotFreeboard, 300);
     }
     if (w && result.winner_hull) add('Cross-sections', '', plotXsec, 240);
-    if (w && w.zones && result.winner_hull) add('Mix zones', 'Side view of the two-mix wall: dense flanges dark, light mix pale.', plotZones, 260);
+    if (w && w.zones && result.winner_hull) add('Mix zones', 'Side view of the two-mix wall: dense rectangles dark (numbered as in the winner panel), light mix pale.', plotZones, 260);
     if (mixFit) add('Mix strength', 'Lab breaks scaled to final strength and the fit used by this run. Shaded: tested density range.', plotMix, 260);
   } finally {
     for (const n of hidden) caseHidden.add(n); Object.assign(axSel, ax); mixFit = mf;
@@ -1492,6 +1507,8 @@ function reportHtml(canoeImg, charts) {
     ['Beam', `${f(c.beam_in, 1)} in`], sh ? ['Design draft', `${f(sh.draft_in, 2)} in`] : null,
     ['Wall thickness', `${f(c.thickness_in, 3)} in`], ['Mold depth', `${f(c.depth_in, 2)} in`], ['Side flare', `${f(flareDeg(), 1)} deg`],
     ['Mix density', `${f(c.density_pcf, 1)} pcf${c.mix ? ' (' + esc(c.mix) + ')' : ''}`], prov ? ['Mix source', provTxt] : null,
+    c.zones ? ['Dense mix', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' (' + esc(c.dense_mix) + ')' : ''}; ` + c.zones.dense.map((q, n) => `${n + 1}: x ${inch(q.x0_in)}-${inch(q.x1_in)}, z ${inch(q.z0_in)}-${inch(q.z1_in)}`).join('; ')] : null,
+    result.zones ? ['Two-mix saving', result.zones.single_mix_lb == null ? 'no single-mix wall passes' : `${f(result.zones.saved_lb || 0, 1)} lb vs single mix ${f(result.zones.single_mix_lb, 1)} lb`] : null,
     ['Hull weight', `${f(c.hull_weight_lb, 1)} lb`], typeof c.drag_n === 'number' ? ['Drag', `${dragTxt(c.drag_n)} at ${f(p.objective && p.objective.speed_mps, 1)} m/s`] : null,
     ['GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>`],
     ['Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`], pocket ? ['Air pocket', pocket] : null,

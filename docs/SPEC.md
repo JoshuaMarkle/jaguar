@@ -168,24 +168,30 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    in the candidate), `symmetric` (aft factors = fore). Each shape's `shape.metrics` (entry angle,
    rocker in, lateral moment, rejection reason) is in result.json.
 10. **Two-mix zones** (optional `[zones]`, `optimize::zoned_search`): the wall search also tries
-   walls of two mixes. Over x in [`start_in`, `end_in`] (from the bow) the wall at z <= `bottom_in`
-   (bottom flange, z from the keel) and z >= D - `top_in` (top flange) is the dense mix
-   (`dense_pcf`, heavier than the light one), everything else the light mix (`search.density_pcf`):
-   vertical and horizontal boundaries only, an I-beam in the middle and light ends. Sections are
-   transformed (light = reference, n = E_dense / E_light, E = 33 w^1.5 sqrt(f'c), ACI 318-19
-   19.2.2.1); self weight and its centroid use each mix's density. Bending is checked at each mix's
-   extreme fibres, sigma = n M (z - zbar) / I, against that mix's strengths; shell shear at the
-   neutral axis against the mix there; Kupfer per mix. Punching uses the dense mix only when every
-   knee footprint (knee spacing plus (patch + d)/2 around each knee, at the nominal seats and +/- the
-   seat variance) lies inside the span and within the hull's half-breadth at z = `bottom_in`;
-   else the light mix. Every layout x light x dense mix x (t, depth, flare) is enumerated (seats:
-   that wall's single-mix plan). Skipped before a full check: not lighter than the lightest passing
-   single-mix wall, knee punching over `dc_search` (closed form), or freeboard / GM under the gate
-   at the nominal seats (service floats). The rest are checked lightest first in batches of 32
-   until a batch has a pass or `max_checks` (default 400) are done. The winner is the best passing
-   wall of either kind by the objective, verified as above; its `calc` is an `error` (the worked
-   calculation covers single-mix walls). A fixed-mold re-sweep with new mixes is `run` on a fixed
-   hull with `[zones]` after updating the mix data.
+   walls of two mixes: the light mix (`search.density_pcf`) everywhere except side-view rectangles
+   of the dense mix (`dense_pcf`, heavier than the light one), x from the bow and z above the keel,
+   each covering the whole girth between its heights. Every edge is a multiple of `increment_in`
+   (default 1/8 in; a rectangle may also end at a hull tip). Sections are transformed (light =
+   reference, n = E_dense / E_light, E = 33 w^1.5 sqrt(f'c), ACI 318-19 19.2.2.1); self weight and
+   its centroid use each mix's density. Bending is checked at each mix's extreme fibres,
+   sigma = n M (z - zbar) / I, against that mix's strengths; shell shear at the neutral axis against
+   the mix there; Kupfer per mix. Punching uses the dense mix only when every knee's footprint is
+   dense over its whole seat range: x = seat -/+ (seat variance + (patch + d)/2), z from the keel up
+   to where the hull is (knee spacing / 2 + (patch + d)/2) wide each side; else the light mix.
+   Placement (`place_zones`) per (t, depth, flare, light, dense), seats from that wall's single-mix
+   plan: start all light; if the light mix fails punching, make every knee footprint dense (top
+   rounded up to the increment, plus one increment of margin); then repeat: while a D/C check over
+   `dc_search` fails in the light mix, make that fibre dense at that station (0.5 in in from a
+   bending fibre, around the neutral axis for shear; a check failing in the dense mix stops it);
+   while only GM is short, add a dense keel strip z 0..h centred on midships, 24 in longer per
+   round, h up one 0.5 in step once it spans the hull. Freeboard failures stop it (dense only adds
+   weight). An all-light wall that passes is the single-mix candidate and is not repeated.
+   Combinations go lightest all-light weight first, in batches of 32; one whose all-light weight is
+   not below the lightest pass so far cannot win and is not placed; at most `max_checks`
+   (default 400) are placed. The winner is the best passing wall of either kind by the objective,
+   verified as above; its `calc` is an `error` (the worked calculation covers single-mix walls).
+   The result reports the saving against the single-mix pick of the same run. A fixed-mold
+   re-sweep with new mixes is `run` on a fixed hull with `[zones]` after updating the mix data.
 
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points; `flexural_fit` / `compressive_fit` only when
@@ -193,12 +199,14 @@ measured), winner_hull (shape runs) | null, candidates: [...],
 winner: {candidate, verify_stations, verify_dc, verified, dc_extrapolated, dc_order, convergence
 {stations, dc, extrapolated, order, governing, note}, on_grid_edge, at_mix_data_edge,
 mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc} | null, zones}`.
-With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, x0_in, x1_in, bottom_in,
-top_in} (its `density_pcf` is the light mix) and `dense_mix` (tested mixes); the winner has
-`dense_mix_provenance`; `search_space` adds the `zones.*` axes (`limit` "no band" at a 0 band);
-the result's `zones` counts walls enumerated, skipped (`heavier`, `punching`, `service`), `checked`
-and `capped` (max_checks hit with no pass). Zoned candidates follow the single-mix ones, lightest
-first. Zoned D/C(x) and stresses are the governing mix's; `inertia_in4` is transformed. `mix_provenance`: the winner density is
+With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
+z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
+mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's
+`zones` has combinations (`walls`), skipped (`heavier`, `punching`), `checked` (placed), `capped`,
+`single_mix_lb` (the single-mix pick, null if none passes) and `saved_lb` (single_mix_lb - winner
+weight; 0 when the winner is single-mix). Zoned candidates follow the single-mix ones. Zoned D/C(x)
+and stresses are the governing mix's; `inertia_in4` is transformed. The terminal lists the
+rectangles as mold marks (`60 1/8`) and the saving. `mix_provenance`: the winner density is
 `tested` (a tested mix within 0.05 pcf, or the tested mix itself) or `predicted` (fit line only),
 the nearest tested mixes below/above it with their signed distance, and `reach_pcf` (distance to the
 nearest). `search_space`: per searched variable (thickness, density, depth, then each free

@@ -388,6 +388,10 @@ pub struct ZonedStation {
     pub shear: (f64, f64),
     /// Kupfer D/C (worst mix).
     pub biaxial: f64,
+    /// Where each governs: (fibre z, the dense mix?); biaxial at that mix's most stressed fibre.
+    pub tension_at: (f64, bool),
+    pub compression_at: (f64, bool),
+    pub biaxial_at: (f64, bool),
     /// Station skipped (no real section).
     pub masked: bool,
 }
@@ -436,16 +440,19 @@ pub fn zoned_stations(
                 let sig = |z: f64| -nm * m * (z - zb) / ii;
                 let (a, b) = (sig(lo), sig(hi));
                 let (ten, com) = (a.max(b).max(0.0), (-a).max(-b).max(0.0));
+                let (zt, zc) = (if a >= b { lo } else { hi }, if a <= b { lo } else { hi });
+                let dense = mix == 1;
                 let c = caps[mix];
                 if ratio(ten, c.ft) > ratio(out.tension.0, out.tension.1) {
-                    out.tension = (ten, c.ft);
+                    (out.tension, out.tension_at) = ((ten, c.ft), (zt, dense));
                 }
                 if ratio(com, c.fc_comp) > ratio(out.compression.0, out.compression.1) {
-                    out.compression = (com, c.fc_comp);
+                    (out.compression, out.compression_at) = ((com, c.fc_comp), (zc, dense));
                 }
                 let k = kupfer_dc(ten, com, sy[i], tau, c.ft, c.fc_kupfer);
                 if k.is_nan() || k > kz {
                     kz = k;
+                    out.biaxial_at = (if a.abs() >= b.abs() { lo } else { hi }, dense);
                 }
             }
             out.shear = (tau, caps[usize::from(zs.dense_at_na[i])].shear);
@@ -456,8 +463,8 @@ pub fn zoned_stations(
 }
 
 /// [`check`] for a two-mix zoned wall (`fits`: strength of the light and the dense mix).
-/// `knee_dense`: the paddlers' knees bear on the dense bottom flange (punching uses that mix),
-/// else the light one.
+/// `knee_dense`: every paddler's knee footprint is dense (punching uses that mix), else the
+/// light one.
 #[allow(clippy::too_many_arguments)]
 pub fn check_zoned(
     grid: &Grid,
@@ -590,13 +597,11 @@ mod tests {
         let loads = crate::equilibrium::solve(&g, &sec, 58.0, &crew, 3.0, 12.0).unwrap();
         let (m, f, pu) = (mat(), fit(), pu1());
         let plain = check(&g, &sec, &loads, 58.0, &m, &f, 200.0, &pu, None);
+        let r = |x0_in, x1_in, z0_in, z1_in| crate::section::Rect { x0_in, x1_in, z0_in, z1_in };
         let zl = crate::section::ZoneLayout {
             light_pcf: 58.0,
             dense_pcf: 58.0,
-            x0_in: 60.0,
-            x1_in: 180.0,
-            bottom_in: 2.0,
-            top_in: 1.0,
+            dense: vec![r(60.0, 180.0, 0.0, 2.0), r(60.0, 180.0, 11.0, 12.0), r(100.0, 110.0, 4.0, 6.0)],
         };
         let zs = crate::section::zoned_sections(&g, 0.375, &zl, 1.0);
         let z = check_zoned(&g, &sec, &zs, &loads, &zl, 1.0, &m, [&f, &f], 200.0, true, &pu, None);
@@ -605,7 +610,7 @@ mod tests {
             assert!((a.dc - b.dc).abs() < 1e-6 * a.dc.max(1e-9), "{}: {} vs {}", a.name, a.dc, b.dc);
         }
         // A dense bottom flange carries the punching when the knees are on it.
-        let dense = crate::section::ZoneLayout { dense_pcf: 64.0, ..zl };
+        let dense = crate::section::ZoneLayout { dense_pcf: 64.0, ..zl.clone() };
         let n = crate::section::modulus_psi(64.0, f.fc_psi(64.0))
             / crate::section::modulus_psi(58.0, f.fc_psi(58.0));
         let zs = crate::section::zoned_sections(&g, 0.375, &dense, n);
