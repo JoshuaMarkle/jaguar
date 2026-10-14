@@ -586,6 +586,7 @@ function raceToml(r) {
   for (const k of ['paddler_power_w', 'propulsive_efficiency', 'max_thrust_n', 'buoy_clearance_m', 'lane_width_m', 'min_turn_radius_m']) out.push(`${k} = ${fl(r[k])}`);
   for (const c of r.course) {
     out.push('', '[[race.course]]', `name = ${tstr(c.name)}`, `finish_x_m = ${fl(c.finish_x_m)}`);
+    if (c.lane_width_m != null) out.push(`lane_width_m = ${fl(c.lane_width_m)}`);
     out.push(`marks = [${c.marks.map(m => `{ x_m = ${fl(m.x_m)}, y_m = ${fl(m.y_m)}, keep = ${tstr(m.keep)} }`).join(', ')}]`);
   }
   for (const e of r.event) {
@@ -1047,21 +1048,55 @@ function plotShape(ctx, W, H) {
 
 // ---------- race tab: POST /api/race races the last winner over the form's [race] (src/race.rs) ----------
 // A race-objective run already carries result.race; the button re-races with the current form.
+// Playback: the winner's top-view outline moves along the planned path at the simulated speed
+// (speed_m = distance, speed, time), yawed by the turn model's drift in arcs.
 let raceRes = null, raceEv = 0, raceBusy = false, raceErr = '';
+const RACE_SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50];
+const anim = { t: 0, playing: false, speed: 5, follow: false, last: 0 };
 function raceCtl() {
   const evs = raceRes ? raceRes.events : [];
   const sel = evs.length ? `<span class="muted">event</span><select id="raceev">${evs.map((e, i) => `<option value="${i}" ${i === raceEv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>` : '';
-  return `<button type="button" class="btn" id="racego" ${raceBusy || !(result && result.winner) ? 'disabled' : ''}>${raceBusy ? 'Racing...' : 'Race winner'}</button>${sel}
-    <span class="hint" style="margin-left:auto">courses, crews and paddler power from [race]; times need calibration (jaguar race --measured)</span>`;
+  const e = evs[raceEv];
+  const play = e ? `<button type="button" class="btn" id="raceplay" title="Play / pause (space)">${anim.playing ? 'Pause' : anim.t >= e.time_s ? 'Replay' : 'Play'}</button>
+    <button type="button" class="btn" id="racerew" title="Back to the start">Restart</button>
+    <span class="muted">speed</span><select id="racespd" title="Viewing speed: simulated seconds per real second">${RACE_SPEEDS.map(v => `<option value="${v}" ${v === anim.speed ? 'selected' : ''}>${v}x</option>`).join('')}</select>
+    <input type="range" id="racet" min="0" max="${e.time_s.toFixed(2)}" step="0.05" value="${Math.min(anim.t, e.time_s).toFixed(2)}" title="Race time" style="width:160px">
+    <span class="muted">follow</span><input type="checkbox" class="switch" id="racefollow" ${anim.follow ? 'checked' : ''} title="Zoom in on the canoe and follow it">` : '';
+  return `<button type="button" class="btn" id="racego" ${raceBusy || !(result && result.winner) ? 'disabled' : ''}>${raceBusy ? 'Racing...' : 'Race winner'}</button>${sel}${play}`;
 }
 function raceWire() {
   const go = $('racego'); if (go) go.onclick = raceGo;
-  const ev = $('raceev'); if (ev) ev.onchange = e => { raceEv = Number(e.target.value); drawPlot(); };
+  const ev = $('raceev'); if (ev) ev.onchange = e => { raceEv = Number(e.target.value); animReset(); buildTabs(); drawPlot(); };
+  const pl = $('raceplay'); if (pl) pl.onclick = animToggle;
+  const rw = $('racerew'); if (rw) rw.onclick = () => { animReset(); buildTabs(); drawPlot(); };
+  const sp = $('racespd'); if (sp) sp.onchange = e => { anim.speed = Number(e.target.value); };
+  const sl = $('racet'); if (sl) sl.oninput = e => { anim.t = Number(e.target.value); if (anim.playing) animToggle(); else drawPlot(); };
+  const fo = $('racefollow'); if (fo) fo.onchange = e => { anim.follow = e.target.checked; drawPlot(); };
 }
+function animReset() { anim.t = 0; anim.playing = false; }
+function animToggle() {
+  const e = raceRes && raceRes.events[raceEv]; if (!e) return;
+  if (!anim.playing && anim.t >= e.time_s) anim.t = 0;
+  anim.playing = !anim.playing; anim.last = performance.now();
+  buildTabs(); drawPlot();
+  if (anim.playing) requestAnimationFrame(animTick);
+}
+function animTick(now) {
+  const e = raceRes && raceRes.events[raceEv];
+  if (!anim.playing || !e || tab !== 'race') { anim.playing = false; return; }
+  anim.t = Math.min(e.time_s, anim.t + (now - anim.last) / 1000 * anim.speed); anim.last = now;
+  const sl = $('racet'); if (sl) sl.value = anim.t.toFixed(2);
+  if (anim.t >= e.time_s) { anim.playing = false; buildTabs(); }
+  drawPlot();
+  if (anim.playing) requestAnimationFrame(animTick);
+}
+document.addEventListener('keydown', ev => {
+  if (tab === 'race' && ev.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) { ev.preventDefault(); animToggle(); }
+});
 async function raceGo() {
   let text;
   try { text = formToml(); } catch (e) { raceErr = 'form: ' + e.message; drawPlot(); return; }
-  raceBusy = true; raceErr = ''; buildTabs(); drawPlot();
+  raceBusy = true; raceErr = ''; animReset(); buildTabs(); drawPlot();
   try {
     const r = await fetch('/api/race', { method: 'POST', body: text });
     const v = await r.json();
@@ -1069,29 +1104,121 @@ async function raceGo() {
   } catch (e) { raceErr = 'race failed: ' + e.message; }
   raceBusy = false; buildTabs(); drawPlot();
 }
+// Interpolate a column of rows sorted by column `k` at value v: returns [row index, fraction].
+function bracket(rows, k, v) {
+  let lo = 0, hi = rows.length - 1;
+  if (v <= rows[0][k]) return [0, 0]; if (v >= rows[hi][k]) return [hi - 1, 1];
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (rows[m][k] <= v) lo = m; else hi = m; }
+  return [lo, (v - rows[lo][k]) / (rows[hi][k] - rows[lo][k] || 1)];
+}
+// State of event e at race time t: distance s, speed v, position, heading (rad), current segment.
+function raceState(e, t) {
+  const sp = e.speed_m, [i, f] = bracket(sp, 2, t), j = Math.min(i + 1, sp.length - 1);
+  const s = sp[i][0] + f * (sp[j][0] - sp[i][0]), v = sp[i][1] + f * (sp[j][1] - sp[i][1]);
+  if (!e._cum) { let c = 0; e._cum = e.path_m.map((p, k) => (c += k ? Math.hypot(p[0] - e.path_m[k - 1][0], p[1] - e.path_m[k - 1][1]) : 0)); }
+  const cum = e._cum, sc = s / e.distance_m * cum[cum.length - 1];
+  let k = 1; while (k < cum.length - 1 && cum[k] < sc) k++;
+  const g = (sc - cum[k - 1]) / (cum[k] - cum[k - 1] || 1), P = e.path_m;
+  const pos = [P[k - 1][0] + g * (P[k][0] - P[k - 1][0]), P[k - 1][1] + g * (P[k][1] - P[k - 1][1])];
+  const k0 = Math.max(0, k - 2), k1 = Math.min(P.length - 1, k + 1);
+  let hd = Math.atan2(P[k1][1] - P[k0][1], P[k1][0] - P[k0][0]);
+  let at = 0, seg = null, segAt = 0;
+  for (const sg of e.segments) { if (s <= at + sg.length_m + 1e-9) { seg = sg; segAt = at; break; } at += sg.length_m; }
+  const course = raceRes.params.course.find(c => c.name === e.course);
+  if (seg && seg.radius_m != null && seg.drift_deg != null) {
+    // Skid: in a steady turn the bow points into the turn by the drift angle.
+    const turnLeft = course.marks[seg.mark].keep === 'port';
+    hd += (turnLeft ? 1 : -1) * Math.abs(seg.drift_deg) * Math.PI / 180;
+  }
+  return { s, v, pos, hd, seg, segAt, course };
+}
+// Winner's top-view outline (widest offset per station), metres, bow at +u, centred on midships.
+function canoeOutline() {
+  const h = result && result.winner_hull; if (!h) return null;
+  const L = h.x[h.x.length - 1] - h.x[0], m = 0.0254, half = h.half_breadth.map(r => Math.max(...r));
+  const pts = h.x.map((x, i) => [(L / 2 - (x - h.x[0])) * m, half[i] * m]);
+  return pts.concat(pts.slice().reverse().map(([u, v]) => [u, -v]));
+}
 function plotRace(ctx, W, H) {
   if (!raceRes) return msg(ctx, W, H, raceBusy ? 'Racing the winner over every [race] event...' : raceErr
     || (result && result.winner ? 'Press "Race winner" to race it over the [race] courses.' : 'Run an optimization first, then race its winner.'));
-  const e = raceRes.events[raceEv], course = raceRes.params.course.find(c => c.name === e.course);
-  const lw = Math.max(320, W * 0.6), half = raceRes.params.lane_width_m / 2, clr = raceRes.params.buoy_clearance_m;
-  const r1 = { l: 64, t: 30, w: lw - 84, h: (H - 70) * 0.5 }, r2 = { l: 64, t: r1.t + r1.h + 44, w: lw - 84, h: (H - 70) * 0.5 - 44 };
-  // Plan view: lane edges, buoys with their clearance circle, the path.
+  const e = raceRes.events[raceEv], st = raceState(e, anim.t), course = st.course;
+  const lw = Math.max(360, W * 0.64), half = raceRes.params.lane_width_m / 2, clr = raceRes.params.buoy_clearance_m;
+  // Course view, equal scale: the whole course, or a 40 m window on the canoe (follow). Its height
+  // follows the course's shape (a 15 x 100 m lane needs little), the speed plot gets the rest.
   const xs = e.path_m.map(p => p[0]).concat(course.marks.map(m => m.x_m), [0]);
-  const a = axes(ctx, r1, range2(xs, 0.02), [-half - 0.5, half + 0.5], 'x, m (start line x = 0)', 'y, m');
-  for (const y of [-half, half]) hline(ctx, r1.l, r1.l + r1.w, a.py(y), C.faint, [4, 4]);
-  for (const m of course.marks) {
-    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(a.px(m.x_m), a.py(m.y_m), 3, 0, 7); ctx.fill();
-    ctx.strokeStyle = C.hair; ctx.beginPath(); ctx.ellipse(a.px(m.x_m), a.py(m.y_m), Math.abs(a.px(clr) - a.px(0)), Math.abs(a.py(clr) - a.py(0)), 0, 0, 7); ctx.stroke();
+  const ys = e.path_m.map(p => p[1]).concat(course.marks.map(m => m.y_m), [-half, half]);
+  let [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  const rw = lw - 24, rh = Math.min((H - 40) * 0.66, Math.max(140, rw * (y1 - y0) / (x1 - x0) * 1.15 + 20));
+  const r1 = { l: 12, t: 26, w: rw, h: rh }, r2 = { l: 64, t: r1.t + r1.h + 22, w: lw - 84, h: H - r1.t - r1.h - 58 };
+  if (anim.follow) { const sp = 40, ar = r1.h / r1.w; [x0, x1, y0, y1] = [st.pos[0] - sp / 2, st.pos[0] + sp / 2, st.pos[1] - sp * ar / 2, st.pos[1] + sp * ar / 2]; }
+  const pad = 0.04 * Math.max(x1 - x0, y1 - y0), sc = Math.min(r1.w / (x1 - x0 + 2 * pad), r1.h / (y1 - y0 + 2 * pad));
+  const cx = r1.l + r1.w / 2 - sc * (x0 + x1) / 2, cy = r1.t + r1.h / 2 + sc * (y0 + y1) / 2;
+  const P = (x, y) => [cx + sc * x, cy - sc * y];
+  ctx.save(); ctx.beginPath(); ctx.rect(r1.l, r1.t, r1.w, r1.h); ctx.clip();
+  ctx.fillStyle = '#f7f9fc'; ctx.fillRect(r1.l, r1.t, r1.w, r1.h);
+  // Lane (race lane over the 100 m course) and the start / finish line.
+  const lx1 = Math.max(100, ...course.marks.filter(m => Math.abs(m.y_m) <= half).map(m => m.x_m));
+  ctx.strokeStyle = C.faint; ctx.setLineDash([5, 4]);
+  for (const y of [-half, half]) { const [a, b] = [P(-2, y), P(lx1 + 5, y)]; ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); }
+  // Start line across the lane; the finish line (x = finish_x_m) runs out to where the canoe
+  // crosses it (an open-water return can cross far from the lane).
+  ctx.setLineDash([]); ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+  const yEnd = e.path_m[e.path_m.length - 1][1], fx = course.finish_x_m;
+  for (const [x, ya, yb] of [[0, -half, half], [fx, Math.min(-half, yEnd - 3), Math.max(half, yEnd + 3)]]) {
+    const [a, b] = [P(x, ya), P(x, yb)]; ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
   }
-  line(ctx, a, e.path_m.map(p => p[0]), e.path_m.map(p => p[1]), C.ink);
-  legend(ctx, r1.l + 10, r1.t - 8, [[C.ink, `${e.name}: path`], [C.faint, 'lane edge', [4, 4]]]);
-  // Speed along the path; turns (arcs) shaded.
+  ctx.lineWidth = 1; ctx.fillStyle = C.muted; ctx.font = font(10);
+  { const a = P(0, half); ctx.fillText(fx === 0 ? 'start / finish' : 'start', a[0] + 4, a[1] - 4); }
+  if (Math.abs(yEnd) > half + 3) { const a = P(fx, yEnd + 3); ctx.fillText('finish', a[0] + 4, a[1] - 4); }
+  // Planned path (faint), the part covered (ink).
+  const path = (pts, col, w) => { ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); pts.forEach((p, k) => { const q = P(p[0], p[1]); k ? ctx.lineTo(...q) : ctx.moveTo(...q); }); ctx.stroke(); ctx.lineWidth = 1; };
+  path(e.path_m, C.hair, 1.5);
+  const cum = e._cum, sc2 = st.s / e.distance_m * cum[cum.length - 1];
+  path(e.path_m.filter((p, k) => cum[k] <= sc2).concat([st.pos]), C.muted, 1.5);
+  // Buoys: filled dot, clearance ring, kept-side tick toward the canoe's side.
+  course.marks.forEach((m, k) => {
+    const [bx, by] = P(m.x_m, m.y_m), rr = Math.max(2.5, 0.25 * sc);
+    ctx.strokeStyle = C.hair; ctx.beginPath(); ctx.arc(bx, by, Math.max(rr + 1, clr * sc), 0, 7); ctx.stroke();
+    ctx.fillStyle = st.seg && st.seg.mark === k ? C.accent : C.ink; ctx.beginPath(); ctx.arc(bx, by, rr, 0, 7); ctx.fill();
+    if (sc > 6) { ctx.fillStyle = C.muted; ctx.font = font(9); ctx.fillText(String(k + 1), bx + rr + 2, by - rr - 1); }
+  });
+  // The canoe: winner outline, at true scale (never smaller than 8 px long so it stays visible).
+  const out = canoeOutline();
+  ctx.save(); ctx.translate(...P(st.pos[0], st.pos[1])); ctx.rotate(-st.hd);
+  if (out) {
+    const Lm = Math.max(...out.map(p => p[0])) * 2, k = Math.max(1, 8 / (Lm * sc));
+    ctx.fillStyle = C.accent; ctx.strokeStyle = C.ink; ctx.lineWidth = 0.75; ctx.beginPath();
+    out.forEach(([u, v], i) => { const q = [u * sc * k, -v * sc * Math.max(1, k * 0.6)]; i ? ctx.lineTo(...q) : ctx.moveTo(...q); });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  } else { ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(0, 0, 4, 0, 7); ctx.fill(); }
+  ctx.restore();
+  // At course scale the canoe is a few pixels: ring it so it can be found (follow zooms in).
+  if (!out || Math.max(...out.map(q => q[0])) * 2 * sc < 20) {
+    const [qx, qy] = P(st.pos[0], st.pos[1]); ctx.strokeStyle = C.accent; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(qx, qy, 9, 0, 7); ctx.stroke(); ctx.lineWidth = 1;
+  }
+  // Scale bar.
+  const bar = [5, 10, 20, 50, 100].find(v => v * sc > 60) || 100;
+  ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(r1.l + 12, r1.t + r1.h - 12); ctx.lineTo(r1.l + 12 + bar * sc, r1.t + r1.h - 12); ctx.stroke(); ctx.lineWidth = 1;
+  ctx.fillStyle = C.ink; ctx.font = font(10); ctx.fillText(`${bar} m`, r1.l + 12, r1.t + r1.h - 18);
+  ctx.restore();
+  ctx.strokeStyle = C.hair; ctx.strokeRect(r1.l + 0.5, r1.t + 0.5, r1.w, r1.h);
+  // Live readout above the view.
+  const where = st.seg && st.seg.radius_m != null ? `turn at buoy ${st.seg.mark + 1} (R ${st.seg.radius_m.toFixed(1)} m, ${st.seg.angle_deg.toFixed(0)} deg)` : 'straight';
+  ctx.fillStyle = C.ink; ctx.font = font(12, 652);
+  ctx.fillText(`${anim.t.toFixed(1)} s / ${e.time_s.toFixed(1)} s`, r1.l, r1.t - 9);
+  ctx.font = font(11); ctx.fillStyle = C.soft;
+  ctx.fillText(`${st.v.toFixed(2)} m/s   ${st.s.toFixed(0)} / ${e.distance_m.toFixed(0)} m   ${where}   ${e.name}, ${e.paddlers} paddlers, ${e.crew_lb.toFixed(0)} lb   x${anim.speed}`, r1.l + 120, r1.t - 9);
+  // Speed along the path; turns shaded; cursor at the canoe.
   const sx = e.speed_m.map(p => p[0]), sv = e.speed_m.map(p => p[1]);
   const a2 = axes(ctx, r2, [0, e.distance_m], [0, Math.max(...sv) * 1.1], 'distance along the path, m', 'speed, m/s');
   let at = 0; ctx.fillStyle = 'rgba(20,20,20,0.06)';
   for (const sg of e.segments) { if (sg.radius_m != null) ctx.fillRect(a2.px(at), r2.t, a2.px(at + sg.length_m) - a2.px(at), r2.h); at += sg.length_m; }
   line(ctx, a2, sx, sv, C.ink);
-  legend(ctx, r2.l + 10, r2.t + 16, [[C.ink, 'speed'], [C.faint, 'shaded = turning (arc)']]);
+  ctx.strokeStyle = C.accent; ctx.beginPath(); ctx.moveTo(a2.px(st.s), r2.t); ctx.lineTo(a2.px(st.s), r2.t + r2.h); ctx.stroke();
+  ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(a2.px(st.s), a2.py(st.v), 3.5, 0, 7); ctx.fill();
+  legend(ctx, r2.l + 10, r2.t + 16, [[C.ink, 'speed'], [C.faint, 'shaded = turning'], [C.accent, 'canoe now']]);
   // Table: every event, then the weightings for [objective].
   // Rows stop at the bottom edge (the turn list is the first to go on a short pane).
   let x = lw + 8, y = 24; const row = (t, w = 450, col = C.ink) => { if (y > H - 6) return; ctx.font = font(11, w); ctx.fillStyle = col; ctx.fillText(t, x, y); y += 16; };
@@ -1099,7 +1226,7 @@ function plotRace(ctx, W, H) {
   // One row per event: name, then right-aligned columns (straight / turning as metres / seconds).
   const cols = [['time s', k => k.time_s.toFixed(1)], ['straight m / s', k => `${k.straight_m.toFixed(0)} / ${k.straight_s.toFixed(0)}`],
     ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0)]];
-  const cw = 78, nameW = Math.max(120, W - x - 12 - cw * cols.length);
+  const cw = 70, nameW = Math.max(110, W - x - 12 - cw * cols.length);
   const cells = (name, vals, w, col) => {
     ctx.font = font(11, w); ctx.fillStyle = col; ctx.textAlign = 'left';
     let n = name; while (n.length > 4 && ctx.measureText(n).width > nameW - 6) n = n.slice(0, -2);
@@ -1116,7 +1243,7 @@ function plotRace(ctx, W, H) {
   y += 6;
   const tn = e.segments.filter(sg => sg.radius_m != null);
   row(`${e.name}: ${tn.length} turn${tn.length === 1 ? '' : 's'}`, 652);
-  for (const sg of tn.slice(0, 12)) row(`R ${sg.radius_m.toFixed(1)} m  ${sg.angle_deg.toFixed(0)} deg  ${sg.entry_mps.toFixed(2)} -> ${sg.min_mps.toFixed(2)} m/s`, 450, C.muted);
+  for (const sg of tn.slice(0, 14)) row(`buoy ${sg.mark + 1}: R ${sg.radius_m.toFixed(1)} m  ${sg.angle_deg.toFixed(0)} deg  ${sg.entry_mps.toFixed(2)} -> ${sg.min_mps.toFixed(2)} m/s`, 450, sg === st.seg ? C.accent : C.muted);
 }
 
 // ---------- result panel ----------
@@ -1601,7 +1728,7 @@ async function loadResult() {
     if (p.gates) { dcGate = p.gates.dc_search; fbGate = p.gates.freeboard_min_in; }
     if (p.stability) gmGate = p.stability.gm_min_in;
     if (p.objective) objKind = p.objective.kind;
-    raceRes = result.race || null; raceErr = ''; raceEv = 0;
+    raceRes = result.race || null; raceErr = ''; raceEv = 0; animReset();
     if (result.winner_hull) {
       const wc = result.winner && result.winner.candidate;
       setHull(result.winner_hull, 'Winner hull: ' + (result.winner_hull.name || '') + (wc ? `, ${wc.depth_in.toFixed(1)} in depth` : ''));

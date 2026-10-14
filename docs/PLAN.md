@@ -53,7 +53,8 @@ T62 (`objective.kind = "race"`) is done: the shape search minimises weighted rac
 planned for the midpoint shape, the winner re-raced on its own (`examples/shape_race.toml`,
 44 s on 22 threads; docs/HULLS.md). On a laptop with fewer cores it will be slower: if it matters,
 share straight-resistance tables between crews of similar weight (draft interpolation).
-T63 (web Race tab, `POST /api/race`) is done. Open: editing `[race]` courses and events in the
+T63 (web Race tab, `POST /api/race`) is done; T69 adds the ASCE figure courses (`races/`), per-course
+lanes and the race playback (viewing speed, scrubber, follow). Open: editing `[race]` courses and events in the
 form (today they come from canoe.toml).
 
 T65 (constructable line-arc-line gunwale, `hull.gunwale_radius_in` / `shape_search.gunwale_radius_in`,

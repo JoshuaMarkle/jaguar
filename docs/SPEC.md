@@ -256,10 +256,18 @@ geometry the rules leave to the site marked as assumptions.
   time. `recommended`: `straight_weight` = sum w t S_straight / sum w t (S_straight + S_turn),
   `displacements` (same shares grouped by crew), `turn_radius_in` (turn-time weighted radius):
   values to put in `[objective]`.
+* Courses in examples/canoe.toml follow the ASCE figures in `races/` (Fig. 3 slalom, Fig. 4
+  endurance slalom, Fig. 5 sprint; lane 5, its buoy line y = 0). A course may set its own
+  `lane_width_m` (>= the race lane) for open water, e.g. the endurance loop; the start stays in the
+  race lane. Each event's `speed_m` is (distance, speed, time) about every metre.
 * Web UI: the Race tab races the last winner with the form's `[race]` (`POST /api/race`, or
-  `result.race` after a race-objective run): plan view of each event's path and buoys, speed
-  along the path with turns shaded, the event table and the recommended weightings. The form
-  carries `[race]` through but does not edit it (edit canoe.toml).
+  `result.race` after a race-objective run) and plays it back: the course at equal scale (lane,
+  start/finish line, buoys with clearance rings, the one being rounded highlighted), the winner's
+  top-view outline moving along its path at the simulated speed and yawed by the turn model's drift
+  in arcs, path covered so far; controls play/pause (space), restart, viewing speed 0.25-50x, a
+  time scrubber and follow (40 m window on the canoe); live time, speed, distance and current
+  turn; speed along the path with the canoe's cursor; the event table and recommended weightings.
+  The form carries `[race]` through but does not edit it (edit canoe.toml).
 * `--measured "EVENT=SECONDS"` first fits `paddler_power_w` (bisection) so that event takes the
   measured time. Calibrate before trusting absolute times; the weightings depend on it less.
 * Neglected: wind, current, yaw acceleration, stroke pulsation, heel. Drag is the rank-only

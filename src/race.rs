@@ -373,7 +373,7 @@ fn build_path(course: &Course, rp: &RaceParams, v: &PathVars) -> Option<(Vec<Seg
     // Overshoot of the centreline past a lane edge or inside a buoy's clearance,
     // sampled every <= 0.25 m: integrated over the path (m^2, smooth, for the
     // search penalty) and worst (m, for acceptance).
-    let half = 0.5 * rp.lane_width_m;
+    let half = course.lane_half_m(rp);
     let mut bad = Violation { integral_m2: 0.0, worst_m: 0.0 };
     for sg in &segs {
         let n = (sg.length_m / 0.25).ceil().max(1.0) as usize;
@@ -419,22 +419,22 @@ fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64), ds: f64) -> Result
     simulate_traced(boat, segs, scale, ds, None)
 }
 
-/// [`simulate`], also pushing (distance along the path m, speed m/s) to `trace`
-/// about every metre and at every segment end.
+/// [`simulate`], also pushing (distance along the path m, speed m/s, time s) to
+/// `trace` about every metre and at every segment end.
 fn simulate_traced(
     boat: &Boat,
     segs: &[Segment],
     scale: (f64, f64),
     ds: f64,
-    mut trace: Option<&mut Vec<[f64; 2]>>,
+    mut trace: Option<&mut Vec<[f64; 3]>>,
 ) -> Result<Vec<SegmentRun>> {
     let v_max = SPEEDS as f64 * SPEED_STEP;
     let m_eff = boat.mass_kg * (1.0 + ADDED_MASS);
     let mut u: f64 = 0.0; // v^2
     let mut out = Vec::with_capacity(segs.len());
-    let (mut s0, mut last) = (0.0, f64::NEG_INFINITY);
+    let (mut s0, mut t0, mut last) = (0.0, 0.0, f64::NEG_INFINITY);
     if let Some(tr) = trace.as_deref_mut() {
-        tr.push([0.0, 0.0]);
+        tr.push([0.0, 0.0, 0.0]);
         last = 0.0;
     }
     for sg in segs {
@@ -478,11 +478,12 @@ fn simulate_traced(
                 && at > last
                 && (at - last >= 1.0 || j + 1 == n)
             {
-                tr.push([at, u.sqrt()]);
+                tr.push([at, u.sqrt(), t0 + t]);
                 last = at;
             }
         }
         s0 += sg.length_m;
+        t0 += t;
         out.push(SegmentRun {
             mark: sg.mark,
             radius_m: sg.radius_m,
@@ -660,8 +661,9 @@ pub struct EventResult {
     pub segments: Vec<SegmentRun>,
     /// Centreline every ~1 m, (x, y) m, for drawing.
     pub path_m: Vec<[f64; 2]>,
-    /// (distance along the path m, speed m/s) about every metre and at segment ends.
-    pub speed_m: Vec<[f64; 2]>,
+    /// (distance along the path m, speed m/s, time s) about every metre and at
+    /// segment ends: replays the run (web Race tab).
+    pub speed_m: Vec<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -898,6 +900,7 @@ mod tests {
                 name: "sprint".into(),
                 finish_x_m: 0.0,
                 marks: vec![Mark { x_m: 100.0, y_m: 0.0, keep: Side::Port }],
+                lane_width_m: None,
             }],
             events: vec![RaceEvent {
                 name: "2M".into(),
@@ -981,7 +984,9 @@ mod tests {
         let rp = params();
         let r = run_event(&off1(), 100.0, &rp, &rp.events[0]).unwrap();
         let sp = &r.speed_m;
-        assert_eq!(sp[0], [0.0, 0.0]);
+        assert_eq!(sp[0], [0.0, 0.0, 0.0]);
+        assert!(sp.windows(2).all(|w| w[1][2] > w[0][2]), "time increases");
+        assert!((sp.last().unwrap()[2] - r.time_s).abs() < 1e-9, "ends at the race time");
         assert!(sp.windows(2).all(|w| w[1][0] > w[0][0] && w[1][0] - w[0][0] <= 1.0 + DS_M + 1e-9));
         assert!((sp.last().unwrap()[0] - r.distance_m).abs() < 1e-9);
         // Segment end speeds are in the trace at the segment ends.
@@ -993,6 +998,20 @@ mod tests {
                 assert!((p[1] - sg.exit_mps).abs() < 1e-12);
             }
         }
+    }
+
+    #[test]
+    fn a_course_lane_opens_water_for_a_loop() {
+        // Turn buoy at 100 m, then an open-water mark 40 m off the lane, back to the line.
+        let mut rp = params();
+        rp.courses[0].marks.push(Mark { x_m: 140.0, y_m: 40.0, keep: Side::Port });
+        assert!(rp.validate().is_err(), "outside the 15 m race lane");
+        rp.courses[0].lane_width_m = Some(200.0);
+        rp.validate().unwrap();
+        let r = run_event(&off1(), 100.0, &rp, &rp.events[0]).unwrap();
+        assert!(r.path_m.iter().any(|p| p[1] > 0.5 * rp.lane_width_m), "the path leaves the race lane");
+        assert!(r.start_y_m.abs() <= 0.5 * rp.lane_width_m, "the start stays in the race lane");
+        assert!(r.distance_m > 300.0, "{}", r.distance_m);
     }
 
     #[test]

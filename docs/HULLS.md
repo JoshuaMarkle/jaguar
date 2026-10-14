@@ -27,8 +27,8 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
   every hull. Hull shape then only changes how much wall there is.
 * The shape search pick is 8% lighter than off1.
 * Race-time objective (`[race]` events of canoe.toml, placeholder crews and paddler power): it picks
-  a long hull, 12 lb heavier than the weight pick but faster: weighted race time 103.3 s vs
-  108.1 s for the weight pick and 103.6 s for off1 (`jaguar race`). Length cuts wave drag more than
+  a long hull, 12 lb heavier than the weight pick but faster: weighted race time 99.9 s vs
+  105.6 s for the weight pick and 100.6 s for off1 (`jaguar race`, ASCE figure courses in `races/`). Length cuts wave drag more than
   the extra wall costs. Re-check once paddler power is calibrated and the crews are real.
 * With `strength_model = "tested_mixes"` only real mixes are allowed. M2 (55.6 pcf) is too weak in
   punching, so the 60 pcf "final target" mix wins.
@@ -37,7 +37,8 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
 
 Shape search with every shape reduced to N cross-section templates, straight between, before it
 is analysed (the search tunes the buildable loft). Race time: weighted over the `[race]` events
-(`jaguar race`, placeholder crews and power). All verified.
+(`jaguar race`, placeholder crews and power; measured on the earlier course layout, before the
+ASCE figure courses: compare within the table). All verified.
 
 | templates | shape_opt.toml (weight) | race s | shape_race.toml (race) | race s |
 |---|---|---|---|---|

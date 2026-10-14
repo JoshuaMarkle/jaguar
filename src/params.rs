@@ -79,6 +79,18 @@ pub struct Course {
     pub name: String,
     pub finish_x_m: f64,
     pub marks: Vec<Mark>,
+    /// This course's lane width, m, for the path (e.g. large for an open-water
+    /// endurance loop). Absent = `race.lane_width_m`. The start is always within
+    /// the race lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_width_m: Option<f64>,
+}
+
+impl Course {
+    /// Half the lane width the path must stay within, m.
+    pub fn lane_half_m(&self, rp: &RaceParams) -> f64 {
+        0.5 * self.lane_width_m.unwrap_or(rp.lane_width_m)
+    }
 }
 
 /// A buoy at (x, y) m (y = 0 is the lane centre, +y to port when heading +x),
@@ -134,8 +146,11 @@ impl RaceParams {
         if self.courses.is_empty() || self.events.is_empty() {
             bail!("race: need at least one [[race.course]] and one [[race.event]]");
         }
-        let half = 0.5 * self.lane_width_m;
         for (i, c) in self.courses.iter().enumerate() {
+            let half = c.lane_half_m(self);
+            if c.lane_width_m.is_some_and(|w| !(w.is_finite() && w >= self.lane_width_m)) {
+                bail!("race course '{}': lane_width_m must be >= race.lane_width_m", c.name);
+            }
             if self.courses[..i].iter().any(|o| o.name == c.name) {
                 bail!("race: course name '{}' used twice", c.name);
             }
@@ -949,7 +964,10 @@ mod tests {
         };
         assert!(bad("course = \"slalom_200\"", "course = \"nope\"").contains("no course named 'nope'"));
         assert!(bad("weight = 0.125", "weight = 0.5").contains("sum to 1"));
-        assert!(bad("{ x_m = 15.0, y_m = 2.5,", "{ x_m = 15.0, y_m = 9.0,").contains("outside the lane"));
+        assert!(bad("{ x_m = 10.0, y_m = -5.0,", "{ x_m = 10.0, y_m = -9.0,").contains("outside the lane"));
+        // A course may widen its own lane (open-water loop), never narrow it below the race lane.
+        assert!(bad("lane_width_m = 400.0", "lane_width_m = 10.0").contains("lane_width_m must be >="));
+        assert!(bad("lane_width_m = 400.0", "lane_width_m = 20.0").contains("outside the lane"));
         assert!(bad("lane_width_m = 15.0", "lane_width = 15.0").contains("unknown field"));
     }
 
