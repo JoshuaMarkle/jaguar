@@ -319,7 +319,9 @@ geometry the rules leave to the site marked as assumptions.
   `displacements` (same shares grouped by crew), `turn_radius_in` (turn-time weighted radius):
   values to put in `[objective]`.
 * Courses in examples/canoe.toml follow the ASCE figures in `races/` (Fig. 3 slalom, Fig. 4
-  endurance slalom, Fig. 5 sprint; lane 5, its buoy line y = 0). A course may set its own
+  endurance slalom, Fig. 5 sprint; lane 5, its buoy line y = 0). Endurance: the lane-5 slalom,
+  buoy 8 on the lane line at 100 m kept to starboard, the three-buoy open-water loop, buoy 12 on
+  the 100 m line 105 m across from buoy 8 (kept to starboard), then 100 m to the line. A course may set its own
   `lane_width_m` (>= the race lane) for open water, e.g. the endurance loop; the start stays in the
   race lane. Each event's `speed_m` is (distance, speed, time) about every metre.
 * Web UI: the Race tab races the last winner with the form's `[race]` (`POST /api/race`, or

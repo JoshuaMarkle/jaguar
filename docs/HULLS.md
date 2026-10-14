@@ -10,7 +10,7 @@
 | barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 125.7 | 48.5 | punching 0.90 |
 | shape_opt.toml | shape search pick (entry 9.3 deg, rocker 3.5/3.0 in) | 216 x 24.6 (18 ft) | 0.375 | 58 | 12 | **90.8** | 2.6 | punching 0.90 |
 | shape_gunwale.toml | shape search with the line-arc-line gunwale (R 318 in, waterline ends fore_wp 1.22 / aft_wp 1.27) | 224 x 25.1 (18 ft 8 in) | 0.375 | 58 | 12 | 100.4 | 2.3 | punching 0.90 |
-| shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 103.1 | 0.54 | punching 0.90 |
+| shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 103.2 | 0.53 | punching 0.90 |
 
 All verified at 321 stations: 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee
 punching with a 60/40 split, mesh at mid-wall (2 passes, docs/PUNCHING.md), auto seats checked at
@@ -28,8 +28,9 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
   every hull. Hull shape then only changes how much wall there is.
 * The shape search pick is 8% lighter than off1.
 * Race-time objective (`[race]` events of canoe.toml, placeholder crews and paddler power): it picks
-  a long hull, 12 lb heavier than the weight pick but faster: weighted race time 99.9 s vs
-  105.6 s for the weight pick and 100.6 s for off1 (`jaguar race`, ASCE figure courses in `races/`). Length cuts wave drag more than
+  a long hull, 12 lb heavier than the weight pick but faster: weighted race time 99.3 s vs
+  105.3 s for the weight pick and 100.2 s for off1 (`jaguar race`, ASCE figure courses in `races/`;
+  endurance: buoy 8 and the top-line buoy 12 kept to starboard, 639 m). Length cuts wave drag more than
   the extra wall costs. Re-check once paddler power is calibrated and the crews are real.
 * Two mixes (`[zones]`): punching only needs the strong mix under the knees. 62 pcf pads under
   each knee footprint (x about 73..88 and 155..165 in, up to 1 3/4 in above the keel, covering the

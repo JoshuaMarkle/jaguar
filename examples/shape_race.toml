@@ -102,7 +102,9 @@ seed          = 1
 # Geometry from the ASCE 2026 course figures (races/: Fig. 3 slalom, Fig. 4 endurance slalom,
 # Fig. 5 sprint), lane 5: its buoy line is y = 0, the slalom buoys alternate 5 m to the right of it
 # (rounded on their outside) and on it. The Fig. 4 open-water loop "may be any shape ... 500 m":
-# here the figure's three-buoy loop scaled so turn buoy -> loop -> finish line is 500 m (buoy to buoy).
+# here the figure's three-buoy loop. Endurance: buoy 8 (lane-5 top, on the lane line) and buoy 12
+# (on the top line, 105 m across from buoy 8) are passed on the canoe's starboard side; from 12 it
+# is 100 m down to the finish line.
 [race]
 paddler_power_w = 100.0       # sustained paddle power per paddler (calibrate: jaguar race --measured "EVENT=SECONDS")
 propulsive_efficiency = 0.7   # share of paddle power that becomes thrust
@@ -140,7 +142,7 @@ marks = [
 ]
 
 [[race.course]]
-name = "endurance_600"        # Fig. 4: the slalom, then a 500 m open-water loop (any shape on site) back to the line
+name = "endurance_600"        # Fig. 4: the slalom, round the lane-5 top buoy, the open-water loop, a top-line buoy, 100 m to the line
 finish_x_m = 0.0
 lane_width_m = 400.0          # the loop leaves the lane
 marks = [
@@ -151,10 +153,11 @@ marks = [
   { x_m = 60.0, y_m = -5.0, keep = "port" },
   { x_m = 70.0, y_m = 0.0, keep = "starboard" },
   { x_m = 80.0, y_m = -5.0, keep = "port" },
-  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "starboard" },   # 8: lane-5 top buoy, on the lane line
   { x_m = 163.0, y_m = -63.0, keep = "port" },
   { x_m = 229.0, y_m = 43.0, keep = "port" },
   { x_m = 163.0, y_m = 147.0, keep = "port" },
+  { x_m = 100.0, y_m = 105.0, keep = "starboard" }, # 12: 105 m across from buoy 8, then 100 m to the line
 ]
 
 # Events: weights_lb are PLACEHOLDERS (same as the load cases above). weight = share of the score;
