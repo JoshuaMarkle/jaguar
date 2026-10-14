@@ -48,6 +48,14 @@ A dense rectangular offset table is what every hull tool (Michlet, CAD section c
 can produce, needs only linear interpolation, and the browser can mesh it directly.
 
 ## Physics
+0. **Templates** (optional `hull.templates = N`, the constructability simplification): the hull
+   is replaced by N cross-section templates, the exact sections at cosine-spaced stations (tips
+   included, closer at the ends), with a straight (ruled) loft between neighbours, i.e. the mold a
+   hot-wire foam cut or frames with straight battens produces (`Hull::templated`). Fixed hull: the
+   table is reduced before the search. Shape search: every generated shape is reduced before it is
+   analysed, so the search tunes the buildable loft (not an approximation of a smooth optimum,
+   which sits on its gates and falls off them when simplified). The winner hull, export and web
+   view are the loft. Topsides follow it with the constant flare (draft everywhere).
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`

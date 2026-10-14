@@ -272,3 +272,21 @@ fn gunwale_radius_is_searched() {
     p.hull.gunwale_radius_in = Some(300.0);
     assert!(p.validate().unwrap_err().to_string().contains("not both"));
 }
+
+/// hull.templates in a shape search: every analysed hull is the N-template loft, so the winner
+/// hull (what gets built and exported) has exactly N stations, the exact sections of its
+/// generated shape at cosine-spaced stations.
+#[test]
+fn templates_are_what_the_search_analyses() {
+    let mut p = small(false);
+    p.hull.templates = Some(9);
+    p.validate().unwrap();
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    let h = r.winner_hull.as_ref().expect("winner");
+    assert_eq!(h.x.len(), 9);
+    let s = r.winner.as_ref().unwrap().candidate.shape.clone().unwrap();
+    let smooth = jaguar::hullgen::generate(&s, 41, 21, "smooth").unwrap();
+    assert_eq!(h.half_breadth, smooth.templated(9).half_breadth);
+    p.hull.templates = Some(2);
+    assert!(p.validate().is_err());
+}

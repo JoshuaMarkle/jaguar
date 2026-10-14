@@ -231,7 +231,7 @@ fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
     let rp = params.race.as_ref().context("objective.kind = race needs [race]")?;
     let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
     let s = to_shape(&mid);
-    let hull = generate(&s, STATIONS, WATERLINES, "reference")?;
+    let hull = templated(params, generate(&s, STATIONS, WATERLINES, "reference")?)?;
     let params = &for_shape(params, &s);
     let r = run_inner(params, &hull, true, &|_| {})?;
     let c = representative(&r).context("reference shape: inner search produced no candidates")?;
@@ -284,8 +284,17 @@ fn representative(r: &RunResult) -> Option<Candidate> {
         .cloned()
 }
 
-fn hull_for(v: &[f64; SHAPE_DIMS], index: usize) -> Result<Hull> {
-    generate(&to_shape(v), STATIONS, WATERLINES, &format!("opt-{index}"))
+/// The hull analysed for shape `v`: generated, then reduced to `hull.templates`
+/// cross-section templates when set (the search then tunes the buildable loft).
+fn hull_for(params: &Params, v: &[f64; SHAPE_DIMS], index: usize) -> Result<Hull> {
+    templated(params, generate(&to_shape(v), STATIONS, WATERLINES, &format!("opt-{index}"))?)
+}
+
+fn templated(params: &Params, h: Hull) -> Result<Hull> {
+    Ok(match params.hull.templates {
+        Some(n) => h.templated(n),
+        None => h,
+    })
 }
 
 /// `params` for one shape: its searched gunwale radius becomes `hull.gunwale_radius_in`
@@ -306,7 +315,7 @@ fn eval_shape(
     v: &[f64; SHAPE_DIMS],
     index: usize,
 ) -> Result<Eval> {
-    let hull = hull_for(v, index)?;
+    let hull = hull_for(params, v, index)?;
     let mut shape = to_shape(v);
     let params = &for_shape(params, &shape);
     shape.gunwale_radius_in = params.hull.gunwale_radius_in;
@@ -471,7 +480,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     let reps: Vec<Candidate> = evals.iter().map(|e| e.rep.clone()).collect();
     // Shape with its metrics (turn at the same inner winner the re-run finds).
     let shape = reps[best].shape.clone().context("best shape lost its parameters")?;
-    let hull = hull_for(&shapes[best], best)?;
+    let hull = hull_for(params, &shapes[best], best)?;
     let forward = |p: Progress| {
         if matches!(p, Progress::Verifying { .. }) {
             on_progress(p)

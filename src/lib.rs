@@ -44,7 +44,14 @@ use params::Params;
 /// search when `[shape_search]` is present instead.
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
     match (&params.hull.file, &params.shape_search) {
-        (Some(f), _) => optimize::run_with_progress(params, &hull::Hull::load(f)?, on_progress),
+        (Some(f), _) => {
+            let h = hull::Hull::load(f)?;
+            let h = match params.hull.templates {
+                Some(n) => h.templated(n),
+                None => h,
+            };
+            optimize::run_with_progress(params, &h, on_progress)
+        }
         (None, Some(_)) => shapeopt::run(params, on_progress),
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     }

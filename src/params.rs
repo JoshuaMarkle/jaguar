@@ -242,6 +242,13 @@ pub struct HullParams {
     /// `shape_search.gunwale_radius_in` searches the radius instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gunwale_radius_in: Option<f64>,
+    /// Present = build the hull from this many cross-section templates with a
+    /// straight loft between neighbours (`Hull::templated`; hot-wire foam or
+    /// frames + straight battens). The analysed, exported hull is that loft; in
+    /// a shape search every generated shape is reduced before it is analysed,
+    /// so the search tunes the buildable hull. >= 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub templates: Option<usize>,
     /// With a gunwale outline: steepest outward side lean allowed anywhere
     /// along the hull, deg from vertical (default 30). Steeper = rejected.
     #[serde(default = "gunwale_max_flare")]
@@ -882,6 +889,9 @@ impl Params {
             && !(r.is_finite() && r > 0.0)
         {
             bail!("hull.gunwale_radius_in must be > 0");
+        }
+        if self.hull.templates.is_some_and(|n| n < 3) {
+            bail!("hull.templates must be >= 3 (bow tip, one section, stern tip)");
         }
         if !(self.hull.gunwale_max_flare_deg > 0.0 && self.hull.gunwale_max_flare_deg < 90.0) {
             bail!("hull.gunwale_max_flare_deg must be in (0, 90)");

@@ -56,6 +56,29 @@ impl Hull {
             .with_context(|| format!("writing {}", path.display()))
     }
 
+    /// The hull as `n` cross-section templates with a straight (ruled) loft
+    /// between neighbours: the exact sections of this hull at `n` stations,
+    /// cosine-spaced (closer at the ends, where the shape changes fastest), tips
+    /// included. A jaguar-hull/1 table interpolates linearly between stations,
+    /// so the result is exactly the mold built from those templates.
+    pub fn templated(&self, n: usize) -> Hull {
+        let (x0, x1) = (self.x[0], self.x[self.x.len() - 1]);
+        let x: Vec<f64> = (0..n)
+            .map(|i| x0 + (x1 - x0) * 0.5 * (1.0 - (std::f64::consts::PI * i as f64 / (n - 1) as f64).cos()))
+            .collect();
+        let half_breadth = x
+            .iter()
+            .map(|&xi| (0..self.z.len()).map(|k| interp_col(&self.x, &self.half_breadth, k, xi)).collect())
+            .collect();
+        Hull {
+            name: format!("{}-t{n}", self.name),
+            source: format!("{} as {n} cross-section templates, straight between", self.source),
+            x,
+            half_breadth,
+            ..self.clone()
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(self.format == FORMAT, "format must be '{FORMAT}', got '{}'", self.format);
         ensure!(self.units == "in", "units must be 'in', got '{}'", self.units);
@@ -573,6 +596,35 @@ mod tests {
         assert!(lean > 60.0 && lx > 0.0 && lx < h.length, "{lean} at {lx}");
         let (_, why) = Grid::build_topsides(&h, h.draft_design, 161, ts);
         assert!(why.is_some_and(|w| w.contains("above the design draft")));
+    }
+
+    #[test]
+    fn templates_are_exact_sections_lofted_straight() {
+        let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        let t = h.templated(9);
+        t.validate().unwrap();
+        assert_eq!(t.x.len(), 9);
+        assert_eq!((t.x[0], t.x[8]), (h.x[0], h.x[h.x.len() - 1]), "tips kept");
+        // Cosine spacing: end gaps are the shortest, the middle gap the longest.
+        let gaps: Vec<f64> = t.x.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(gaps[0] < gaps[3] && (gaps[0] - gaps[7]).abs() < 1e-9);
+        // Each template is the source section at its station.
+        let nz = h.z.len();
+        for (i, &x) in t.x.iter().enumerate() {
+            for k in 0..nz {
+                assert!((t.half_breadth[i][k] - interp_col(&h.x, &h.half_breadth, k, x)).abs() < 1e-12);
+            }
+        }
+        // Between templates the loft is straight: the analysis grid interpolates linearly.
+        let g = Grid::build(&t, h.draft_design, 401);
+        let (a, b) = (t.x[3], t.x[4]);
+        for i in 0..g.nx() {
+            if g.x[i] > a && g.x[i] < b {
+                let f = (g.x[i] - a) / (b - a);
+                let want = t.half_breadth[3][nz - 1] * (1.0 - f) + t.half_breadth[4][nz - 1] * f;
+                assert!((g.y(i, nz - 1) - want).abs() < 1e-9);
+            }
+        }
     }
 
     #[test]

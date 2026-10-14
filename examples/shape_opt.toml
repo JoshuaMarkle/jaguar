@@ -8,6 +8,7 @@
 [hull]
 # no hull.file: the hull shape is optimized ([shape_search] below)
 stations = 161            # search resolution; the winner is re-checked at 2n-1
+# templates = 11          # search the buildable loft of 11 cross-section templates (docs/HULLS.md)
 flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
 
 # A design must pass EVERY load case. Seats are knee positions from the bow;

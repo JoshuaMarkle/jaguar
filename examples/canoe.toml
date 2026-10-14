@@ -8,6 +8,8 @@
 [hull]
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
+# templates = 11          # constructable mold: the hull as 11 cross-section templates, straight between
+#                         # (docs/SPEC.md Physics 0; with [shape_search] the search tunes that loft)
 flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical (demolding draft, e.g. 3-5)
 # gunwale_radius_in = 200.0  # constructable gunwale: top view straight from the bow, one arc of this radius,
 #                            # straight to the stern; sides straight from the waterline up to it (narrowest

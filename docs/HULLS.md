@@ -33,6 +33,25 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
 * With `strength_model = "tested_mixes"` only real mixes are allowed. M2 (55.6 pcf) is too weak in
   punching, so the 60 pcf "final target" mix wins.
 
+### Mold templates (`hull.templates`): how much does a simple mold cost?
+
+Shape search with every shape reduced to N cross-section templates, straight between, before it
+is analysed (the search tunes the buildable loft). Race time: weighted over the `[race]` events
+(`jaguar race`, placeholder crews and power). All verified.
+
+| templates | shape_opt.toml (weight) | race s | shape_race.toml (race) | race s |
+|---|---|---|---|---|
+| smooth (41 stations) | 90.8 lb | 108.1 | 103.1 lb, 256 in | **103.3** |
+| 15 | 91.5 lb (+0.8%) | 107.5 | 107.1 lb | 104.1 (+0.7%) |
+| 11 | 91.6 lb (+0.9%) | 107.3 | 106.2 lb | 104.1 (+0.7%) |
+| 9 | 92.8 lb (+2.2%) | 107.6 | 104.0 lb | 104.1 (+0.8%) |
+| 7 | 91.8 lb (+1.1%) | 107.2 | 106.1 lb | 104.3 (+0.9%) |
+| 5 | 94.1 lb (+3.6%) | 108.6 | 101.2 lb | 104.5 (+1.2%) |
+
+Simplifying an already optimized smooth hull afterwards is worse: winners sit on their gates (the
+race pick at freeboard 6.00 in, off1 at GM 0.26 vs 0.25), so sampling it at 21 templates already
+costs a 1 in deeper mold (+10% wall) or a heavier mix. Search the template loft instead.
+
 Re-run with `cargo run --release -- run examples/<x>.toml`. Update this table when a change moves
 a winner.
 

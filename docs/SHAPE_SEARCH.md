@@ -62,6 +62,9 @@ above the waterline, not the generator, so searching it would need a second oute
   draft (deterministic, independent of sampling). Neglected: the linear lift term, added mass,
   waves, heel. Use it to rank shapes; `shape.metrics.turn` gives `drag_n`, `moment_nm` (yaw moment
   the paddlers hold) and `drift_deg`.
+* `hull.templates = N` (optional, recommended for constructability): every generated shape is
+  reduced to N cross-section templates with a straight loft between before it is analysed, so the
+  search optimizes the buildable mold; 9-11 cost about 1% race time (docs/HULLS.md).
 * `gunwale_radius_in = [min, max]` (optional): constructable line-arc-line gunwale (docs/SPEC.md
   Physics 1), the radius searched as an 11th shape variable and stored in `shape.gunwale_radius_in`.
   A straight entry from the tip encloses only straight or hollow waterline ends (Series 7 `wp`
