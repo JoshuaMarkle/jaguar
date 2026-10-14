@@ -100,10 +100,24 @@ pub fn solve(
     patch: f64,
     crew_cg_in: f64,
 ) -> Result<Loads> {
+    let w_hull: Vec<f64> = sec.area.iter().map(|a| a * rho / IN3_PER_FT3).collect();
+    solve_weights(grid, &w_hull, &sec.zbar, crew, patch, crew_cg_in)
+}
+
+/// [`solve`] for a wall given as self weight per station `w_hull` (lb/in) and the height of
+/// its mass centroid `zg` (a two-mix zoned wall, `section::zoned_sections`).
+pub fn solve_weights(
+    grid: &Grid,
+    w_hull: &[f64],
+    zg: &[f64],
+    crew: &[CrewLoad],
+    patch: f64,
+    crew_cg_in: f64,
+) -> Result<Loads> {
     let (x, z, n, nz) = (&grid.x, &grid.z, grid.nx(), grid.nz());
     let l = x[n - 1];
     let xc = l / 2.0;
-    let w_hull: Vec<f64> = sec.area.iter().map(|a| a * rho / IN3_PER_FT3).collect();
+    let w_hull = w_hull.to_vec();
     let mut cum = vec![0.0; n * nz];
     // cumulative first moment of submerged section area about the keel
     let mut cumz = vec![0.0; n * nz];
@@ -227,7 +241,7 @@ pub fn solve(
         bail!("equilibrium broken: V_end={:.2} M_end={:.1}", v[n - 1], m[n - 1]);
     }
     let (kb_in, bm_in, kg_in) =
-        metacentric_height(grid, &cum, &cumz, d0, th, sec, &w_hull, wh, crew, crew_cg_in)?;
+        metacentric_height(grid, &cum, &cumz, d0, th, zg, &w_hull, wh, crew, crew_cg_in)?;
     let gm_in = kb_in + bm_in - kg_in;
     Ok(Loads {
         hull_weight_lb: wh,
@@ -251,7 +265,7 @@ fn metacentric_height(
     cumz: &[f64],
     d0: f64,
     th: f64,
-    sec: &Sections,
+    zg: &[f64],
     w_hull: &[f64],
     wh: f64,
     crew: &[CrewLoad],
@@ -279,7 +293,7 @@ fn metacentric_height(
     }
     let kb = trapz(&az, x) / vol;
     let bm = trapz(&iy, x) / vol;
-    let mz = trapz(&w_hull.iter().zip(&sec.zbar).map(|(w, zb)| w * zb).collect::<Vec<_>>(), x);
+    let mz = trapz(&w_hull.iter().zip(zg).map(|(w, zb)| w * zb).collect::<Vec<_>>(), x);
     let crew_lb: f64 = crew.iter().map(|c| c.lb).sum();
     let kg = (mz + crew_lb * crew_cg_in) / (wh + crew_lb);
     let gm = kb + bm - kg;

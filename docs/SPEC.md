@@ -27,7 +27,8 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 ### `canoe.toml`
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
-`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`, `[seats]`,
+`[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`,
+optional `[zones]`, `[seats]`,
 optional `[race]` (read only by `jaguar race`). Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
@@ -166,13 +167,38 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    `beam_step_in` (snap), `rocker_in = [min, max]` and `min_entry_angle_deg` (reject, with the reason
    in the candidate), `symmetric` (aft factors = fore). Each shape's `shape.metrics` (entry angle,
    rocker in, lateral moment, rejection reason) is in result.json.
+10. **Two-mix zones** (optional `[zones]`, `optimize::zoned_search`): the wall search also tries
+   walls of two mixes. Over x in [`start_in`, `end_in`] (from the bow) the wall at z <= `bottom_in`
+   (bottom flange, z from the keel) and z >= D - `top_in` (top flange) is the dense mix
+   (`dense_pcf`, heavier than the light one), everything else the light mix (`search.density_pcf`):
+   vertical and horizontal boundaries only, an I-beam in the middle and light ends. Sections are
+   transformed (light = reference, n = E_dense / E_light, E = 33 w^1.5 sqrt(f'c), ACI 318-19
+   19.2.2.1); self weight and its centroid use each mix's density. Bending is checked at each mix's
+   extreme fibres, sigma = n M (z - zbar) / I, against that mix's strengths; shell shear at the
+   neutral axis against the mix there; Kupfer per mix. Punching uses the dense mix only when every
+   knee footprint (knee spacing plus (patch + d)/2 around each knee, at the nominal seats and +/- the
+   seat variance) lies inside the span and within the hull's half-breadth at z = `bottom_in`;
+   else the light mix. Every layout x light x dense mix x (t, depth, flare) is enumerated (seats:
+   that wall's single-mix plan). Skipped before a full check: not lighter than the lightest passing
+   single-mix wall, knee punching over `dc_search` (closed form), or freeboard / GM under the gate
+   at the nominal seats (service floats). The rest are checked lightest first in batches of 32
+   until a batch has a pass or `max_checks` (default 400) are done. The winner is the best passing
+   wall of either kind by the objective, verified as above; its `calc` is an `error` (the worked
+   calculation covers single-mix walls). A fixed-mold re-sweep with new mixes is `run` on a fixed
+   hull with `[zones]` after updating the mix data.
 
 ## Output: `jaguar-result/1` (JSON)
 `{format, params, strength (mix fit + points; `flexural_fit` / `compressive_fit` only when
 measured), winner_hull (shape runs) | null, candidates: [...],
 winner: {candidate, verify_stations, verify_dc, verified, dc_extrapolated, dc_order, convergence
 {stations, dc, extrapolated, order, governing, note}, on_grid_edge, at_mix_data_edge,
-mix_provenance, search_space, diagrams, cases, empty, calc} | null}`. `mix_provenance`: the winner density is
+mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc} | null, zones}`.
+With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, x0_in, x1_in, bottom_in,
+top_in} (its `density_pcf` is the light mix) and `dense_mix` (tested mixes); the winner has
+`dense_mix_provenance`; `search_space` adds the `zones.*` axes (`limit` "no band" at a 0 band);
+the result's `zones` counts walls enumerated, skipped (`heavier`, `punching`, `service`), `checked`
+and `capped` (max_checks hit with no pass). Zoned candidates follow the single-mix ones, lightest
+first. Zoned D/C(x) and stresses are the governing mix's; `inertia_in4` is transformed. `mix_provenance`: the winner density is
 `tested` (a tested mix within 0.05 pcf, or the tested mix itself) or `predicted` (fit line only),
 the nearest tested mixes below/above it with their signed distance, and `reach_pcf` (distance to the
 nearest). `search_space`: per searched variable (thickness, density, depth, then each free
@@ -301,5 +327,4 @@ examples/canoe.toml winner (9 events) runs in about 5 s; `examples/shape_race.to
 (22 threads; mostly the per-shape straight-resistance tables, 24 Michell calls per crew).
 
 ## Out of scope (do not build)
-Running Michlet/Godzilla, desktop GUI, mix database, multizone pours (declined 2026-10-13),
-torsion. Anything else new needs the user's approval first (ideas: docs/PLAN.md).
+Running Michlet/Godzilla, desktop GUI, mix database, more than two mixes, torsion. Anything else new needs the user's approval first (ideas: docs/PLAN.md).

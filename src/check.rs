@@ -349,6 +349,172 @@ pub fn check(
     }
 }
 
+/// Strengths of one mix as capacities (x the capacity factor).
+#[derive(Debug, Clone, Copy)]
+pub struct MixCaps {
+    pub ft: f64,
+    pub fc_comp: f64,
+    pub shear: f64,
+    /// f'c x factor, for Kupfer.
+    pub fc_kupfer: f64,
+}
+
+impl MixCaps {
+    pub fn of(fit: &StrengthFit, rho: f64, k: f64) -> MixCaps {
+        let fc = fit.fc_psi(rho);
+        let (fc_comp, shear, fc_kupfer) = if fc > 0.0 {
+            (0.85 * fc * k, 2.0 * fc.sqrt() * k, fc * k)
+        } else {
+            (f64::NAN, f64::NAN, f64::NAN)
+        };
+        MixCaps { ft: fit.flexural_psi(rho) * k, fc_comp, shear, fc_kupfer }
+    }
+}
+
+/// Capacity factors (bending/shear, punching): 1/FS (asd) or phi (lrfd).
+pub fn capacity_factors(mat: &Material, pu: &Punching) -> (f64, f64) {
+    match mat.method {
+        DesignMethod::Asd => (1.0 / mat.factor_of_safety, 1.0 / mat.factor_of_safety),
+        DesignMethod::Lrfd => (0.60, if pu.method == PunchingMethod::Aci22_6 { 0.75 } else { 0.60 }),
+    }
+}
+
+/// One station of a zoned wall: the governing mix's stresses and capacities per check.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ZonedStation {
+    /// (demand psi, capacity psi) of the governing fibre for tension and compression.
+    pub tension: (f64, f64),
+    pub compression: (f64, f64),
+    pub shear: (f64, f64),
+    /// Kupfer D/C (worst mix).
+    pub biaxial: f64,
+    /// Station skipped (no real section).
+    pub masked: bool,
+}
+
+/// Per-station checks of a two-mix wall (transformed section, light = reference): bending at each
+/// mix's extreme fibres, sigma = -n M (z - zbar) / I against that mix's strengths; shell shear
+/// V Q / (I 2t) at the neutral axis against the mix there; Kupfer per mix. Same masking as
+/// [`check`] (I <= 1e-3 max I).
+#[allow(clippy::too_many_arguments)]
+pub fn zoned_stations(
+    grid: &Grid,
+    zs: &crate::section::ZonedSec,
+    loads: &Loads,
+    n: f64,
+    caps: [MixCaps; 2],
+    t: f64,
+    turning: Option<&Turning>,
+) -> Vec<ZonedStation> {
+    let imax = zs.inertia.iter().cloned().fold(0.0, f64::max);
+    let sy = hoop_psi(grid, loads, t, turning);
+    let ratio = |d: f64, c: f64| if c.is_finite() && c > 0.0 { d / c } else { f64::INFINITY };
+    (0..grid.nx())
+        .map(|i| {
+            let ii = zs.inertia[i];
+            if ii <= 1e-3 * imax {
+                return ZonedStation { masked: true, ..Default::default() };
+            }
+            let (m, zb) = (loads.moment[i], zs.zbar[i]);
+            let mut out = ZonedStation {
+                tension: (0.0, caps[0].ft),
+                compression: (0.0, caps[0].fc_comp),
+                ..Default::default()
+            };
+            let mut kz = f64::NEG_INFINITY;
+            let tau = loads.shear[i].abs() * zs.q_na[i] / (ii * 2.0 * t);
+            // The section's outermost fibres are taken at the table keel z = 0 and the gunwale, as
+            // `check` does (conservative at rockered stations); zone boundaries are where they are.
+            let all = [zs.light_z[i], zs.dense_z[i]].into_iter().flatten();
+            let (lo_all, hi_all) =
+                all.fold((f64::INFINITY, f64::NEG_INFINITY), |a, (l, h)| (a.0.min(l), a.1.max(h)));
+            for (mix, ext) in [(0, zs.light_z[i]), (1, zs.dense_z[i])] {
+                let Some((lo, hi)) = ext else { continue };
+                let lo = if lo <= lo_all { grid.z[0] } else { lo };
+                let hi = if hi >= hi_all { grid.depth } else { hi };
+                let nm = if mix == 1 { n } else { 1.0 };
+                let sig = |z: f64| -nm * m * (z - zb) / ii;
+                let (a, b) = (sig(lo), sig(hi));
+                let (ten, com) = (a.max(b).max(0.0), (-a).max(-b).max(0.0));
+                let c = caps[mix];
+                if ratio(ten, c.ft) > ratio(out.tension.0, out.tension.1) {
+                    out.tension = (ten, c.ft);
+                }
+                if ratio(com, c.fc_comp) > ratio(out.compression.0, out.compression.1) {
+                    out.compression = (com, c.fc_comp);
+                }
+                let k = kupfer_dc(ten, com, sy[i], tau, c.ft, c.fc_kupfer);
+                if k.is_nan() || k > kz {
+                    kz = k;
+                }
+            }
+            out.shear = (tau, caps[usize::from(zs.dense_at_na[i])].shear);
+            out.biaxial = kz;
+            out
+        })
+        .collect()
+}
+
+/// [`check`] for a two-mix zoned wall (`fits`: strength of the light and the dense mix).
+/// `knee_dense`: the paddlers' knees bear on the dense bottom flange (punching uses that mix),
+/// else the light one.
+#[allow(clippy::too_many_arguments)]
+pub fn check_zoned(
+    grid: &Grid,
+    sec: &Sections,
+    zs: &crate::section::ZonedSec,
+    loads: &Loads,
+    zl: &crate::section::ZoneLayout,
+    n: f64,
+    mat: &Material,
+    fits: [&StrengthFit; 2],
+    max_paddler_lb: f64,
+    knee_dense: bool,
+    pu: &Punching,
+    turning: Option<&Turning>,
+) -> Verdict {
+    let (k, k_punch) = capacity_factors(mat, pu);
+    let caps = [MixCaps::of(fits[0], zl.light_pcf, k), MixCaps::of(fits[1], zl.dense_pcf, k)];
+    let t = thickness(grid, sec).unwrap_or(f64::NAN);
+    let st = zoned_stations(grid, zs, loads, n, caps, t, turning);
+    let worst = |f: &dyn Fn(&ZonedStation) -> (f64, f64)| -> (f64, f64, f64) {
+        let mut best = (f64::NEG_INFINITY, f64::NAN, f64::NAN);
+        let mut r = f64::NEG_INFINITY;
+        for (i, s) in st.iter().enumerate() {
+            if s.masked {
+                continue;
+            }
+            let (d, c) = f(s);
+            let q = if c.is_finite() && c > 0.0 { d / c } else { f64::INFINITY };
+            if q > r || q.is_nan() {
+                (r, best) = (q, (d, c, grid.x[i]));
+            }
+        }
+        best
+    };
+    let (t_d, t_c, t_x) = worst(&|s| s.tension);
+    let (c_d, c_c, c_x) = worst(&|s| s.compression);
+    let (s_d, s_c, s_x) = worst(&|s| s.shear);
+    let (b_d, _, b_x) = worst(&|s| (s.biaxial, 1.0));
+    let fc_knee = if knee_dense { fits[1].fc_psi(zl.dense_pcf) } else { fits[0].fc_psi(zl.light_pcf) };
+    let pc = punching_calc(max_paddler_lb, t, fc_knee, 1.0, mat.knee_patch_in, pu);
+    let checks = vec![
+        result("bending_tension", t_d, t_c, Some(t_x)),
+        result("bending_compression", c_d, c_c, Some(c_x)),
+        result("shear", s_d, s_c, Some(s_x)),
+        result("punching", pc.v_u, pc.v_nominal * k_punch, None),
+        result("biaxial", b_d, 1.0, Some(b_x)),
+    ];
+    let gov = checks.iter().fold(&checks[0], |g, c| if c.dc > g.dc { c } else { g });
+    Verdict {
+        dc: gov.dc,
+        governing_check: gov.name,
+        x_governing_in: gov.x_in.unwrap_or(t_x),
+        freeboard_in: freeboard(grid, loads),
+        checks,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +576,43 @@ mod tests {
 
     fn get<'a>(v: &'a Verdict, n: &str) -> &'a CheckResult {
         v.checks.iter().find(|c| c.name == n).unwrap()
+    }
+
+    #[test]
+    fn zoned_check_with_equal_mixes_is_the_plain_check() {
+        let h = crate::hull::Hull::load(std::path::Path::new("tests/golden/off1_hull.json")).unwrap();
+        let g = Grid::build(&h, 12.0, 81);
+        let sec = crate::section::sections(&g, 0.375);
+        let crew = [
+            crate::equilibrium::CrewLoad { x_in: 90.0, lb: 200.0 },
+            crate::equilibrium::CrewLoad { x_in: 160.0, lb: 190.0 },
+        ];
+        let loads = crate::equilibrium::solve(&g, &sec, 58.0, &crew, 3.0, 12.0).unwrap();
+        let (m, f, pu) = (mat(), fit(), pu1());
+        let plain = check(&g, &sec, &loads, 58.0, &m, &f, 200.0, &pu, None);
+        let zl = crate::section::ZoneLayout {
+            light_pcf: 58.0,
+            dense_pcf: 58.0,
+            x0_in: 60.0,
+            x1_in: 180.0,
+            bottom_in: 2.0,
+            top_in: 1.0,
+        };
+        let zs = crate::section::zoned_sections(&g, 0.375, &zl, 1.0);
+        let z = check_zoned(&g, &sec, &zs, &loads, &zl, 1.0, &m, [&f, &f], 200.0, true, &pu, None);
+        for (a, b) in plain.checks.iter().zip(&z.checks) {
+            assert_eq!(a.name, b.name);
+            assert!((a.dc - b.dc).abs() < 1e-6 * a.dc.max(1e-9), "{}: {} vs {}", a.name, a.dc, b.dc);
+        }
+        // A dense bottom flange carries the punching when the knees are on it.
+        let dense = crate::section::ZoneLayout { dense_pcf: 64.0, ..zl };
+        let n = crate::section::modulus_psi(64.0, f.fc_psi(64.0))
+            / crate::section::modulus_psi(58.0, f.fc_psi(58.0));
+        let zs = crate::section::zoned_sections(&g, 0.375, &dense, n);
+        let on = check_zoned(&g, &sec, &zs, &loads, &dense, n, &m, [&f, &f], 200.0, true, &pu, None);
+        let off = check_zoned(&g, &sec, &zs, &loads, &dense, n, &m, [&f, &f], 200.0, false, &pu, None);
+        let p = |v: &Verdict| get(v, "punching").dc;
+        assert!(p(&on) < p(&off) && (p(&off) - get(&plain, "punching").dc).abs() < 1e-12);
     }
 
     fn pu1() -> Punching {

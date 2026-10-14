@@ -67,7 +67,19 @@ pub fn flotation(
     max_len_in: f64,
 ) -> Result<Flotation> {
     let wall = trapz(&grid.x, &sec.area);
-    let weight = wall * rho / 1728.0;
+    flotation_weight(grid, sec, wall * rho / 1728.0, swamp_factor, max_len_in)
+}
+
+/// [`flotation`] for a wall of known self weight `weight` lb (a two-mix zoned wall); the wall
+/// volume and the pockets come from the geometry as before.
+pub fn flotation_weight(
+    grid: &Grid,
+    sec: &Sections,
+    weight: f64,
+    swamp_factor: f64,
+    max_len_in: f64,
+) -> Result<Flotation> {
+    let wall = trapz(&grid.x, &sec.area);
     let need = (swamp_factor * weight * 1728.0 / WATER_PCF - wall).max(0.0);
     let (x0, xn) = (grid.x[0], grid.x[grid.nx() - 1]);
     let ai = interior_area(grid, sec);

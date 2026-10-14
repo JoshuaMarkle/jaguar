@@ -184,7 +184,7 @@ fn provenance_line(p: &crate::mix::MixProvenance) -> String {
     )
 }
 
-/// Search-space table: one row per wall variable and per shape factor on a
+/// Search-space table: one row per wall and zone variable and per shape factor on a
 /// bound; shape factors inside their bounds are counted on one line.
 fn search_space_lines(axes: &[crate::optimize::SearchAxis]) -> Vec<String> {
     use crate::optimize::Bound;
@@ -194,7 +194,8 @@ fn search_space_lines(axes: &[crate::optimize::SearchAxis]) -> Vec<String> {
     )];
     let mut inside = 0;
     for (i, a) in axes.iter().enumerate() {
-        if i >= 3 && a.at_bound.is_none() {
+        let shape = i >= 3 && a.name != "flare_deg" && !a.name.starts_with("zones.");
+        if shape && a.at_bound.is_none() {
             inside += 1;
             continue;
         }
@@ -225,6 +226,21 @@ fn search_space_lines(axes: &[crate::optimize::SearchAxis]) -> Vec<String> {
     out
 }
 
+/// The two-mix layout: `zones  dense 58.0 pcf over x 60..180 in: bottom 2.0 in, top 1.0 in; light elsewhere`.
+pub fn zone_line(z: &crate::section::ZoneLayout, dense_mix: Option<&str>) -> String {
+    let band = |h: f64| if h > 0.0 { format!("{h:.1} in") } else { "none".into() };
+    format!(
+        "        zones  dense {}{:.1} pcf over x {:.0}..{:.0} in: bottom {}, top {}; light {:.1} pcf elsewhere",
+        dense_mix.map_or(String::new(), |m| format!("mix {m} ")),
+        z.dense_pcf,
+        z.x0_in,
+        z.x1_in,
+        band(z.bottom_in),
+        band(z.top_in),
+        z.light_pcf
+    )
+}
+
 /// Pure summary text, one entry per output line, never more than `MAX_LINES`.
 pub fn summary_lines(r: &RunResult) -> Vec<String> {
     let p = &r.params;
@@ -248,6 +264,17 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
     let passed = r.candidates.iter().filter(|c| c.passes).count();
     let errs: Vec<&str> = r.candidates.iter().filter_map(|c| c.error.as_deref()).collect();
     out.push(format!("candidates {n}  passed {passed}  errored {}", errs.len()));
+    if let Some(z) = &r.zones {
+        out.push(format!(
+            "  zones: {} two-mix walls; skipped {} not lighter, {} punching, {} freeboard/GM; checked {}{}",
+            z.walls,
+            z.heavier,
+            z.punching,
+            z.service,
+            z.checked,
+            if z.capped { " (zones.max_checks reached, none passed)" } else { "" }
+        ));
+    }
     if !errs.is_empty() {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
         for e in &errs {
@@ -296,14 +323,15 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             let lb =
                 if shape_cols { format!(" {:>6.1} {:>5.1}", c.length_in, c.beam_in) } else { String::new() };
             out.push(format!(
-                "  {:>6.3} {:>5.1} {:>6.2} {:>8.2} {:>6} {:>7}{lb}  {}",
+                "  {:>6.3} {:>5.1} {:>6.2} {:>8.2} {:>6} {:>7}{lb}  {}{}",
                 c.thickness_in,
                 c.density_pcf,
                 c.depth_in,
                 c.hull_weight_lb,
                 fmt_opt(v.map(|v| v.dc), 3),
                 fmt_opt(v.map(|v| v.freeboard_in), 2),
-                c.governing_case.as_deref().unwrap_or("-")
+                c.governing_case.as_deref().unwrap_or("-"),
+                c.zones.map_or(String::new(), |z| format!("  zoned, dense {:.1} pcf", z.dense_pcf))
             ));
         }
         if frontier.len() > MAX_FRONTIER {
@@ -325,6 +353,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 "WINNER  t {:.3} in  {rho}  depth {:.2} in  weight {:.2} lb",
                 c.thickness_in, c.depth_in, c.hull_weight_lb
             ));
+            if let Some(z) = &c.zones {
+                out.push(zone_line(z, c.dense_mix.as_deref()));
+            }
             out.push(format!(
                 "        D/C {}  freeboard {} in  governing {}",
                 fmt_opt(v.map(|v| v.dc), 3),
@@ -393,6 +424,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             ));
             out.push(convergence_line(w));
             out.push(provenance_line(&w.mix_provenance));
+            if let Some(d) = &w.dense_mix_provenance {
+                out.push(provenance_line(d).replacen("mix", "dense mix", 1));
+            }
             if w.at_mix_data_edge {
                 out.push(mix_edge_note(r, w));
             }
@@ -629,6 +663,8 @@ mod tests {
             governing_case: Some("race".into()),
             error: None,
             passes: gates_ok,
+            zones: None,
+            dense_mix: None,
         }
     }
 
@@ -655,6 +691,7 @@ mod tests {
             candidates,
             winner,
             race: None,
+            zones: None,
         }
     }
 
@@ -664,6 +701,7 @@ mod tests {
         let candidate = cand(0.25, 70.0, 84.8, 0.786, 6.42, true);
         Winner {
             mix_provenance: strength.provenance(70.0, None).unwrap(),
+            dense_mix_provenance: None,
             search_space: crate::optimize::search_space(&params, &strength, &candidate).unwrap(),
             candidate,
             verify_stations: 81,

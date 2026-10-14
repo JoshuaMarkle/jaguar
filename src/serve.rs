@@ -965,6 +965,8 @@ mod tests {
                     governing_case: None,
                     error: Some("x".into()),
                     passes: false,
+                    zones: None,
+                    dense_mix: None,
                 });
             }
         }

@@ -109,6 +109,18 @@ swamp_factor = 1.1        # wall + pockets must displace >= this x canoe weight
 # speed_mps = 2.5         # boat speed through the turn (lateral acceleration V^2 / R)
 # radius_in = 394.0       # turn radius (394 in = 10 m)
 
+# [zones]                 # optional: also search two-mix walls (I-beam over the middle, light ends).
+#                         # Over x = start..end (in from the bow) the wall below bottom_in (above the keel)
+#                         # and above depth - top_in is the dense mix; the rest is the light mix
+#                         # (search.density_pcf). Lines are vertical and horizontal only. [min, max, step]:
+# dense_pcf = [56.0, 64.0, 2.0]   # dense mix (only ones heavier than the light mix are tried)
+# start_in  = [40.0, 80.0, 20.0]  # dense span start
+# end_in    = [160.0, 200.0, 20.0] # dense span end
+# bottom_in = [0.0, 3.0, 1.0]     # bottom band height; the knees punch the dense mix only if all are on it
+# top_in    = [0.0, 2.0, 1.0]     # top band depth below the gunwale (0 = none)
+# max_checks = 400                # most zoned walls fully checked, lightest first (default 400)
+# Re-sweep a fixed mold with new mixes: update the mix data and run again with [zones].
+
 [objective]
 kind = "drag"             # "drag" (default) = least water resistance, "weight" = lightest hull,
                           # "race" = shortest weighted race time over [race] (needs [shape_search]; examples/shape_race.toml)

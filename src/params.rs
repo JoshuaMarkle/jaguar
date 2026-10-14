@@ -44,6 +44,34 @@ pub struct Params {
     /// Never read by the wall or shape search.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub race: Option<RaceParams>,
+    /// Present = also search two-mix walls (src/optimize.rs `zoned_search`): a dense mix in
+    /// a bottom and a top band over the middle (an I-beam), the light mix everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zones: Option<Zones>,
+}
+
+/// Two-mix zone axes (docs/SPEC.md). Each is an inclusive `[min, max, step]` range, inches
+/// along the hull from the bow (x) or up from the keel (z). The light mix is `search.density_pcf`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Zones {
+    /// Dense mix densities, pcf (fit mode: clipped to the mix data like search.density_pcf;
+    /// tested_mixes: the tested mixes inside [min, max]). Only ones heavier than the light mix.
+    pub dense_pcf: [f64; 3],
+    /// Where the dense span starts and ends, in from the bow (start < end).
+    pub start_in: [f64; 3],
+    pub end_in: [f64; 3],
+    /// Height of the dense bottom band above the keel and depth of the top band below the
+    /// gunwale, in (0 = no band; not both 0).
+    pub bottom_in: [f64; 3],
+    pub top_in: [f64; 3],
+    /// Most zoned walls fully checked, lightest first (the search stops at the first pass).
+    #[serde(default = "default_max_checks")]
+    pub max_checks: usize,
+}
+
+fn default_max_checks() -> usize {
+    400
 }
 
 /// Race simulator inputs (src/race.rs). Units: m, m/s, N, W (the rules give
@@ -904,6 +932,30 @@ impl Params {
         }
         if let Some(r) = &self.race {
             r.validate()?;
+        }
+        if let Some(z) = &self.zones {
+            for (name, [lo, hi, st], min) in [
+                ("dense_pcf", z.dense_pcf, f64::MIN_POSITIVE),
+                ("start_in", z.start_in, 0.0),
+                ("end_in", z.end_in, 0.0),
+                ("bottom_in", z.bottom_in, 0.0),
+                ("top_in", z.top_in, 0.0),
+            ] {
+                if !(lo.is_finite() && hi.is_finite() && lo >= min && hi >= lo && st > 0.0) {
+                    bail!(
+                        "zones.{name} must be [min >= {min}, max >= min, step > 0], got [{lo}, {hi}, {st}]"
+                    );
+                }
+            }
+            if z.start_in[0] >= z.end_in[1] {
+                bail!("zones: start_in must be able to lie before end_in");
+            }
+            if z.bottom_in[1] <= 0.0 && z.top_in[1] <= 0.0 {
+                bail!("zones: bottom_in or top_in must allow a band > 0");
+            }
+            if z.max_checks < 1 {
+                bail!("zones.max_checks must be >= 1");
+            }
         }
         if let Some(r) = self.hull.gunwale_radius_in
             && !(r.is_finite() && r > 0.0)
