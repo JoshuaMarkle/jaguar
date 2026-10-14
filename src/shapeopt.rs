@@ -7,7 +7,11 @@
 //! (`on_workers`). A shape's score is its inner winner's objective value:
 //! `hull_weight_lb` for `objective.kind = "weight"`, `drag_n` for `"drag"`
 //! (a winner without a drag value scores +inf), blended with the steady-turn
-//! drag when `straight_weight < 1`. Shapes with no passing wall design score +inf.
+//! drag when `straight_weight < 1`, and for `"race"` the weighted race time
+//! of the inner winner on paths planned once for the reference (midpoint)
+//! shape's inner winner (`race::plan` / `race::planned_time`); the final winner
+//! is raced again on paths re-planned for it (`RunResult::race`). Shapes with
+//! no passing wall design score +inf.
 //!
 //! Algorithm:
 //! 1. Latin hypercube of `samples` shapes (SplitMix64, seeded). min == max
@@ -30,6 +34,7 @@ use crate::hull::{Grid, Hull, linspace};
 use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
 use crate::optimize::{Candidate, Progress, RunResult, run_inner, run_with_progress};
 use crate::params::{ObjectiveKind, Params, ShapeSearch};
+use crate::race;
 use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
 use crate::units::{IN3_PER_FT3, WATER_PCF};
 use anyhow::{Context, Result};
@@ -216,7 +221,26 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
     Ok(Refs { drag_n, turn_n })
 }
 
-fn score_of(params: &Params, r: &RunResult, m: &ShapeMetrics, refs: Option<Refs>) -> f64 {
+/// Race paths for the shape scores: planned on the reference (midpoint) shape
+/// with its inner winner's wall (or its representative candidate's, so the
+/// plan exists even when that shape has no passing wall).
+fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
+    let rp = params.race.as_ref().context("objective.kind = race needs [race]")?;
+    let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
+    let hull = generate(&to_shape(&mid), STATIONS, WATERLINES, "reference")?;
+    let r = run_inner(params, &hull, true, &|_| {})?;
+    let c = representative(&r).context("reference shape: inner search produced no candidates")?;
+    let top = race::topsides(&hull, c.depth_in, params.hull.flare_deg);
+    race::plan(&top, c.hull_weight_lb, rp).context("race paths on the reference (midpoint) shape")
+}
+
+fn score_of(
+    params: &Params,
+    r: &RunResult,
+    m: &ShapeMetrics,
+    refs: Option<Refs>,
+    race_s: Option<f64>,
+) -> f64 {
     if m.rejected.is_some() {
         return f64::INFINITY;
     }
@@ -224,6 +248,7 @@ fn score_of(params: &Params, r: &RunResult, m: &ShapeMetrics, refs: Option<Refs>
         None => f64::INFINITY,
         Some(w) => match params.objective.kind {
             ObjectiveKind::Weight => w.candidate.hull_weight_lb,
+            ObjectiveKind::Race => race_s.unwrap_or(f64::INFINITY),
             ObjectiveKind::Drag => {
                 let d = w.candidate.drag_n.unwrap_or(f64::INFINITY);
                 match refs {
@@ -262,6 +287,7 @@ fn eval_shape(
     params: &Params,
     ss: &ShapeSearch,
     refs: Option<Refs>,
+    plan: Option<&race::Plan>,
     v: &[f64; 10],
     index: usize,
 ) -> Result<Eval> {
@@ -279,7 +305,20 @@ fn eval_shape(
         }
         Err(_) => {}
     }
-    let score = score_of(params, &r, &m, refs);
+    if let (Some(pl), Some(rp), Some(w)) = (plan, &params.race, &r.winner)
+        && m.rejected.is_none()
+    {
+        let c = &w.candidate;
+        let top = race::topsides(&hull, c.depth_in, params.hull.flare_deg);
+        match race::planned_time(&top, c.hull_weight_lb, rp, pl) {
+            Ok(t) => rep.race_s = Some(t),
+            Err(e) => {
+                rep.passes = false;
+                rep.error = Some(format!("race: {e:#}"));
+            }
+        }
+    }
+    let score = score_of(params, &r, &m, refs, rep.race_s);
     if let Some(why) = &m.rejected {
         rep.passes = false;
         rep.error = Some(format!("shape rejected: {why}"));
@@ -343,6 +382,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     } else {
         None
     };
+    let plan = if params.objective.kind == ObjectiveKind::Race { Some(race_plan(params, ss)?) } else { None };
     let free = free_dims(ss);
 
     let mut shapes: Vec<[f64; 10]> = Vec::new();
@@ -358,7 +398,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
             let out: Vec<Result<Eval>> = on_workers(batch.len(), &|i| {
                 let (v, index) = (&batch[i], base + i);
                 on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
-                let e = eval_shape(params, ss, refs, v, index);
+                let e = eval_shape(params, ss, refs, plan.as_ref(), v, index);
                 if let Ok(e) = &e {
                     let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                     on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
@@ -424,8 +464,16 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     }
     if let Some(w) = &mut r.winner {
         w.candidate.shape = Some(shape);
+        w.candidate.race_s = reps[best].race_s;
         // Now that the winner carries its shape, add the shape axes.
         w.search_space = crate::optimize::search_space(params, &r.strength, &w.candidate)?;
+    }
+    if let (Some(w), Some(rp), ObjectiveKind::Race) = (&r.winner, &params.race, params.objective.kind) {
+        let c = &w.candidate;
+        r.race = Some(
+            race::run(&hull, c.hull_weight_lb, c.depth_in, params.hull.flare_deg, rp)
+                .context("race of the winner on re-planned paths")?,
+        );
     }
     if r.winner.is_some() {
         r.winner_hull = Some(hull);

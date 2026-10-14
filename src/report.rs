@@ -349,6 +349,16 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             if !extra.is_empty() {
                 out.push(format!("        {}", extra.join("  ")));
             }
+            if let Some(t) = c.race_s {
+                let mut l = format!("        race {t:.1} s weighted (paths planned on the reference shape)");
+                if let Some(rr) = &r.race {
+                    l += &format!(
+                        ", {:.1} s re-planned; straight_weight {:.2}",
+                        rr.weighted_time_s, rr.recommended.straight_weight
+                    );
+                }
+                out.push(l);
+            }
             if let Some(v) = v {
                 for k in &v.checks {
                     let mark = if k.name == v.governing_check { "  <- governs" } else { "" };
@@ -537,6 +547,7 @@ mod tests {
             shape: None,
             gm_in: None,
             drag_n: None,
+            race_s: None,
             air_pocket_in: None,
             thickness_in: t,
             density_pcf: rho,
@@ -571,7 +582,15 @@ mod tests {
         candidates.push(e.clone());
         candidates.push(e);
         let strength = crate::optimize::strength(&params).unwrap();
-        RunResult { format: RESULT_FORMAT, params, strength, winner_hull: None, candidates, winner }
+        RunResult {
+            format: RESULT_FORMAT,
+            params,
+            strength,
+            winner_hull: None,
+            candidates,
+            winner,
+            race: None,
+        }
     }
 
     fn winner(verified: bool, edge: bool) -> Winner {
@@ -681,6 +700,7 @@ mod tests {
         w.at_mix_data_edge = true;
         w.candidate.gm_in = Some(4.3);
         w.candidate.drag_n = Some(23.1);
+        w.candidate.race_s = Some(104.2);
         w.candidate.shape = Some(crate::hullgen::ShapeParams {
             length_in: 240.0,
             beam_in: 20.7,
@@ -703,6 +723,7 @@ mod tests {
         assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in  draft 5.9 in"));
         assert!(s.contains("GM 4.30 in (min"));
         assert!(s.contains("drag 5.19 lb (23.1 N) at"));
+        assert!(s.contains("race 104.2 s weighted"));
         assert!(s.contains("shape fore_wp"));
         assert!(s.contains("L in"));
         assert!(l.len() <= MAX_LINES);

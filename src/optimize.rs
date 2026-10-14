@@ -64,6 +64,9 @@ pub struct Candidate {
     /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
     /// (heaviest) load case. None unless objective.kind = drag.
     pub drag_n: Option<f64>,
+    /// Weighted race time, s, on the shape search's planned paths
+    /// (`race::planned_time`). None unless objective.kind = race.
+    pub race_s: Option<f64>,
     /// Swamped-flotation air pocket length needed at EACH end, in. None when
     /// `[flotation]` is absent or the pocket cannot be sized (then `error` says why).
     pub air_pocket_in: Option<f64>,
@@ -719,6 +722,10 @@ pub struct RunResult {
     pub candidates: Vec<Candidate>,
     /// None = no design passed. Never a fallback "best failing" design.
     pub winner: Option<Winner>,
+    /// objective.kind = race: the winner raced on paths re-planned for it
+    /// (`race::run`; its weighted time is <= the winner's `race_s`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub race: Option<crate::race::RaceResult>,
 }
 
 pub const RESULT_FORMAT: &str = "jaguar-result/1";
@@ -934,6 +941,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         winner_hull,
         candidates,
         winner,
+        race: None,
     })
 }
 
@@ -1427,6 +1435,7 @@ fn evaluate(
         shape: None,
         gm_in: None,
         drag_n: None,
+        race_s: None,
         air_pocket_in: None,
         thickness_in: t,
         density_pcf: rho,

@@ -96,7 +96,8 @@ swamp_factor = 1.1        # wall + pockets must displace >= this x canoe weight
 # radius_in = 394.0       # turn radius (394 in = 10 m)
 
 [objective]
-kind = "drag"             # "drag" (default) = least water resistance, "weight" = lightest hull
+kind = "drag"             # "drag" (default) = least water resistance, "weight" = lightest hull,
+                          # "race" = shortest weighted race time over [race] (needs [shape_search]; examples/shape_race.toml)
 speed_mps = 2.5           # race speed for the drag objective
 # Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
 # Absent = heaviest load case. Weights must sum to 1. Presets:
@@ -109,7 +110,7 @@ speed_mps = 2.5           # race speed for the drag objective
 
 # Race simulator (`jaguar race result.json`, src/race.rs): races the winner over the ASCE courses
 # and prints race times, straight vs turning distance/time and the straight_weight / displacements
-# to use above. Never read by `run`. Units here: m, m/s, N, W. Courses: start on x = 0 heading +x,
+# to use in [objective]; also the score of `run` with objective.kind = "race". Units here: m, m/s, N, W. Courses: start on x = 0 heading +x,
 # y = 0 lane centre (+y = port), round each mark keeping it on `keep` side, finish on x = finish_x_m.
 # Geometry from ASCE 2026 rules sec. 9.1; where the rules leave it to the site (first slalom buoy
 # 15 m out, which way the 180 deg turns go, the 500 m endurance leg as out-and-back laps) it is an

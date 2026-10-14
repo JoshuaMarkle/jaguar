@@ -20,7 +20,7 @@
 //!   steady-turn drag of `resistance::turn` (cross-flow; scales as v^2 at a
 //!   given R, so it is tabulated per radius as drag / v^2). Integrated in
 //!   distance on u = v^2 (no singularity at the standing start), RK4, step
-//!   `DS_M` split at segment ends; dt = 2 ds / (v0 + v1).
+//!   `DS_M` split at segment ends.
 //! * Tightest radius: R >= `min_turn_radius_m` and >= the buoy clearance. The
 //!   turn model needs no small-angle limit: the strip lateral velocity
 //!   v + r x is exact rigid-body kinematics and cross-flow drag is the
@@ -51,7 +51,7 @@ pub const ADDED_MASS: f64 = 0.05;
 const DS_M: f64 = 0.25;
 /// Straight resistance table: speeds k * SPEED_STEP for k = 1..=SPEEDS.
 const SPEED_STEP: f64 = 0.25;
-const SPEEDS: usize = 28;
+const SPEEDS: usize = 24; // to 6 m/s (above Olympic K4 sprint speed); faster is an error
 /// Stations of the underwater lateral profile for the turn model.
 const PROFILE_STATIONS: usize = 101;
 /// Largest turn radius tried, m.
@@ -86,7 +86,28 @@ pub struct Boat {
 
 impl Boat {
     /// `topsides`: the hull extruded to its mold depth (see [`topsides`]).
+    /// Tabulates the turn drag for the path search.
     pub fn new(
+        topsides: &Hull,
+        hull_lb: f64,
+        crew_lb: &[f64],
+        power_w: f64,
+        rp: &RaceParams,
+    ) -> Result<Boat> {
+        let mut boat = Self::untabled(topsides, hull_lb, crew_lb, power_w, rp)?;
+        boat.turn_table = (0..TURN_TABLE)
+            .map(|k| {
+                let (c, d) = boat.turn_exact(boat.table_radius(k as f64))?;
+                ensure!(c > 0.0, "race: zero turning drag at a buoy turn");
+                Ok((c.ln(), d))
+            })
+            .collect::<Result<_>>()?;
+        Ok(boat)
+    }
+
+    /// Like [`Boat::new`] without the turn table: every turn is solved exactly
+    /// (cheaper when the path is given, as in [`planned_time`]).
+    pub fn untabled(
         topsides: &Hull,
         hull_lb: f64,
         crew_lb: &[f64],
@@ -119,13 +140,6 @@ impl Boat {
         };
         boat.r_min_m = rp.min_turn_radius_m.max(rp.buoy_clearance_m);
         ensure!(boat.r_min_m < R_MAX_M, "race: min_turn_radius_m must be < {R_MAX_M} m");
-        boat.turn_table = (0..TURN_TABLE)
-            .map(|k| {
-                let (c, d) = boat.turn_exact(boat.table_radius(k as f64))?;
-                ensure!(c > 0.0, "race: zero turning drag at a buoy turn");
-                Ok((c.ln(), d))
-            })
-            .collect::<Result<_>>()?;
         Ok(boat)
     }
 
@@ -155,8 +169,11 @@ impl Boat {
     }
 
     /// [`Boat::turn_exact`] from the table: ln(drag) linear in ln(R) (< 0.1%
-    /// off, tested). Err outside r_min..R_MAX_M.
+    /// off, tested). Err outside r_min..R_MAX_M. Untabled: exact.
     pub fn turn_coeff(&self, r_m: f64) -> Result<(f64, f64)> {
+        if self.turn_table.is_empty() {
+            return self.turn_exact(r_m);
+        }
         ensure!(
             r_m >= self.r_min_m * (1.0 - 1e-12) && r_m <= R_MAX_M * (1.0 + 1e-12),
             "race: turn radius {r_m} m outside {}..{R_MAX_M} m",
@@ -364,8 +381,16 @@ fn build_path(course: &Course, rp: &RaceParams, v: &PathVars) -> Option<(Vec<Seg
         for j in 0..=n {
             let p = sg.point(ds * j as f64);
             let lane = (p[1].abs() - half).max(0.0);
-            let buoy =
-                course.marks.iter().map(|m| (clr - norm(sub(p, [m.x_m, m.y_m]))).max(0.0)).sum::<f64>();
+            // Squared test first: almost every sample is far from every buoy.
+            let buoy = course
+                .marks
+                .iter()
+                .map(|m| {
+                    let d = sub(p, [m.x_m, m.y_m]);
+                    let d2 = d[0] * d[0] + d[1] * d[1];
+                    if d2 >= clr * clr { 0.0 } else { clr - d2.sqrt() }
+                })
+                .sum::<f64>();
             bad.integral_m2 += (lane + buoy) * ds;
             bad.worst_m = bad.worst_m.max(lane.max(buoy));
         }
@@ -390,7 +415,8 @@ pub struct SegmentRun {
 }
 
 /// Run `segs` from a standing start; drags scaled by (straight, turn) for sensitivities.
-fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64)) -> Result<Vec<SegmentRun>> {
+fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64), ds: f64) -> Result<Vec<SegmentRun>> {
+    let v_max = SPEEDS as f64 * SPEED_STEP;
     let m_eff = boat.mass_kg * (1.0 + ADDED_MASS);
     let mut u: f64 = 0.0; // v^2
     let mut out = Vec::with_capacity(segs.len());
@@ -404,7 +430,7 @@ fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64)) -> Result<Vec<Segm
             let v = u.max(0.0).sqrt();
             2.0 * (boat.thrust_n(v) - scale.0 * boat.straight_n(v) - scale.1 * ct * v * v) / m_eff
         };
-        let n = (sg.length_m / DS_M).ceil().max(1.0) as usize;
+        let n = (sg.length_m / ds).ceil().max(1.0) as usize;
         let h = sg.length_m / n as f64;
         let entry = u.sqrt();
         let (mut t, mut vmin) = (0.0, entry);
@@ -415,6 +441,7 @@ fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64)) -> Result<Vec<Segm
             let k4 = f(u + h * k3);
             let u1 = u + h / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
             ensure!(u1 > 0.0 && u1.is_finite(), "race: the canoe stalls (thrust < drag at rest?)");
+            ensure!(u1 <= v_max * v_max, "race: faster than the {v_max} m/s drag table");
             let k1n = f(u1);
             t += if u > 0.0 {
                 // Simpson on 1/v, midpoint from the cubic Hermite of u(s).
@@ -458,7 +485,7 @@ fn cost(boat: &Boat, course: &Course, rp: &RaceParams, v: &PathVars, penalty: f6
         return f64::INFINITY;
     }
     match build_path(course, rp, v) {
-        Some((segs, bad)) => match simulate(boat, &segs, (1.0, 1.0)) {
+        Some((segs, bad)) => match simulate(boat, &segs, (1.0, 1.0), DS_M) {
             Ok(runs) => total_time(&runs) + penalty * bad.integral_m2,
             Err(_) => f64::INFINITY,
         },
@@ -490,7 +517,7 @@ fn initial(course: &Course, r0: f64) -> PathVars {
     PathVars(v)
 }
 
-/// Compass search from `x` with start `steps` until every step < 1e-3.
+/// Compass search from `x` with start `steps` until every step < `tol`.
 fn compass(
     boat: &Boat,
     course: &Course,
@@ -498,10 +525,11 @@ fn compass(
     mut x: PathVars,
     mut step: Vec<f64>,
     pen: f64,
+    tol: f64,
 ) -> (f64, PathVars) {
     let mut fx = cost(boat, course, rp, &x, pen);
     let mut evals = 0;
-    while step.iter().any(|s| *s > 1e-3) && evals < 20_000 {
+    while step.iter().any(|s| *s > tol) && evals < 20_000 {
         let mut moved = false;
         for (i, &st) in step.iter().enumerate() {
             for sgn in [1.0, -1.0] {
@@ -526,27 +554,45 @@ fn compass(
 /// continuation from a few deterministic starts; the fastest that keeps every
 /// lane edge and buoy clearance (within `VIOLATION_TOL_M`) wins.
 pub fn optimal_path(boat: &Boat, course: &Course, rp: &RaceParams) -> Result<PathVars> {
+    // Starts in parallel; results in start order, ties keep the earlier start (deterministic).
+    // Each: Some((worst violation, time if within tolerance, path)).
+    let runs: Vec<Option<(f64, Option<f64>, PathVars)>> = [2.0f64, 5.0, 10.0]
+        .par_iter()
+        .map(|&r0| -> Result<Option<(f64, Option<f64>, PathVars)>> {
+            let mut x = initial(course, r0.max(boat.r_min_m + 0.1));
+            if !cost(boat, course, rp, &x, 0.0).is_finite() {
+                // Unbuildable start: skip it; a canoe the model cannot run: say why.
+                if let Some((segs, _)) = build_path(course, rp, &x) {
+                    simulate(boat, &segs, (1.0, 1.0), DS_M)?;
+                }
+                return Ok(None);
+            }
+            // Start steps: 1 m for the start y and radii, 0.3 rad for centre angles
+            // (odd i = radius); later stages restart at a tenth.
+            let step0: Vec<f64> =
+                (0..x.0.len()).map(|i| if i > 0 && i % 2 == 0 { 0.3 } else { 1.0 }).collect();
+            for (k, &pen) in PENALTIES.iter().enumerate() {
+                let sc = if k == 0 { 1.0 } else { 0.1 };
+                // Early stages stop at 1 cm / 0.01 rad; the last converges to 1e-3.
+                let tol = if k + 1 == PENALTIES.len() { 1e-3 } else { 1e-2 };
+                x = compass(boat, course, rp, x, step0.iter().map(|s| s * sc).collect(), pen, tol).1;
+            }
+            let Some((segs, bad)) = build_path(course, rp, &x) else { return Ok(None) };
+            let t = if bad.worst_m > VIOLATION_TOL_M {
+                None
+            } else {
+                Some(total_time(&simulate(boat, &segs, (1.0, 1.0), DS_M)?))
+            };
+            Ok(Some((bad.worst_m, t, x)))
+        })
+        .collect::<Result<_>>()?;
     let mut best: Option<(f64, PathVars)> = None;
     let mut worst_seen = f64::INFINITY;
-    for r0 in [2.0f64, 5.0, 10.0] {
-        let mut x = initial(course, r0.max(boat.r_min_m + 0.1));
-        if !cost(boat, course, rp, &x, 0.0).is_finite() {
-            continue;
-        }
-        // Start steps: 1 m for the start y and radii, 0.3 rad for centre angles
-        // (odd i = radius); later stages restart at a tenth.
-        let step0: Vec<f64> = (0..x.0.len()).map(|i| if i > 0 && i % 2 == 0 { 0.3 } else { 1.0 }).collect();
-        for (k, &pen) in PENALTIES.iter().enumerate() {
-            let sc = if k == 0 { 1.0 } else { 0.1 };
-            x = compass(boat, course, rp, x, step0.iter().map(|s| s * sc).collect(), pen).1;
-        }
-        let Some((segs, bad)) = build_path(course, rp, &x) else { continue };
-        worst_seen = worst_seen.min(bad.worst_m);
-        if bad.worst_m > VIOLATION_TOL_M {
-            continue;
-        }
-        let t = total_time(&simulate(boat, &segs, (1.0, 1.0))?);
-        if best.as_ref().is_none_or(|b| t < b.0) {
+    for (worst, t, x) in runs.into_iter().flatten() {
+        worst_seen = worst_seen.min(worst);
+        if let Some(t) = t
+            && best.as_ref().is_none_or(|b| t < b.0)
+        {
             best = Some((t, x));
         }
     }
@@ -620,11 +666,12 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         .with_context(|| format!("race event '{}'", e.name))?;
     let x = optimal_path(&boat, course, rp).with_context(|| format!("race event '{}'", e.name))?;
     let (segs, _) = build_path(course, rp, &x).context("path")?;
-    let runs = simulate(&boat, &segs, (1.0, 1.0))?;
+    let runs = simulate(&boat, &segs, (1.0, 1.0), DS_M)?;
     let t = total_time(&runs);
     let d: f64 = 0.01;
     let sens = |sc: (f64, f64), sc2: (f64, f64)| -> Result<f64> {
-        let (a, b) = (total_time(&simulate(&boat, &segs, sc)?), total_time(&simulate(&boat, &segs, sc2)?));
+        let (a, b) =
+            (total_time(&simulate(&boat, &segs, sc, DS_M)?), total_time(&simulate(&boat, &segs, sc2, DS_M)?));
         Ok((a / b).ln() / ((1.0 + d) / (1.0 - d)).ln())
     };
     let sens_straight = sens((1.0 + d, 1.0), (1.0 - d, 1.0))?;
@@ -662,6 +709,59 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         segments: runs,
         path_m,
     })
+}
+
+/// Each event's path, planned once for a reference canoe and then held while
+/// many hulls are timed on it ([`planned_time`], the shape search's race
+/// objective). The path is optimal for the reference, so a nearby hull's time
+/// on it is off by second order only; `run` re-plans for the winner.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    paths: Vec<Vec<Segment>>,
+}
+
+/// Plan every event of `rp` on the reference canoe (topsides `top`, wall `hull_lb`).
+pub fn plan(top: &Hull, hull_lb: f64, rp: &RaceParams) -> Result<Plan> {
+    rp.validate()?;
+    let paths = rp
+        .events
+        .par_iter()
+        .map(|e| {
+            let course = rp.courses.iter().find(|c| c.name == e.course).context("course")?;
+            let power = e.paddler_power_w.unwrap_or(rp.paddler_power_w);
+            let boat = Boat::new(top, hull_lb, &e.weights_lb, power, rp)
+                .with_context(|| format!("race event '{}' (reference canoe)", e.name))?;
+            let x = optimal_path(&boat, course, rp).with_context(|| format!("race event '{}'", e.name))?;
+            Ok(build_path(course, rp, &x).context("path")?.0)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Plan { paths })
+}
+
+/// Weighted race time (sum of event weight x time, s) of the canoe with
+/// topsides `top` and wall `hull_lb` on the planned paths. Events with the
+/// same crew and power share one boat.
+pub fn planned_time(top: &Hull, hull_lb: f64, rp: &RaceParams, plan: &Plan) -> Result<f64> {
+    ensure!(plan.paths.len() == rp.events.len(), "race plan is for other events");
+    let mut boats: Vec<(&RaceEvent, Boat)> = Vec::new();
+    let mut sum = 0.0;
+    for (e, segs) in rp.events.iter().zip(&plan.paths) {
+        let power = e.paddler_power_w.unwrap_or(rp.paddler_power_w);
+        let same = |o: &RaceEvent| {
+            o.weights_lb == e.weights_lb && o.paddler_power_w.unwrap_or(rp.paddler_power_w) == power
+        };
+        let i = match boats.iter().position(|(o, _)| same(o)) {
+            Some(i) => i,
+            None => {
+                let b = Boat::untabled(top, hull_lb, &e.weights_lb, power, rp)
+                    .with_context(|| format!("race event '{}'", e.name))?;
+                boats.push((e, b));
+                boats.len() - 1
+            }
+        };
+        sum += e.weight * total_time(&simulate(&boats[i].1, segs, (1.0, 1.0), DS_M)?);
+    }
+    Ok(sum)
 }
 
 /// Every event of `rp` for the canoe `hull` (outer mold line) with wall weight
@@ -712,7 +812,7 @@ pub fn recommend(events: &[EventResult]) -> Result<Recommended> {
 }
 
 /// Paddler power (W) at which `event` takes `measured_s`, path re-optimised
-/// at each trial (time falls monotonically with power). Bisection in [5, 2000] W.
+/// at each trial (time falls monotonically with power). Bisection in [5, 400] W (400 W ~ an elite kayaker for a minute).
 pub fn calibrate_power(
     top: &Hull,
     hull_lb: f64,
@@ -731,10 +831,10 @@ pub fn calibrate_power(
         ev.paddler_power_w = Some(p);
         Ok(run_event(top, hull_lb, rp, &ev)?.time_s)
     };
-    let (mut lo, mut hi) = (5.0, 2000.0);
+    let (mut lo, mut hi) = (5.0, 400.0);
     ensure!(
         time(lo)? >= measured_s && time(hi)? <= measured_s,
-        "measured {measured_s} s is outside what 5-2000 W per paddler gives"
+        "measured {measured_s} s is outside what 5-400 W per paddler gives"
     );
     for _ in 0..40 {
         let mid = 0.5 * (lo + hi);
@@ -829,6 +929,24 @@ mod tests {
     }
 
     #[test]
+    fn planned_time_matches_the_optimal_run_on_the_reference() {
+        let rp = params();
+        let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        let top = topsides(&hull, 12.0, 0.0);
+        let plan = plan(&top, 100.0, &rp).unwrap();
+        let full = run(&hull, 100.0, 12.0, 0.0, &rp).unwrap();
+        let t = planned_time(&top, 100.0, &rp, &plan).unwrap();
+        // Same path; exact vs tabulated turn drag only.
+        assert!((t / full.weighted_time_s - 1.0).abs() < 1e-3, "{t} vs {}", full.weighted_time_s);
+        // A heavier wall is slower on the same paths, and re-planning can only help it.
+        let heavy = planned_time(&top, 140.0, &rp, &plan).unwrap();
+        let replanned = run(&hull, 140.0, 12.0, 0.0, &rp).unwrap().weighted_time_s;
+        assert!(heavy > t && replanned <= heavy + 1e-3, "{heavy} {replanned}");
+        // Second order: the held path costs < 0.2% here.
+        assert!(heavy / replanned - 1.0 < 2e-3, "{heavy} vs {replanned}");
+    }
+
+    #[test]
     fn sweep_follows_direction() {
         let (c, p, q) = ([0.0, 0.0], [1.0, 0.0], [0.0, 1.0]);
         assert!((sweep(c, p, q, 1.0) - PI / 2.0).abs() < 1e-12);
@@ -851,7 +969,7 @@ mod tests {
             start: [0.0, 0.0],
             dir: [1.0, 0.0],
         };
-        let run = &simulate(&boat, &[seg], (1.0, 1.0)).unwrap()[0];
+        let run = &simulate(&boat, &[seg], (1.0, 1.0), DS_M).unwrap()[0];
         let m = boat.mass_kg * (1.0 + ADDED_MASS);
         let (f, k) = (100.0, 20.0);
         let v = ((f / k) * (1.0 - (-2.0 * k * 100.0 / m).exp())).sqrt();
@@ -896,8 +1014,8 @@ mod tests {
                 [a, b]
             })
             .collect();
-        let t1 = total_time(&simulate(&boat, &segs, (1.0, 1.0)).unwrap());
-        let t2 = total_time(&simulate(&boat, &fine, (1.0, 1.0)).unwrap());
+        let t1 = total_time(&simulate(&boat, &segs, (1.0, 1.0), DS_M).unwrap());
+        let t2 = total_time(&simulate(&boat, &fine, (1.0, 1.0), DS_M).unwrap());
         assert!((t1 - t2).abs() < 0.01, "{t1} vs {t2}");
     }
 

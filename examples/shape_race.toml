@@ -1,0 +1,214 @@
+# canoe.toml: everything one JAGUAR run needs. Units: in, lb, psi, pcf.
+# Unknown keys are an error, so a typo cannot silently become a default.
+#
+#   jaguar check examples/canoe.toml     # validate only
+#   jaguar run   examples/canoe.toml     # optimize -> result.json
+#   jaguar serve examples/canoe.toml     # optional web UI
+
+[hull]
+# no hull.file: the hull shape is optimized ([shape_search] below)
+stations = 161            # search resolution; the winner is re-checked at 2n-1
+flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
+
+# A design must pass EVERY load case. Seats are knee positions from the bow;
+# omit seats_in to space the paddlers evenly.
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 165.0]
+# seats_in = [80.0, 160.0]
+
+[material]
+strength_model = "fit"          # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
+# Strength comes from the team's lab breaks (data/mix_tests.csv): final split
+# tensile strength is fitted against density; flexural and compressive strength
+# are derived from it (see src/mix.rs). 7-day breaks are scaled by 1/0.6.
+mix_data = "../data/mix_tests.csv"
+flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
+density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
+factor_of_safety = 1.5
+dynamic_load_factor = 1.2
+knee_patch_in = 3.0       # never 0: a point load does not converge
+
+[search]                  # [min, max, step], inclusive
+thickness_in = [0.375, 0.75, 0.0625]
+density_pcf  = [50.0, 64.0, 1.0]
+depth_in     = [10.0, 16.0, 1.0]
+
+[gates]
+dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)
+dc_verify = 0.95          # numerical margin, not a safety factor
+freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+
+[punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
+method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)
+knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on one knee, very conservative)
+knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
+knee_spacing_in = 8.0     # centre-to-centre knee spacing
+pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
+layers = 2                # equal casting passes (mesh fits between two)
+mesh_after_layer = 1      # mesh laid after this pass (1..layers-1); two meshes: [1, 2]
+mold = "male"             # "male": pass 1 is the inside (knee) face; "female": pass 1 is the outside
+                          # d = knee face to mesh: male k/layers * t, female (layers-k)/layers * t.
+                          # 3 passes, mesh after 2, t 0.375: male d 0.25, female d 0.125 in.
+                          # Several meshes: the one farthest from the knee face sets d
+                          # (3 passes, mesh_after_layer = [1, 2]: d = 2t/3 either mold).
+                          # Or instead of these three: d_over_t = 0.5 (explicit override)
+
+[stability]
+crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)
+gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself). GM is very sensitive to crew_cg_in (assumed)
+
+[objective]
+kind = "race"             # shortest weighted race time over [race] events (src/race.rs, docs/SHAPE_SEARCH.md)
+speed_mps = 2.5           # race speed for the drag objective
+# Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
+# Absent = heaviest load case. Weights must sum to 1. Presets:
+#   Regionals: [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+#   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]
+#   Total:     [{ crew_lb = 350, weight = 0.675 }, { crew_lb = 525, weight = 0.10 }, { crew_lb = 700, weight = 0.225 }]
+# displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = steady-turn drag (docs/SHAPE_SEARCH.md)
+# turn_radius_in = 600.0  # turn radius for the turning drag, in (50 ft)
+
+# Optimize the hull SHAPE too (docs/SHAPE_SEARCH.md). Each [min, max]; min == max holds it fixed.
+# Bounds follow ASCE-ish limits: 18-22 ft long, practical beam/draft for a 2-person canoe.
+[shape_search]
+length_in     = [216.0, 264.0]
+beam_in       = [18.0, 30.0]
+draft_in      = [4.0, 8.0]
+fore_wp       = [0.3, 1.6]
+aft_wp        = [0.3, 1.6]
+section       = [0.2, 0.8]
+fore_rocker   = [0.0, 0.6]
+aft_rocker    = [0.0, 0.6]
+fore_len_frac = [0.3, 0.5]
+aft_len_frac  = [0.3, 0.5]
+# Manufacturability (all optional, docs/SHAPE_SEARCH.md):
+# draft_step_in  = 0.25           # snap draft / length / beam to mold-friendly steps
+# length_step_in = 6.0
+# beam_step_in   = 0.5
+# rocker_in = [0.5, 3.0]          # keel rise at 5% L from each end, in; outside = rejected
+# min_entry_angle_deg = 8.0       # waterline entry half-angle; finer bows rejected
+# symmetric = false               # true: aft factors follow the fore ones
+samples       = 96
+refine_rounds = 6
+seed          = 1
+
+# Race simulator (`jaguar race result.json`, src/race.rs): races the winner over the ASCE courses
+# and prints race times, straight vs turning distance/time and the straight_weight / displacements
+# to use in [objective]; also the score of `run` with objective.kind = "race". Units here: m, m/s, N, W. Courses: start on x = 0 heading +x,
+# y = 0 lane centre (+y = port), round each mark keeping it on `keep` side, finish on x = finish_x_m.
+# Geometry from ASCE 2026 rules sec. 9.1; where the rules leave it to the site (first slalom buoy
+# 15 m out, which way the 180 deg turns go, the 500 m endurance leg as out-and-back laps) it is an
+# ASSUMPTION: edit to the course drawings.
+[race]
+paddler_power_w = 100.0       # sustained paddle power per paddler (calibrate: jaguar race --measured "EVENT=SECONDS")
+propulsive_efficiency = 0.7   # share of paddle power that becomes thrust
+max_thrust_n = 100.0          # thrust per paddler at low speed (start, slow turns)
+buoy_clearance_m = 0.6        # closest the centreline passes a buoy (half beam + margin)
+lane_width_m = 15.0           # ASCE minimum lane width
+min_turn_radius_m = 2.0       # tightest turn the crew can steer (turn drag already slows tight turns)
+
+[[race.course]]
+name = "sprint_200"           # 100 m out, 180 deg turn, 100 m back
+finish_x_m = 0.0
+marks = [{ x_m = 100.0, y_m = 0.0, keep = "port" }]
+
+[[race.course]]
+name = "sprint_400"           # two laps of sprint_200
+finish_x_m = 0.0
+marks = [
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "slalom_200"           # 7 buoys 5 m apart across, 10 m along (20 m between 3rd and 4th), 180 turn, 100 m back
+finish_x_m = 0.0
+marks = [
+  { x_m = 15.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 25.0, y_m = -2.5, keep = "port" },
+  { x_m = 35.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 55.0, y_m = -2.5, keep = "port" },
+  { x_m = 65.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 75.0, y_m = -2.5, keep = "port" },
+  { x_m = 85.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "endurance_600"        # slalom 100 m, then 500 m as five 100 m legs with 180 deg turns
+finish_x_m = 0.0
+marks = [
+  { x_m = 15.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 25.0, y_m = -2.5, keep = "port" },
+  { x_m = 35.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 55.0, y_m = -2.5, keep = "port" },
+  { x_m = 65.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 75.0, y_m = -2.5, keep = "port" },
+  { x_m = 85.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+# Events: weights_lb are PLACEHOLDERS (same as the load cases above). weight = share of the score;
+# here Student Symposium and Society-wide Finals count 50/50, races equal within each.
+[[race.event]]
+name = "Symposium co-ed 200 m slalom"
+course = "slalom_200"
+weights_lb = [175.0, 140.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium co-ed 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Finals co-ed 600 m endurance"
+course = "endurance_600"
+weights_lb = [175.0, 140.0, 165.0]
+weight = 0.1
+paddler_power_w = 85.0        # longer race (~4 min), lower sustained power (assumed)
+
+[[race.event]]
+name = "Finals women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 200 m sprint heats"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 400 m sprint final"
+course = "sprint_400"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1

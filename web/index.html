@@ -321,7 +321,7 @@ function buildForm() {
   const ht = 'Which hull shape (jaguar-hull/1 JSON next to the canoe.toml) to optimize.';
   const st = 'Let JAGUAR design the hull shape too (length, beam, bow/stern shape...) within the bounds below, instead of using a fixed hull file.';
   const mt = 'Lab test results (CSV, path relative to the canoe.toml). Strength vs density is fitted from these breaks; every strength the checks use comes from that fit.';
-  const ot = 'What best means among designs that pass every check: weight = lightest hull, drag = least water resistance at the race speed (only matters with shape search).';
+  const ot = 'What best means among designs that pass every check: weight = lightest hull, drag = least water resistance at the race speed (only matters with shape search), race = shortest weighted race time over the [race] events of the canoe.toml (shape search only).';
   const smt = 'fit: strength from a straight line through all your lab breaks, so the search may pick any density in the trusted range. tested_mixes: only the mixes you actually tested can be picked, each with its own measured strength.';
   const pmt = 'Which ACI rule checks a knee punching through the hull bottom. aci_22_6 = reinforced slab (mesh in the wall). plain_14_5 = plain (unreinforced) concrete, more conservative.';
   const pmo = 'Which side of the mold the first pass is cast against. The knee presses on the inside face, and the mesh only helps by its distance from that face: male = mesh (after pass k of n) sits k/n of the wall from the inside, female = (n-k)/n. Matters only for aci_22_6.';
@@ -374,7 +374,7 @@ function buildForm() {
       row('turning.on', 'Turning stress', trn, '<input type="checkbox" class="switch" id="turning.on">')
       + `<div id="turnbody" style="display:grid;gap:var(--s1)">${FIELDS.turning.map(f => numRow('turning', f)).join('')}</div>`)
     + section('objective',
-      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option></select>')
+      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option><option value="race">race (shortest weighted race time, needs [race])</option></select>')
       + FIELDS.objective.map(f => numRow('objective', f)).join('')
       + row('', 'Race displacements', DISP_T, '<span class="hint" id="dispnote"></span>')
       + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${['none', 'regionals', 'nationals', 'total', 'custom'].map(m => `<button type="button" data-disp="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>`
@@ -442,6 +442,7 @@ function fillForm(p, hulls) {
   if (p.hull.file) sel.value = p.hull.file;
   $('material.mix_data').value = p.material.mix_data;
   $('objective.kind').value = p.objective.kind || 'drag';
+  loadedRace = p.race || null;
   $('material.strength_model').value = p.material.strength_model || 'fit';
   $('material.method').value = p.material.method || 'asd';
   const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0 };
@@ -541,7 +542,24 @@ function formToml() {
     for (const [k] of FIELDS.turning) out.push(`${k} = ${fl(g('turning.' + k))}`);
     out.push('');
   }
+  if (loadedRace) out.push(...raceToml(loadedRace));
   return out.join('\n');
+}
+// [race] has no form fields (jaguar race, objective "race"): carried through from the loaded params.
+let loadedRace = null;
+function raceToml(r) {
+  const out = ['[race]'];
+  for (const k of ['paddler_power_w', 'propulsive_efficiency', 'max_thrust_n', 'buoy_clearance_m', 'lane_width_m', 'min_turn_radius_m']) out.push(`${k} = ${fl(r[k])}`);
+  for (const c of r.course) {
+    out.push('', '[[race.course]]', `name = ${tstr(c.name)}`, `finish_x_m = ${fl(c.finish_x_m)}`);
+    out.push(`marks = [${c.marks.map(m => `{ x_m = ${fl(m.x_m)}, y_m = ${fl(m.y_m)}, keep = ${tstr(m.keep)} }`).join(', ')}]`);
+  }
+  for (const e of r.event) {
+    out.push('', '[[race.event]]', `name = ${tstr(e.name)}`, `course = ${tstr(e.course)}`, `weights_lb = [${e.weights_lb.map(fl).join(', ')}]`, `weight = ${fl(e.weight)}`);
+    if (e.paddler_power_w != null) out.push(`paddler_power_w = ${fl(e.paddler_power_w)}`);
+  }
+  out.push('');
+  return out;
 }
 
 // ---------- autosaved prefs: every form edit is POSTed (debounced) to /api/prefs ----------

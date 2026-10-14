@@ -451,6 +451,11 @@ pub enum ObjectiveKind {
     /// Default when `objective.kind` is omitted.
     #[default]
     Drag,
+    /// Shortest weighted race time over the `[race]` events (src/race.rs):
+    /// wall weight, displacement, straight and turning drag all enter through
+    /// time. Needs `[race]` and `[shape_search]` (on a fixed hull the lightest
+    /// wall is also the fastest, so use "weight").
+    Race,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -759,6 +764,13 @@ impl Params {
         if sw < 1.0 && (self.objective.kind != ObjectiveKind::Drag || self.shape_search.is_none()) {
             bail!("objective.straight_weight < 1 needs kind = \"drag\" and a [shape_search]");
         }
+        if self.objective.kind == ObjectiveKind::Race && (self.race.is_none() || self.shape_search.is_none())
+        {
+            bail!(
+                "objective.kind = \"race\" needs [race] and [shape_search] \
+                 (on a fixed hull the lightest wall is also the fastest: use \"weight\")"
+            );
+        }
         if self.stability.crew_cg_in.is_nan() || self.stability.crew_cg_in < 0.0 {
             bail!("stability.crew_cg_in must be >= 0");
         }
@@ -816,6 +828,17 @@ mod tests {
         assert!(bad("weight = 0.125", "weight = 0.5").contains("sum to 1"));
         assert!(bad("{ x_m = 15.0, y_m = 2.5,", "{ x_m = 15.0, y_m = 9.0,").contains("outside the lane"));
         assert!(bad("lane_width_m = 15.0", "lane_width = 15.0").contains("unknown field"));
+    }
+
+    #[test]
+    fn race_objective_needs_race_and_shape_search() {
+        let text = std::fs::read_to_string("examples/canoe.toml")
+            .unwrap()
+            .replace("kind = \"drag\"", "kind = \"race\"");
+        let e = Params::parse(&text, Path::new("examples")).unwrap_err().to_string();
+        assert!(e.contains("needs [race] and [shape_search]"), "{e}");
+        let p = Params::load(Path::new("examples/shape_race.toml")).unwrap();
+        assert_eq!(p.objective.kind, ObjectiveKind::Race);
     }
 
     #[test]

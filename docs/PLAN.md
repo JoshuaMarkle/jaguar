@@ -49,14 +49,13 @@ model it is trained on), straight vs turning distance and time, turn angles and 
 recommended `straight_weight` / `displacements` / `turn_radius_in` from time sensitivities.
 On the off1 winner with the placeholder crews it recommends straight_weight 0.73.
 
-- **C4 (T62). Race-time objective** `objective.kind = "race"`: shape search minimises the
-  weighted race time directly instead of the linearised drag blend (most accurate use of the sim:
-  wall weight, displacement and turning all enter through time). Cost: a shape needs the straight
-  resistance table (28 Michell calls per crew) and the race; hold each course's path from the
-  reference shape (first-order exact at the optimum) and re-optimise only the winner. Must keep
-  `shape_opt.toml` under 60 s.
+T62 (`objective.kind = "race"`) is done: the shape search minimises weighted race time on paths
+planned for the midpoint shape, the winner re-raced on its own (`examples/shape_race.toml`,
+44 s on 22 threads; docs/HULLS.md). On a laptop with fewer cores it will be slower: if it matters,
+share straight-resistance tables between crews of similar weight (draft interpolation).
 - **C5 (T63). Web race tab**: run `jaguar race` on the last winner from the UI, draw each event's
-  path and speed along it, the table and the recommended weightings (docs/DESIGN.md).
+  path and speed along it, the table and the recommended weightings (docs/DESIGN.md). Today the
+  form offers objective "race" and carries `[race]` through unchanged, but cannot edit it.
 - **C6 (T64). LRFD factors as inputs**: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`
   (today hard-coded 1.2 / 0.9 / 1.6 in `params.rs`).
 
@@ -88,7 +87,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | declined 2026-10-13 |
-| Race simulator, optimal path, straight vs turn metrics | done (T61, `jaguar race`); race objective C4, web C5 |
+| Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective); web tab C5 |
 | LRFD factors as inputs (1.2 / 1.6 blanks) | open (C6) |
 
 ## How to take a task

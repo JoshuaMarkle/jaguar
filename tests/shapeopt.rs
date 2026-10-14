@@ -192,3 +192,47 @@ fn turn_drag_falls_with_rocker_and_rises_with_length() {
     let h = jaguar::hullgen::generate(&base, 41, 21, "t").unwrap();
     assert_eq!(jaguar::shapeopt::loaded_turn(&q, &base, &h, 90.0, 12.0).unwrap().drag_n, t0);
 }
+
+/// The small search with the race objective on two sprint events (fast in debug).
+fn small_race() -> Params {
+    let mut p = small(false);
+    let canoe = Params::load(Path::new("examples/canoe.toml")).unwrap();
+    let mut rp = canoe.race.unwrap();
+    rp.events
+        .retain(|e| e.course == "sprint_200" && e.name.starts_with("Symposium") && e.weights_lb.len() == 2);
+    for e in rp.events.iter_mut() {
+        e.weight = 0.5;
+    }
+    p.race = Some(rp);
+    p.objective.kind = jaguar::params::ObjectiveKind::Race;
+    p.validate().unwrap();
+    p
+}
+
+#[test]
+fn race_objective_picks_the_fastest_passing_shape() {
+    let p = small_race();
+    let a = jaguar::run(&p, &|_| {}).unwrap();
+    let b = jaguar::run(&p, &|_| {}).unwrap();
+    assert_eq!(serde_json::to_string(&a).unwrap(), serde_json::to_string(&b).unwrap());
+    let w = a.winner.as_ref().expect("winner");
+    let t = w.candidate.race_s.expect("winner race time");
+    // Every passing shape has a planned race time, and none is faster than the winner.
+    for c in a.candidates.iter().filter(|c| c.passes) {
+        assert!(c.race_s.expect("passing shape without race time") >= t - 1e-9);
+    }
+    // The winner is raced again on re-planned paths: never slower than on the held ones.
+    let race = a.race.as_ref().expect("winner race");
+    assert_eq!(race.events.len(), 2);
+    assert!(
+        race.weighted_time_s <= t + 1e-3 && race.weighted_time_s > 0.98 * t,
+        "{} vs {t}",
+        race.weighted_time_s
+    );
+    assert!((race.hull_lb - w.candidate.hull_weight_lb).abs() < 1e-12);
+    // A weight search on the same shapes ranks by weight instead; race time is not computed.
+    let mut pw = small_race();
+    pw.objective.kind = jaguar::params::ObjectiveKind::Weight;
+    let rw = jaguar::run(&pw, &|_| {}).unwrap();
+    assert!(rw.race.is_none() && rw.candidates.iter().all(|c| c.race_s.is_none()));
+}

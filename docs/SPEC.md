@@ -111,7 +111,11 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    `objective.displacements = [{crew_lb, weight}, ...]` (weights sum to 1), as the weighted sum of
    resistance at the level draft each (hull weight + crew_lb) floats at. `objective.straight_weight`
    (default 1, needs drag + `[shape_search]`) blends in the steady-turn drag at `objective.turn_radius_in`
-   (default 600), see docs/SHAPE_SEARCH.md.
+   (default 600), see docs/SHAPE_SEARCH.md. `race` (needs `[race]` and `[shape_search]`) = shortest
+   weighted race time over the `[race]` events on paths planned for the midpoint shape
+   (`candidate.race_s`); the winner is re-raced on its own paths (`result.race`, a
+   `jaguar-race/1` record). The inner wall search ranks by weight (on one shape the lightest
+   wall is also the fastest).
 8. **Verify**: the winner is re-run at 2n-1 and 4n-3 stations (spacing h/2, h/4; same seats).
    Each (load case, check) D/C series, max over the seat samples, gets Richardson extrapolation
    (`optimize::richardson`): converged (steps < 1e-6 relative) = the finest value; monotone and
@@ -154,7 +158,7 @@ KG), strength fit values, and per check the station, section values (M, V, A, zb
 or punching intermediates (d_load, depth, b0, P, v_u, v_c) with capacity and D/C; recomputed by
 the checks' own code so each demand and capacity equals that case's verdict (or `error`). The terminal prints one line per case under the winner (seats bow to stern as
 knee@lb, source, variance, D/C), the mix provenance
-line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag and the
+line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag, race_s and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.
@@ -211,6 +215,7 @@ geometry the rules leave to the site marked as assumptions.
   n `propulsive_efficiency` P / v), P = `paddler_power_w` (per event override). D = Michell + ITTC
   resistance at the level draft of hull + crew, plus on arcs the steady-turn cross-flow drag
   (`resistance::turn`), both tabulated. Integrated in distance on v^2 (RK4, 0.25 m).
+  The drag table runs to 6 m/s; a faster canoe is an error, not an extrapolation.
 * **Output** per event: time, distance, straight and turning distance and time, each segment
   (radius, turn angle, entry / min / exit speed, drift), the path, and the time sensitivities
   S = d ln t / d ln D for straight and turning drag. `weighted_time_s` = sum of event weight x
@@ -225,7 +230,8 @@ geometry the rules leave to the site marked as assumptions.
 ## Performance
 `examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.2 s on a laptop (release; about 2 CPU-s, mostly drag and the seat corners).
 Keep it under 1 s. `examples/shape_opt.toml` must stay under 60 s. `jaguar race` on the
-examples/canoe.toml winner (9 events) runs in about 8 s.
+examples/canoe.toml winner (9 events) runs in about 5 s; `examples/shape_race.toml` in about 44 s
+(22 threads; mostly the per-shape straight-resistance tables, 24 Michell calls per crew).
 
 ## Out of scope (do not build)
 Running Michlet/Godzilla, desktop GUI, mix database, multizone pours (declined 2026-10-13),

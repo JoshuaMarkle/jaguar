@@ -62,6 +62,16 @@ above the waterline, not the generator, so searching it would need a second oute
   draft (deterministic, independent of sampling). Neglected: the linear lift term, added mass,
   waves, heel. Use it to rank shapes; `shape.metrics.turn` gives `drag_n`, `moment_nm` (yaw moment
   the paddlers hold) and `drift_deg`.
+* `kind = "race"` (needs `[race]`, src/race.rs): score = weighted race time over the `[race]`
+  events, so wall weight, displacement, straight and turning drag are weighed by how they move
+  the clock instead of by `straight_weight` / `displacements` (`jaguar race` prints the
+  equivalent weights). Paths are planned once, on the midpoint-of-bounds shape with its inner
+  winner's wall (or its lowest-D/C candidate's), then held: each shape's inner winner is timed on
+  them (`race::planned_time`, exact turn drag at the planned radii). A path is optimal for the
+  reference, so the time on it is off by second order for another shape (< 0.2% for a 40 lb
+  heavier wall, tested). The winner is raced again on paths re-planned for it (`result.race`,
+  never slower than its `race_s`). A shape whose canoe cannot run a race (sinks with a crew)
+  fails with the reason. `examples/shape_race.toml`: about 44 s on 22 threads.
 
 ## Algorithm (deterministic)
 

@@ -784,6 +784,7 @@ mod tests {
                     shape: None,
                     gm_in: None,
                     drag_n: None,
+                    race_s: None,
                     air_pocket_in: None,
                     thickness_in: 0.5,
                     density_pcf: 60.0,
