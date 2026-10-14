@@ -14,26 +14,45 @@
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
     --ctl-h: 26px; --label-w: 148px; --unit-w: 28px;
-    --side: 420px; --plot: 40vh;
+    --side: 380px; --res: 360px; --plot: 40vh; --top: 48px;
   }
+  /* Laptop screens: narrower side panels so the 3D view and charts keep room. */
+  @media (max-width: 1360px) { :root { --side: 350px; --res: 330px; --label-w: 118px; } }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  /* App shell: top bar | inputs (left) | 3D view over charts (centre) | result (right). */
   body { margin: 0; font: 450 12px/1.4 var(--font); color: var(--ink); background: var(--canvas);
-    display: grid; grid-template-columns: var(--side) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) var(--plot); overflow: hidden;
-    -webkit-font-smoothing: antialiased; }
+    display: grid; grid-template-columns: var(--side) minmax(0, 1fr) var(--res); grid-template-rows: var(--top) minmax(0, 1fr) var(--plot);
+    overflow: hidden; -webkit-font-smoothing: antialiased; }
   button, input, select { font: inherit; color: inherit; }
 
-  /* ---------- left sidebar ---------- */
-  #left { grid-row: 1 / 3; position: relative; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--hair); }
-  #head { display: flex; align-items: baseline; gap: var(--s2); padding: var(--s3) var(--s4); border-bottom: 1px solid var(--hair-soft); }
-  #head b { font-weight: 600; font-size: 13px; }
-  #head span { color: var(--muted); }
-  #scroll { flex: 1; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; scrollbar-gutter: stable; }
-  #scroll::-webkit-scrollbar { width: 8px; }
-  #scroll::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 999px; border: 2px solid var(--canvas); }
-  #scroll::-webkit-scrollbar-thumb:hover { background: var(--faint); }
-  #foot { padding: var(--s3) var(--s4); border-top: 1px solid var(--hair-soft); display: grid; gap: var(--s2); }
-  .statusline { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* ---------- top bar ---------- */
+  #top { grid-column: 1 / 4; display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s4); border-bottom: 1px solid var(--hair); min-width: 0; }
+  #top .brand { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; white-space: nowrap; }
+  #top .brand b { font-weight: 650; font-size: 15px; }
+  #top .brand span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  #top .spacer { flex: 1; }
+  #top .sep { width: 1px; align-self: stretch; margin: var(--s3) 0; background: var(--hair-soft); }
+  #top .btn.primary { justify-self: auto; padding: 0 var(--s4); }
+  .runbox { display: grid; gap: 3px; width: 200px; }
+  .statusline { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---------- side panels (inputs left, result right) ---------- */
+  #left, #right { grid-row: 2 / 4; position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #left { grid-column: 1; border-right: 1px solid var(--hair); }
+  #right { grid-column: 3; border-left: 1px solid var(--hair); }
+  .panehead { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
+  .panehead b { font-weight: 650; font-size: 13px; }
+  .panehead .hint { margin-left: auto; }
+  #groups { margin: 0 var(--s4) var(--s2); }
+  #groups button { height: 24px; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; scrollbar-gutter: stable;
+    border-top: 1px solid var(--hair-soft); }
+  .scroll::-webkit-scrollbar { width: 8px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 999px; border: 2px solid var(--canvas); }
+  .scroll::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+  #rscroll > #err { margin: var(--s3) var(--s4) 0; }
+  #rscroll > #winner { padding: var(--s3) var(--s4); display: grid; gap: var(--s1); }
 
   .sec { border-bottom: 1px solid var(--hair-soft); }
   /* Section titles start at the same x as row labels. The disclosure chevron sits in the left gutter. */
@@ -54,6 +73,7 @@
   .row > .unit { color: var(--muted); }
   .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: -2px; }
   .multi { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s1); }
+  .multi input { padding: 0 6px; }
   .kv { min-height: 22px; }
   .kv > :first-child { color: var(--muted); }
   .kv > :nth-child(2) { grid-column: 2 / 4; font-variant-numeric: tabular-nums; }
@@ -76,6 +96,8 @@
   .btn { height: var(--ctl-h); padding: 0 var(--s3); border-radius: var(--r-sm); border: 1px solid var(--hair); background: var(--canvas);
     cursor: pointer; font-weight: 500; white-space: nowrap; justify-self: start; }
   a.btn { display: inline-flex; align-items: center; color: inherit; text-decoration: none; }
+  label.btn.file { display: inline-flex; align-items: center; justify-content: center; justify-self: stretch; }
+  label.btn.file input { display: none; }
   .btn:hover { border-color: var(--faint); }
   .btn.primary { background: var(--ink); border-color: var(--ink); color: var(--canvas); height: 30px; justify-self: stretch; }
   .btn.primary:hover { background: var(--ink-soft); }
@@ -107,7 +129,6 @@
   .badge.warn { background: var(--warning); border-color: var(--warning); color: var(--ink); }
   .badge.error { background: var(--error); border-color: var(--error); color: var(--canvas); }
   .t-error { color: var(--error); }
-  .prefbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); padding: var(--s2) var(--s4); border-bottom: 1px solid var(--hair-soft); }
   #prefnote.bad { color: var(--error); }
   .group { margin-top: var(--s2); color: var(--muted); }
 
@@ -116,6 +137,7 @@
   .tbl td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair-soft); white-space: nowrap; }
   .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
   .tbl tr.gov td { font-weight: 600; }
+  .tbl td.nm { white-space: normal; text-align: left; }
   .mixedit td { padding: 1px 2px; } .mixedit input { height: 22px; padding: 0 4px; min-width: 52px; text-align: right; } .mixedit .btn { height: 22px; padding: 0 6px; }
   .bar { display: inline-block; height: 6px; border-radius: 2px; vertical-align: middle; }
 
@@ -125,48 +147,57 @@
   .gutter:hover::after, .gutter.drag::after { background: var(--ink); }
   #gutter-side { top: 0; bottom: 0; right: -4px; width: 7px; cursor: col-resize; }
   #gutter-side::after { top: 0; bottom: 0; left: 3px; width: 1px; }
+  #gutter-res { top: 0; bottom: 0; left: -4px; width: 7px; cursor: col-resize; }
+  #gutter-res::after { top: 0; bottom: 0; left: 3px; width: 1px; }
   #gutter-plot { left: 0; right: 0; top: -4px; height: 7px; cursor: row-resize; }
   #gutter-plot::after { left: 0; right: 0; top: 3px; height: 1px; }
   body.resizing { user-select: none; } body.resizing canvas { pointer-events: none; }
 
   /* ---------- viewport + plots ---------- */
-  #view { position: relative; min-height: 0; background: var(--soft); overflow: hidden; }
+  #view { grid-column: 2; grid-row: 2; position: relative; min-height: 0; min-width: 0; background: var(--soft); overflow: hidden; }
   #view canvas { display: block; }
   #viewlabel:empty { display: none; }
   #viewlabel { position: absolute; left: var(--s3); top: var(--s3); background: var(--canvas); border-radius: var(--r-sm); padding: 3px 8px; color: var(--ink-soft); }
-  #plotwrap { position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; }
+  #plotwrap { grid-column: 2; grid-row: 3; position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   #plotctl { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
   #plotctl select { width: auto; height: 24px; }
   #plotctl button.pill { height: 24px; padding: 0 var(--s3); border-radius: 999px; border: 1px solid var(--hair); background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
   #plotctl button.pill.on { color: var(--ink); border-color: var(--ink); }
   #plotctl .muted { margin-left: var(--s1); }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
-  #tabs { display: flex; gap: 2px; margin: var(--s2) var(--s3); padding: 2px; background: var(--soft); border-radius: var(--r-sm); align-self: flex-start; }
-  #tabs button { border: 0; background: none; height: 24px; padding: 0 var(--s3); border-radius: var(--r-xs); cursor: pointer; color: var(--muted); }
-  #tabs button:hover { color: var(--ink); }
-  #tabs button.on { background: var(--canvas); color: var(--ink); box-shadow: 0 0 0 1px var(--hair); }
+  /* Chart tabs, grouped: one segmented track per group (search, structure, hull, race). */
+  #tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3) 0; }
+  #tabs .tg { display: flex; align-items: center; }
+  #tabs .seg button { flex: none; height: 22px; padding: 0 10px; }
 </style>
 <script src="/vendor/three.min.js"></script>
 </head>
 <body>
-<div id="left">
-  <div id="head"><b>Jaguar</b><span>lightest wall that does not crack</span></div>
-  <div id="scroll">
-    <div class="prefbar"><span id="prefnote" class="hint"></span><button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset to canoe.toml</button></div>
+<header id="top">
+  <div class="brand"><b>Jaguar</b><span>lightest concrete canoe wall that does not crack</span></div>
+  <div class="spacer"></div>
+  <span id="prefnote" class="hint"></span>
+  <button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset to canoe.toml</button>
+  <div class="sep"></div>
+  <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
+  <button id="run" class="btn primary">Run optimization</button>
+</header>
+<aside id="left">
+  <div class="panehead"><b>Inputs</b><span class="hint">hover a label for help</span></div>
+  <div class="seg" id="groups"></div>
+  <div class="scroll" id="scroll">
     <form id="form" onsubmit="return false"></form>
-    <details class="sec keep" id="sec-winner" open><summary>Result</summary><div class="body" id="winner"></div></details>
-    <details class="sec keep" id="sec-mix" open><summary>Mix data</summary><div class="body" id="mix">loading</div></details>
-  </div>
-  <div id="foot">
-    <button id="run" class="btn primary">Run optimization</button>
-    <div class="statusline"><span id="status">idle</span></div>
-    <progress id="prog" value="0" max="1"></progress>
-    <div id="err"></div>
+    <div class="grp" data-g="material"><details class="sec keep" id="sec-mix" open><summary>Mix data<span class="note">lab breaks and strength fit</span></summary><div class="body" id="mix">loading</div></details></div>
   </div>
   <div class="gutter" id="gutter-side" title="Drag to resize. Double-click to reset."></div>
-</div>
+</aside>
 <div id="view"><div id="viewlabel"></div></div>
-<div id="plotwrap"><div class="gutter" id="gutter-plot" title="Drag to resize. Double-click to reset."></div><div id="plotctl"></div><canvas id="plot"></canvas><div id="tabs"></div></div>
+<div id="plotwrap"><div class="gutter" id="gutter-plot" title="Drag to resize. Double-click to reset."></div><div id="tabs"></div><div id="plotctl"></div><canvas id="plot"></canvas></div>
+<aside id="right">
+  <div class="panehead"><b>Result</b><span class="hint" id="resnote"></span></div>
+  <div class="scroll" id="rscroll"><div id="err"></div><div id="winner"></div></div>
+  <div class="gutter" id="gutter-res" title="Drag to resize. Double-click to reset."></div>
+</aside>
 <script>
 const $ = id => document.getElementById(id);
 let fbGate = null, hull = null, cands = [], result = null, polling = false, dcGate = 1.0, searchDepthMax = 14, gmGate = null, objKind = 'drag', hullLabel = '';
@@ -209,8 +240,9 @@ function gutter(el, cssVar, key, size, clamp) {
   });
   el.addEventListener('dblclick', () => { root.removeProperty(cssVar); store.set(key, ''); resize(); });
 }
-gutter($('gutter-side'), '--side', 'side', e => e.clientX, x => Math.round(Math.min(Math.max(x, 300), window.innerWidth * 0.7)));
-gutter($('gutter-plot'), '--plot', 'plot', e => window.innerHeight - e.clientY, y => Math.round(Math.min(Math.max(y, 120), window.innerHeight - 120)));
+gutter($('gutter-side'), '--side', 'side', e => e.clientX, x => Math.round(Math.min(Math.max(x, 300), window.innerWidth * 0.45)));
+gutter($('gutter-res'), '--res', 'res', e => window.innerWidth - e.clientX, x => Math.round(Math.min(Math.max(x, 260), window.innerWidth * 0.4)));
+gutter($('gutter-plot'), '--plot', 'plot', e => window.innerHeight - e.clientY, y => Math.round(Math.min(Math.max(y, 160), window.innerHeight - 160)));
 
 // ---------- form ----------
 // [section, key, label, unit, tooltip, step, min]
@@ -357,7 +389,7 @@ function buildForm() {
       row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
       + `<div id="hullpick">${row('hull.file', 'Hull file', ht, '<select id="hull.file"></select>')}`
       + `${row('hull.gunwale_radius_in', 'Gunwale radius', GW_T, '<input type="number" id="hull.gunwale_radius_in" step="any" min="0" placeholder="off">', 'in')}`
-      + `${row('meshfile', 'Import CAD mesh', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the mesh (auto: from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><input type="file" id="meshfile" accept=".stl,.obj"></div>')}`
+      + `${row('meshfile', 'Import CAD mesh', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the mesh (auto: from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><label class="btn soft file">Choose file<input type="file" id="meshfile" accept=".stl,.obj"></label></div>')}`
       + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div></div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join('')
       + row('hull.keel_fillet_radius_in', 'Forefoot radius', FIL_T, '<input type="number" id="hull.keel_fillet_radius_in" step="any" min="0" placeholder="sharp">', 'in')
@@ -415,11 +447,34 @@ function buildForm() {
   for (const b of $('dispseg').children) b.onclick = () => setDispMode(b.dataset.disp);
   $('dispaddbtn').onclick = () => { dispRow('', ''); dispMode = 'custom'; dispRefresh(); };
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
+  // Sections into the input groups (one shown at a time; the mix data sits in Material).
+  for (const [g, , ids] of GROUPS) {
+    const d = document.createElement('div'); d.className = 'grp'; d.dataset.g = g;
+    for (const id of ids) d.appendChild($(id));
+    $('form').appendChild(d);
+  }
+  $('groups').innerHTML = GROUPS.map(([g, l, , t]) => `<button type="button" data-g="${g}" title="${esc(t)}">${l}</button>`).join('');
+  for (const b of $('groups').children) b.onclick = () => setGroup(b.dataset.g);
+  setGroup(store.get('group') || 'hull');
   // Remember which sections are collapsed.
   for (const d of document.querySelectorAll('details.keep')) {
     if (store.get('sec.' + d.id) === '0') d.open = false;
     d.addEventListener('toggle', () => store.set('sec.' + d.id, d.open ? '1' : '0'));
   }
+}
+// Input groups: [key, tab label, section ids, tooltip].
+const GROUPS = [
+  ['hull', 'Hull', ['sec-hull', 'shapefs'], 'The hull: file or shape search, gunwale, forefoot radius, mold templates, CAD import.'],
+  ['crew', 'Crew', ['sec-crew'], 'Load cases (paddler weights and seats) and the seat placement rules.'],
+  ['material', 'Material', ['sec-material', 'sec-punching', 'sec-zones'], 'Concrete: strength model and design method, knee punching and casting layers, two-mix walls, lab mix data.'],
+  ['search', 'Search', ['sec-search', 'sec-gates', 'sec-objective'], 'What is searched (wall, density, depth ranges), the D/C and freeboard gates, and what "best" means.'],
+  ['checks', 'Checks', ['sec-stability', 'sec-flotation', 'sec-turning'], 'Stability, swamped flotation and turning-stress checks.'],
+];
+function setGroup(g) {
+  if (!GROUPS.some(x => x[0] === g)) g = 'hull';
+  for (const d of document.querySelectorAll('#scroll .grp')) d.style.display = d.dataset.g === g ? '' : 'none';
+  for (const b of $('groups').children) b.classList.toggle('on', b.dataset.g === g);
+  store.set('group', g); $('scroll').scrollTop = 0; resize();
 }
 function setShapeMode() {
   const on = $('shapemode').checked;
@@ -795,7 +850,9 @@ function pocketCover(group, x0, x1, gw, depth) {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C(x)'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall map'], ['xsec', 'Sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race']];
+// Chart tabs by what they answer: the search, the structure of the winner, its hull, the race.
+const TAB_GROUPS = [['Search', ['cands', 'map', 'shape']], ['Structure', ['hull', 'stress', 'dcx', 'checks']], ['Hull', ['fb', 'xsec', 'zones']], ['Race', ['race']]];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
@@ -807,8 +864,10 @@ const defaultX = () => objKind === 'drag' ? 'drag' : objKind === 'race' ? 'race'
 const axLabel = (l, u) => u === '-' ? l : `${l}, ${u}`;
 const axSel = { x: null, y: 'dc' };
 function buildTabs() {
-  $('tabs').innerHTML = TABS.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === tab ? 'on' : ''}">${l}</button>`).join('');
-  for (const b of $('tabs').children) b.onclick = () => { tab = b.dataset.tab; buildTabs(); drawPlot(); };
+  const label = Object.fromEntries(TABS);
+  $('tabs').innerHTML = TAB_GROUPS.map(([g, ids]) => `<div class="tg"><div class="seg" title="${g}">${ids.map(id =>
+    `<button type="button" data-tab="${id}" class="${id === tab ? 'on' : ''}">${label[id]}</button>`).join('')}</div></div>`).join('');
+  for (const b of $('tabs').querySelectorAll('button[data-tab]')) b.onclick = () => { tab = b.dataset.tab; buildTabs(); drawPlot(); };
   const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${axLabel(l, u)}</option>`).join('');
   const xa = axSel.x || defaultX();
   $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
@@ -1364,7 +1423,7 @@ const kv = (k, v, t = '') => `<div class="kv"${t ? ` title="${esc(t)}"` : ''}><s
 function checksTable(v) {
   if (!Array.isArray(v.checks) || !v.checks.length) return '<div class="note-box">No per-check breakdown in this result.</div>';
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
-  const rows = v.checks.map(k => `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td>
+  const rows = v.checks.map(k => `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td class="nm">${esc(k.name.replace(/_/g, ' '))}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td>
     <td>${f(k.dc, 3)}</td><td><span class="bar" style="width:${Math.min(48, 48 * (k.dc || 0))}px;background:${dcShade(k.dc || 0)}"></span></td></tr>`).join('');
   return `<table class="tbl"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table>`;
 }

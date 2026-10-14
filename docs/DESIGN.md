@@ -97,6 +97,14 @@ Saans is a commercial typeface. The closest widely-available substitutes are **I
 - The floating nav pill is detached from the viewport edge and horizontally centered, rather than a full-width bar — the page canvas visibly wraps around it.
 - Marquee strips (brand logos, app screenshots) run full-bleed beyond the content column.
 
+### JAGUAR web UI shell (web/index.html)
+
+- Top bar: wordmark and tagline left; saved-settings note, `Reset to canoe.toml`, run status with progress, and the single primary `Run optimization` right.
+- Left panel, **Inputs**: a segmented control picks one group at a time (Hull, Crew, Material, Search, Checks); each group holds its collapsible sections (Material also holds the lab mix data). The chosen group and collapsed sections are remembered per browser.
+- Centre: the 3D canoe over the charts. Chart tabs sit above the chart as one segmented track per group: search (Candidates, Wall map, Shape search), structure (Along hull, Stress, D/C(x), Checks), hull (Freeboard, Sections, Mix zones), Race.
+- Right panel, **Result**: run errors, the winner badge, exports and stats, the checks table.
+- Both side panels and the chart pane resize by dragging their hairline edge (double-click resets); below 1360 px wide the side panels start narrower.
+
 ### Whitespace Philosophy
 
 Whitespace is the primary grouping device. Sections are separated by `{spacing.section}` to `{spacing.section-lg}` of empty canvas with no divider rules; within cards, generous `{spacing.lg}` padding keeps content off the hairline edges. The homepage alternates dense collage moments (icon clouds, screenshot grids) with near-empty typographic interludes — compression and release.
