@@ -124,7 +124,7 @@ impl App {
     fn new(params_path: &Path, prefs_path: PathBuf) -> Result<App> {
         let toml_text = std::fs::read_to_string(params_path)
             .with_context(|| format!("reading {}", params_path.display()))?;
-        let base_dir = params_path.parent().unwrap_or(Path::new("")).to_path_buf();
+        let base_dir = base_dir_of(params_path);
         // Saved prefs win over the file when they still parse.
         let params = match load_prefs(&prefs_path, &base_dir) {
             Some((_, p)) => p,
@@ -545,6 +545,16 @@ impl App {
 }
 
 /// Saved prefs (text, params) if the file exists and parses, else None.
+/// The folder `canoe.toml` sits in (its hulls, mix data and result.json): `.` for a bare
+/// file name (`jaguar serve canoe.toml` run in that folder), where `parent()` is empty and
+/// listing it would fail.
+fn base_dir_of(params_path: &Path) -> PathBuf {
+    match params_path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
 fn load_prefs(path: &Path, base_dir: &Path) -> Option<(String, Params)> {
     let text = std::fs::read_to_string(path).ok()?;
     let p = Params::parse(&text, base_dir).ok()?;
@@ -700,6 +710,14 @@ pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_dir_of_a_bare_file_name_is_the_current_folder() {
+        assert_eq!(base_dir_of(Path::new("canoe.toml")), PathBuf::from("."));
+        assert_eq!(base_dir_of(Path::new("examples/canoe.toml")), PathBuf::from("examples"));
+        // and that folder can be listed (the hull picker reads it)
+        assert!(std::fs::read_dir(base_dir_of(Path::new("canoe.toml"))).is_ok());
+    }
     use std::io::{Read as _, Write as _};
 
     /// Fresh temp dir per call (tests run in parallel).
