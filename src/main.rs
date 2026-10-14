@@ -82,6 +82,20 @@ enum Cmd {
         #[arg(long)]
         no_pockets: bool,
     },
+    /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
+    /// and recommended drag-objective weightings (src/race.rs).
+    Race {
+        #[arg(default_value = "result.json")]
+        result: PathBuf,
+        /// Take `[race]` from this canoe.toml instead of the result's params.
+        #[arg(long)]
+        params: Option<PathBuf>,
+        #[arg(short, long, default_value = "race.json")]
+        out: PathBuf,
+        /// "EVENT=SECONDS": fit race.paddler_power_w so EVENT takes SECONDS, then race with it.
+        #[arg(long)]
+        measured: Option<String>,
+    },
     /// Web UI at http://127.0.0.1:PORT: view the canoe, edit params, run and watch (optional).
     Serve {
         #[arg(default_value = "canoe.toml")]
@@ -281,6 +295,31 @@ fn main() -> Result<()> {
             if let Some(l) = pockets {
                 println!("air pocket bulkheads at {l:.1} in from each tip (--no-pockets to leave out)");
             }
+        }
+        Cmd::Race { result, params, out, measured } => {
+            use jaguar::race;
+            let input = report::race_input(&std::fs::read_to_string(&result)?)?;
+            let mut rp = match params {
+                Some(p) => Params::load(&p)?.race,
+                None => input.race.clone(),
+            }
+            .ok_or_else(|| anyhow::anyhow!("no [race] section (add one to canoe.toml, or pass --params)"))?;
+            if let Some(m) = measured {
+                let (event, secs) = m
+                    .rsplit_once('=')
+                    .ok_or_else(|| anyhow::anyhow!("--measured wants \"EVENT=SECONDS\""))?;
+                let secs: f64 = secs.trim().parse()?;
+                let top = race::topsides(&input.hull, input.depth_in, input.flare_deg);
+                let p = race::calibrate_power(&top, input.hull_lb, &rp, event.trim(), secs)?;
+                println!("calibrated: paddler_power_w = {p:.1} W ({} in {secs} s)", event.trim());
+                rp.paddler_power_w = p;
+            }
+            let r = race::run(&input.hull, input.hull_lb, input.depth_in, input.flare_deg, &rp)?;
+            for l in report::race_lines(&r) {
+                println!("{l}");
+            }
+            std::fs::write(&out, serde_json::to_string_pretty(&r)?)?;
+            println!("wrote {}", out.display());
         }
         Cmd::Serve { params, port, prefs } => serve::serve(&params, port, prefs)?,
     }

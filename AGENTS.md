@@ -21,19 +21,20 @@ src/section.rs      shell A, zbar, I per station
 src/equilibrium.rs  float + trim, GM, V(x), M(x)
 src/flotation.rs    swamped flotation: bow/stern air pocket length
 src/resistance.rs   Michell wave + ITTC friction drag
+src/race.rs         race simulator: optimal path + speed over ASCE courses, straight/turn weighting
 src/check.rs        bending/compression/shear/punching (docs/PUNCHING.md), freeboard
 src/seats.rs        auto seats + crew order, seat-variance samples
 src/optimize.rs     wall grid search, verify at 2n-1 stations, progress events
 src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt
-src/report.rs       terminal summary, result.json
+src/report.rs       terminal summary, result.json, race summary + result.json reader for race
 src/export.rs       STEP / STL of the winner (CAD, mold shop)
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step)
-src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | export | serve
+src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | export | race | serve
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
-tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search
+tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race
 examples/           runnable canoe.toml files and hulls (docs/HULLS.md)
 data/               lab mix data (mix_tests.csv, cleaned from data/raw/)
 ```

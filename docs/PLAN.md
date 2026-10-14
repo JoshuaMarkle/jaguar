@@ -22,6 +22,11 @@ answer more trustworthy first.
 - **Mold side and mesh layer** used this year (male/female, mesh after which pass), needed by A1.
 - **ASCE length bounds** for `[shape_search]` from this year's rules.
 - **Drag reference**: run Michlet with wave drag on for one hull and compare (docs/SHAPE_SEARCH.md).
+- **Race times for calibration**: a timed 200 m sprint (crew weights noted) to fit
+  `race.paddler_power_w` with `jaguar race --measured "EVENT=SECONDS"`; a timed endurance race
+  for its own power. Until then race times are model numbers (the weightings move less).
+- **Course drawings** (ASCE Exhibit 8, figures 3-5): first slalom buoy distance, 180 deg turn
+  direction, endurance leg layout. `examples/canoe.toml` `[race]` marks these as assumptions.
 
 ## A. Improve what exists (no scope change, do in order)
 
@@ -36,15 +41,27 @@ answer more trustworthy first.
   conservative (bending drifts down with stations). Raising it needs a check that winners with
   bending governing still verify; punching governs every example today, so it would not move them.
 
-## C. Scope changes (SPEC lists these as out of scope)
+## C. Race simulator (approved 2026-10-13)
 
-- **C1. Multi-mix zones.** Horizontal and vertical boundaries only: I-beam (dense flanges, light
-  web) over the middle, all light mix at the ends. Separate `mixes` (count) from construction layers
-  (A1). Needs a transformed section in `section.rs`, per-zone allowables in `check.rs`, and the
-  multi-pour side-view graph. Biggest expected weight win: only the knee zone needs the punching mix.
-- **C2. Re-sweep a fixed mold for new mixes** with C1: keep the hull and depth, redo wall and zones.
-- **C3. Race simulator**: optimal path per course, straight vs turning distance, time and turn angle,
-  to replace the 0.8 straight weight (turn drag: T56).
+T61 (`src/race.rs`, `jaguar race`) is done: optimal path per course (deterministic compass search,
+chosen over ML: same physics, reproducible, and an ML policy can only approach the optimum of the
+model it is trained on), straight vs turning distance and time, turn angles and speeds, and the
+recommended `straight_weight` / `displacements` / `turn_radius_in` from time sensitivities.
+On the off1 winner with the placeholder crews it recommends straight_weight 0.73.
+
+- **C4 (T62). Race-time objective** `objective.kind = "race"`: shape search minimises the
+  weighted race time directly instead of the linearised drag blend (most accurate use of the sim:
+  wall weight, displacement and turning all enter through time). Cost: a shape needs the straight
+  resistance table (28 Michell calls per crew) and the race; hold each course's path from the
+  reference shape (first-order exact at the optimum) and re-optimise only the winner. Must keep
+  `shape_opt.toml` under 60 s.
+- **C5 (T63). Web race tab**: run `jaguar race` on the last winner from the UI, draw each event's
+  path and speed along it, the table and the recommended weightings (docs/DESIGN.md).
+- **C6 (T64). LRFD factors as inputs**: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`
+  (today hard-coded 1.2 / 0.9 / 1.6 in `params.rs`).
+
+Declined 2026-10-13 (do not build): multi-mix zones / I-beam pours, multi-pour graph, mix re-sweep
+with zones.
 
 ## Team task list: status
 
@@ -58,20 +75,21 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Flare angle | done (`hull.flare_deg`) |
 | Buoyancy / self weight distributed | done (real submerged area, draft and trim solved) |
 | Displacement weighting 350/525/700 | done (T31). Presets in canoe.toml comments and the web form (T49) |
-| Straight 80 / turning 20 | done (T32, T56: steady-turn cross-flow drag at `turn_radius_in`); race path is C3 |
-| Fixed-mold structural sweep | done (`run` without `[shape_search]`); mix re-sweep with zones is C2 |
+| Straight 80 / turning 20 | done (T32, T56); `jaguar race` recommends the value (T61) |
+| Fixed-mold structural sweep | done (`run` without `[shape_search]`); zone re-sweep declined |
 | Mix CSV import, editable table, row delete | done (T21) |
 | Density vs strength graph with fit | done (T54): split, flexural, f'c; measured fits solid, derived dashed |
 | Accurate punching shear | done (T16, T47: d from casting passes and mold side) |
-| Mixes separate from construction layers | layers done (T47); multi-mix open (C1) |
+| Mixes separate from construction layers | layers done (T47); multi-mix declined |
 | Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |
 | Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
 | LRFD 1.2 / 1.6 | done (T46) |
 | Auto seat solver + variance, manual override | done (T57, `[seats]`) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
-| Multi-mix zones, I-beam middle, light ends; multi-pour graph | open, out of scope (C1) |
-| Race simulator / ML path | open, out of scope (C3) |
+| Multi-mix zones, I-beam middle, light ends; multi-pour graph | declined 2026-10-13 |
+| Race simulator, optimal path, straight vs turn metrics | done (T61, `jaguar race`); race objective C4, web C5 |
+| LRFD factors as inputs (1.2 / 1.6 blanks) | open (C6) |
 
 ## How to take a task
 

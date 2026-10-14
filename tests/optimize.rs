@@ -142,9 +142,7 @@ fn progress_counts() {
 fn heavy_crew_no_winner() {
     let (mut p, h) = example();
     for c in &mut p.load_cases {
-        for w in &mut c.weights_lb {
-            *w = 900.0;
-        }
+        c.weights_lb.fill(900.0);
     }
     let r = optimize::run(&p, &h).unwrap();
     assert!(r.winner.is_none());

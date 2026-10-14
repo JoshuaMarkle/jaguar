@@ -12,6 +12,7 @@
 //! optional outer loop over hull shapes --shapeopt--> RunResult
 //! RunResult --report--> terminal + result.json       --serve--> localhost web UI
 //! winner hull + wall --export--> STEP / STL (CAD, mold shop)
+//! winner hull + weight + [race] --race--> race times, straight/turn weighting (jaguar race)
 //! ```
 //!
 //! [`run`] is the entry point for the CLI and the web UI.
@@ -26,6 +27,7 @@ pub mod hullgen;
 pub mod mix;
 pub mod optimize;
 pub mod params;
+pub mod race;
 pub mod report;
 pub mod resistance;
 pub mod seats;

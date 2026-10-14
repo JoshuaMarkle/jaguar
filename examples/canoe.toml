@@ -106,3 +106,121 @@ speed_mps = 2.5           # race speed for the drag objective
 # displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
 # straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = steady-turn drag (docs/SHAPE_SEARCH.md)
 # turn_radius_in = 600.0  # turn radius for the turning drag, in (50 ft)
+
+# Race simulator (`jaguar race result.json`, src/race.rs): races the winner over the ASCE courses
+# and prints race times, straight vs turning distance/time and the straight_weight / displacements
+# to use above. Never read by `run`. Units here: m, m/s, N, W. Courses: start on x = 0 heading +x,
+# y = 0 lane centre (+y = port), round each mark keeping it on `keep` side, finish on x = finish_x_m.
+# Geometry from ASCE 2026 rules sec. 9.1; where the rules leave it to the site (first slalom buoy
+# 15 m out, which way the 180 deg turns go, the 500 m endurance leg as out-and-back laps) it is an
+# ASSUMPTION: edit to the course drawings.
+[race]
+paddler_power_w = 100.0       # sustained paddle power per paddler (calibrate: jaguar race --measured "EVENT=SECONDS")
+propulsive_efficiency = 0.7   # share of paddle power that becomes thrust
+max_thrust_n = 100.0          # thrust per paddler at low speed (start, slow turns)
+buoy_clearance_m = 0.6        # closest the centreline passes a buoy (half beam + margin)
+lane_width_m = 15.0           # ASCE minimum lane width
+min_turn_radius_m = 2.0       # tightest turn the crew can steer (turn drag already slows tight turns)
+
+[[race.course]]
+name = "sprint_200"           # 100 m out, 180 deg turn, 100 m back
+finish_x_m = 0.0
+marks = [{ x_m = 100.0, y_m = 0.0, keep = "port" }]
+
+[[race.course]]
+name = "sprint_400"           # two laps of sprint_200
+finish_x_m = 0.0
+marks = [
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "slalom_200"           # 7 buoys 5 m apart across, 10 m along (20 m between 3rd and 4th), 180 turn, 100 m back
+finish_x_m = 0.0
+marks = [
+  { x_m = 15.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 25.0, y_m = -2.5, keep = "port" },
+  { x_m = 35.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 55.0, y_m = -2.5, keep = "port" },
+  { x_m = 65.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 75.0, y_m = -2.5, keep = "port" },
+  { x_m = 85.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "endurance_600"        # slalom 100 m, then 500 m as five 100 m legs with 180 deg turns
+finish_x_m = 0.0
+marks = [
+  { x_m = 15.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 25.0, y_m = -2.5, keep = "port" },
+  { x_m = 35.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 55.0, y_m = -2.5, keep = "port" },
+  { x_m = 65.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 75.0, y_m = -2.5, keep = "port" },
+  { x_m = 85.0, y_m = 2.5, keep = "starboard" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+# Events: weights_lb are PLACEHOLDERS (same as the load cases above). weight = share of the score;
+# here Student Symposium and Society-wide Finals count 50/50, races equal within each.
+[[race.event]]
+name = "Symposium co-ed 200 m slalom"
+course = "slalom_200"
+weights_lb = [175.0, 140.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium co-ed 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Finals co-ed 600 m endurance"
+course = "endurance_600"
+weights_lb = [175.0, 140.0, 165.0]
+weight = 0.1
+paddler_power_w = 85.0        # longer race (~4 min), lower sustained power (assumed)
+
+[[race.event]]
+name = "Finals women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 200 m sprint heats"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 400 m sprint final"
+course = "sprint_400"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1

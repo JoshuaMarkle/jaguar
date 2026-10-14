@@ -40,6 +40,131 @@ pub struct Params {
     /// tolerance every case is checked over (src/seats.rs). Absent = defaults.
     #[serde(default)]
     pub seats: Seats,
+    /// Present = race courses and events for `jaguar race` (src/race.rs).
+    /// Never read by the wall or shape search.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub race: Option<RaceParams>,
+}
+
+/// Race simulator inputs (src/race.rs). Units: m, m/s, N, W (the rules give
+/// courses in metres), crew weights lb.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RaceParams {
+    /// Sustained power one paddler puts into the paddle, W (calibrate with
+    /// `jaguar race --measured`).
+    pub paddler_power_w: f64,
+    /// Share of paddle power that becomes thrust (0..1].
+    pub propulsive_efficiency: f64,
+    /// Thrust one paddler can pull at low speed (start, slow turns), N.
+    pub max_thrust_n: f64,
+    /// Closest the canoe centreline may pass a buoy, m (half beam + margin).
+    pub buoy_clearance_m: f64,
+    /// Lane width, m; the centreline stays within +/- half of it of y = 0.
+    pub lane_width_m: f64,
+    /// Tightest turn the crew can steer, m (centreline radius). The turn drag
+    /// already slows tight turns; this is only a floor.
+    pub min_turn_radius_m: f64,
+    #[serde(rename = "course")]
+    pub courses: Vec<Course>,
+    #[serde(rename = "event")]
+    pub events: Vec<RaceEvent>,
+}
+
+/// A course: standing start on the line x = 0 heading +x (anywhere within the
+/// lane), round each mark in order, finish crossing the line x = `finish_x_m`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Course {
+    pub name: String,
+    pub finish_x_m: f64,
+    pub marks: Vec<Mark>,
+}
+
+/// A buoy at (x, y) m (y = 0 is the lane centre, +y to port when heading +x),
+/// kept on the canoe's `keep` side while rounding it.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Mark {
+    pub x_m: f64,
+    pub y_m: f64,
+    pub keep: Side,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    /// Buoy on the canoe's left: the canoe turns left (counter-clockwise) around it.
+    Port,
+    /// Buoy on the canoe's right: the canoe turns right (clockwise) around it.
+    Starboard,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RaceEvent {
+    pub name: String,
+    /// Name of a `[[race.course]]`.
+    pub course: String,
+    /// Paddler weights, lb (one per paddler).
+    pub weights_lb: Vec<f64>,
+    /// Share of the score this race carries (event weights sum to 1).
+    pub weight: f64,
+    /// Overrides `race.paddler_power_w` for this race (e.g. lower for the endurance race).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paddler_power_w: Option<f64>,
+}
+
+impl RaceParams {
+    pub fn validate(&self) -> Result<()> {
+        let pos = |v: f64| v.is_finite() && v > 0.0;
+        if !(pos(self.paddler_power_w)
+            && pos(self.max_thrust_n)
+            && pos(self.buoy_clearance_m)
+            && pos(self.lane_width_m)
+            && self.propulsive_efficiency > 0.0
+            && self.propulsive_efficiency <= 1.0
+            && pos(self.min_turn_radius_m))
+        {
+            bail!(
+                "race: need paddler_power_w, max_thrust_n, buoy_clearance_m, lane_width_m, \
+                 min_turn_radius_m > 0 and propulsive_efficiency in (0, 1]"
+            );
+        }
+        if self.courses.is_empty() || self.events.is_empty() {
+            bail!("race: need at least one [[race.course]] and one [[race.event]]");
+        }
+        let half = 0.5 * self.lane_width_m;
+        for (i, c) in self.courses.iter().enumerate() {
+            if self.courses[..i].iter().any(|o| o.name == c.name) {
+                bail!("race: course name '{}' used twice", c.name);
+            }
+            if c.marks.is_empty() || !c.finish_x_m.is_finite() {
+                bail!("race course '{}': need at least one mark and a finite finish_x_m", c.name);
+            }
+            for m in &c.marks {
+                if !(m.x_m.is_finite() && m.y_m.is_finite() && m.y_m.abs() < half) {
+                    bail!("race course '{}': mark ({}, {}) m is outside the lane", c.name, m.x_m, m.y_m);
+                }
+            }
+        }
+        for e in &self.events {
+            if !self.courses.iter().any(|c| c.name == e.course) {
+                bail!("race event '{}': no course named '{}'", e.name, e.course);
+            }
+            if e.weights_lb.is_empty() || !e.weights_lb.iter().all(|w| pos(*w)) {
+                bail!("race event '{}': need one weight > 0 per paddler", e.name);
+            }
+            if !(e.weight.is_finite() && e.weight >= 0.0) || e.paddler_power_w.is_some_and(|p| !pos(p)) {
+                bail!("race event '{}': need weight >= 0 and paddler_power_w > 0", e.name);
+            }
+        }
+        let sum: f64 = self.events.iter().map(|e| e.weight).sum();
+        if (sum - 1.0).abs() > 1e-6 {
+            bail!("race event weights must sum to 1, got {sum}");
+        }
+        Ok(())
+    }
 }
 
 /// Steady turn for the biaxial check: lateral acceleration V^2 / R.
@@ -653,6 +778,9 @@ impl Params {
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");
         }
+        if let Some(r) = &self.race {
+            r.validate()?;
+        }
         Ok(())
     }
 }
@@ -672,6 +800,22 @@ mod tests {
     fn example_toml_loads() {
         let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
         assert_eq!(p.load_cases.len(), 2);
+    }
+
+    #[test]
+    fn example_race_section_loads_and_is_checked() {
+        let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        let r = p.race.as_ref().unwrap();
+        assert_eq!((r.courses.len(), r.events.len()), (4, 9));
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let bad = |from: &str, to: &str| {
+            assert!(text.contains(from), "{from}");
+            Params::parse(&text.replacen(from, to, 1), Path::new("examples")).unwrap_err().to_string()
+        };
+        assert!(bad("course = \"slalom_200\"", "course = \"nope\"").contains("no course named 'nope'"));
+        assert!(bad("weight = 0.125", "weight = 0.5").contains("sum to 1"));
+        assert!(bad("{ x_m = 15.0, y_m = 2.5,", "{ x_m = 15.0, y_m = 9.0,").contains("outside the lane"));
+        assert!(bad("lane_width_m = 15.0", "lane_width = 15.0").contains("unknown field"));
     }
 
     #[test]

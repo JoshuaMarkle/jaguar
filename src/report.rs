@@ -434,6 +434,95 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
     out
 }
 
+/// The designed canoe in a `jaguar-result/1` file, as `jaguar race` needs it.
+pub struct RaceInput {
+    pub hull: crate::hull::Hull,
+    pub hull_lb: f64,
+    pub depth_in: f64,
+    pub flare_deg: f64,
+    /// `[race]` of the run's canoe.toml, if it had one.
+    pub race: Option<crate::params::RaceParams>,
+}
+
+/// Winner hull (generated, or `hull.file`), wall weight, depth and flare of a result file.
+pub fn race_input(text: &str) -> Result<RaceInput> {
+    use anyhow::Context;
+    let v: serde_json::Value = serde_json::from_str(text).context("parsing result JSON")?;
+    anyhow::ensure!(v["format"] == crate::optimize::RESULT_FORMAT, "not a jaguar-result/1 file");
+    let c = &v["winner"]["candidate"];
+    anyhow::ensure!(c.is_object(), "the result has no winner: no canoe to race");
+    let num = |f: &str| c[f].as_f64().with_context(|| format!("winner has no {f}"));
+    let hull: crate::hull::Hull = if v["winner_hull"].is_object() {
+        serde_json::from_value(v["winner_hull"].clone()).context("winner_hull")?
+    } else {
+        let f =
+            v["params"]["hull"]["file"].as_str().context("result has neither winner_hull nor hull.file")?;
+        crate::hull::Hull::load(Path::new(f))?
+    };
+    hull.validate()?;
+    let race = match &v["params"]["race"] {
+        serde_json::Value::Null => None,
+        r => Some(serde_json::from_value(r.clone()).context("params.race")?),
+    };
+    Ok(RaceInput {
+        hull,
+        hull_lb: num("hull_weight_lb")?,
+        depth_in: num("depth_in")?,
+        flare_deg: v["params"]["hull"]["flare_deg"].as_f64().unwrap_or(0.0),
+        race,
+    })
+}
+
+/// Terminal summary of a race run: one line per event, then the recommended weightings.
+pub fn race_lines(r: &crate::race::RaceResult) -> Vec<String> {
+    let mut out = vec![
+        format!("race: {} at {:.1} lb hull, weighted time {:.1} s", r.hull, r.hull_lb, r.weighted_time_s),
+        format!(
+            "{:<34} {:>6} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7} {:>7}",
+            "event", "crew", "time s", "dist m", "straight", "turning", "turns", "S_str", "S_turn"
+        ),
+    ];
+    for e in &r.events {
+        let turns = e.segments.iter().filter(|s| s.radius_m.is_some()).count();
+        out.push(format!(
+            "{:<34} {:>6.0} {:>7.1} {:>7.1} {:>4.0}m/{:>3.0}s {:>4.0}m/{:>3.0}s {:>6} {:>7.3} {:>7.3}",
+            e.name,
+            e.crew_lb,
+            e.time_s,
+            e.distance_m,
+            e.straight_m,
+            e.straight_s,
+            e.turn_m,
+            e.turn_s,
+            turns,
+            e.sens_straight,
+            e.sens_turn
+        ));
+    }
+    let rec = &r.recommended;
+    out.push(format!(
+        "recommended [objective]: straight_weight = {:.3}, turn_radius_in = {:.0}",
+        rec.straight_weight, rec.turn_radius_in
+    ));
+    // Rounded to 0.001 with the last share taking the remainder, so the printed
+    // weights sum to exactly 1 (canoe.toml checks the sum).
+    let n = rec.displacements.len();
+    let mut milli: Vec<i64> = rec.displacements.iter().map(|d| (d.weight * 1000.0).round() as i64).collect();
+    if n > 0 {
+        milli[n - 1] = 1000 - milli[..n - 1].iter().sum::<i64>();
+    }
+    out.push(format!(
+        "  displacements = [{}]",
+        rec.displacements
+            .iter()
+            .zip(&milli)
+            .map(|(d, m)| format!("{{ crew_lb = {:.0}, weight = {:.3} }}", d.crew_lb, *m as f64 / 1000.0))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
