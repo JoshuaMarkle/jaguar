@@ -59,6 +59,12 @@ form (today they come from canoe.toml).
 T65 (constructable line-arc-line gunwale, `hull.gunwale_radius_in` / `shape_search.gunwale_radius_in`,
 side lean limit `hull.gunwale_max_flare_deg`) is done. On full-ended hulls such as off1 no buildable
 radius exists at 30 deg; the team should confirm the lean limit the mold shop can build.
+T66: flare = demolding draft at every station with the gunwale outline; optional `search.flare_deg`
+axis. Open decision: a straight gunwale entry from the waterline tip plus a draft everywhere forces a
+steep entry line near the stem (the first station must clear the waterline by (D - draft) tan(flare)),
+which widens the whole gunwale; on the gunwale example 3 deg pushes midships lean past 30 deg and no
+shape passes. Options: stem zone exempt from the draft, or gunwale tips allowed past the waterline
+tips (overhang, longer LOA).
 
 Declined 2026-10-13 (do not build): multi-mix zones / I-beam pours, multi-pour graph, mix re-sweep
 with zones.

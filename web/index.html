@@ -304,6 +304,8 @@ function numRow(sec, f) {
   const [k, label, unit, t, step, min] = f, id = `${sec}.${k}`;
   return row(id, label, t, `<input type="number" id="${id}" step="${step}" ${min !== undefined ? `min="${min}"` : ''} required>`, unit);
 }
+// Optional searched flare (search.flare_deg): all three empty = the Hull side flare is used.
+const FLARE_AX = ['flare_deg', 'Side flare (searched)', 'deg', 'Optional: search the side flare (demolding draft) as min, max, step. The low end is your demolding minimum; more flare is only chosen when a check needs it (it adds concrete). Empty = the fixed Hull side flare (set that to 0 when searching).'];
 function triRow(f) {
   const [k, label, unit, t] = f;
   const i = n => `<input type="number" id="search.${k}.${n}" title="${esc(t)} (${['min', 'max', 'step'][n]})" step="any" min="0" placeholder="${['min', 'max', 'step'][n]}">`;
@@ -371,7 +373,7 @@ function buildForm() {
       + row('punching.mesh_after_layer', 'Mesh after pass', MESH_T, '<input id="punching.mesh_after_layer" placeholder="e.g. 1 or 1, 2">')
       + row('punching.mold', 'Mold', pmo, '<select id="punching.mold"><option value="male">male (pass 1 = inside face)</option><option value="female">female (pass 1 = outside face)</option></select>')
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
-    + section('search', FIELDS.search.map(triRow).join(''))
+    + section('search', FIELDS.search.map(triRow).join('') + triRow(FLARE_AX))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
     + section('flotation',
@@ -482,6 +484,7 @@ function fillForm(p, hulls) {
   setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
+  for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
   const st = p.seats || { auto: true, spacing_min_in: 30, bow_clear_in: 36, stern_clear_in: 36, variance_in: 3 };
   $('seats.auto').checked = !!st.auto; for (const [k] of FIELDS.seats) $(`seats.${k}`).value = st[k];
@@ -514,6 +517,13 @@ function formToml() {
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
+    if (sec === 'search') {
+      const fa = [0, 1, 2].map(n => g(`search.flare_deg.${n}`).trim());
+      if (fa.some(v => v !== '')) {
+        if (fa.some(v => v === '')) throw new Error('searched flare: give min, max and step, or leave all three empty');
+        out.push(`flare_deg = [${fa.map(fl).join(', ')}]`);
+      }
+    }
     const ds = sec === 'objective' ? dispRows() : [];
     if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ crew_lb = ${fl(c)}, weight = ${fl(w)} }`).join(', ')}]`);
     out.push('');
@@ -725,7 +735,8 @@ function buildTabs() {
   if (CASE_TABS.includes(tab)) for (const b of $('plotctl').querySelectorAll('button[data-case]')) b.onclick = () => { const n = b.dataset.case; caseHidden.has(n) ? caseHidden.delete(n) : caseHidden.add(n); buildTabs(); drawPlot(); };
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
-const flareDeg = () => { const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
+const flareDeg = () => { const c = winC(); if (c && typeof c.flare_deg === 'number') return c.flare_deg;
+  const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
 function interp(xs, ys, x) {
   if (x <= xs[0]) return ys[0]; if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
   let i = 1; while (xs[i] < x) i++;

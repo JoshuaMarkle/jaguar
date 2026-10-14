@@ -19,7 +19,7 @@
 
 use crate::check::{Verdict, check, first_moment_below, freeboard};
 use crate::equilibrium::{CrewLoad, Loads, solve};
-use crate::hull::{Grid, Hull};
+use crate::hull::{Grid, Hull, Topsides};
 use crate::hullgen::ShapeParams;
 use crate::mix::{MixProvenance, StrengthFit};
 use crate::params::{LoadCase, ObjectiveKind, Params, StrengthModel, range};
@@ -47,6 +47,9 @@ pub struct Candidate {
     /// Name of the tested mix used (strength_model = "tested_mixes"), else None.
     pub mix: Option<String>,
     pub depth_in: f64,
+    /// Topside flare the wall was built with, deg (`hull.flare_deg`, or the
+    /// `search.flare_deg` value tried).
+    pub flare_deg: f64,
     /// Self weight from the section areas alone (trapz of A*rho/1728 over x).
     /// Computable even when equilibrium fails, so it is ALWAYS a real number:
     /// never NaN (serde would write NaN as `null`, a sentinel).
@@ -606,7 +609,8 @@ pub struct SearchAxis {
     /// Range end the winner sits on. None = inside (or a one-value axis).
     pub at_bound: Option<Bound>,
     /// Why that end is a real limit, not a range to widen: "buildable floor",
-    /// "mix data" (no lab data further out), "tested mixes". None = widen it.
+    /// "mix data" (no lab data further out), "tested mixes", "demolding draft"
+    /// (low end of `search.flare_deg`). None = widen it.
     pub limit: Option<&'static str>,
 }
 
@@ -668,6 +672,14 @@ pub fn search_space(params: &Params, fit: &StrengthFit, c: &Candidate) -> Result
     };
     let ds = range(s.depth_in);
     let mut out = vec![t, rho, axis("depth_in", &ds, Some(s.depth_in[2]), c.depth_in)];
+    if let Some(fr) = s.flare_deg {
+        let mut a = axis("flare_deg", &range(fr), Some(fr[2]), c.flare_deg);
+        // The low end is the team's demolding draft: a real limit, not a range to widen.
+        if a.at_bound == Some(Bound::Min) {
+            a.limit = Some("demolding draft");
+        }
+        out.push(a);
+    }
     if let (Some(ss), Some(sh)) = (&params.shape_search, &c.shape) {
         let w = [
             sh.length_in,
@@ -828,16 +840,20 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     let axis = density_axis(params, &fit)?;
     let rhos: Vec<f64> = axis.iter().map(|a| a.0).collect();
     let ds = range(params.search.depth_in);
-    let total = ts.len() * rhos.len() * ds.len();
+    let fs = params.flares();
+    let total = ts.len() * rhos.len() * ds.len() * fs.len();
     on_progress(Progress::Started { total });
     let n = params.hull.stations;
     let done = AtomicUsize::new(0);
 
-    // Topsides per depth; `unbuildable[g]` = why that depth's gunwale outline cannot be
-    // built (its candidates then fail with the reason, analysed on the real geometry).
-    let tops = params.hull.topsides();
-    let (grids, unbuildable): (Vec<Grid>, Vec<Option<String>>) =
-        ds.par_iter().map(|&d| Grid::build_topsides(hull, d, n, tops)).unzip();
+    // Topsides per (depth, flare), depth-major (one flare = one per depth, the old order);
+    // `unbuildable[g]` = why that gunwale outline cannot be built (its candidates then
+    // fail with the reason, analysed on the real geometry).
+    let geoms: Vec<(f64, f64)> = ds.iter().flat_map(|&d| fs.iter().map(move |&f| (d, f))).collect();
+    let (grids, unbuildable): (Vec<Grid>, Vec<Option<String>>) = geoms
+        .par_iter()
+        .map(|&(d, f)| Grid::build_topsides(hull, d, n, Topsides { flare_deg: f, ..params.hull.topsides() }))
+        .unzip();
     let pairs: Vec<(usize, usize)> =
         (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
     // Seats per wall geometry (t, depth), solved at the middle density of the
@@ -860,11 +876,13 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let done = &done;
             let axis = &axis;
             let why = &unbuildable[gi];
+            let flare = geoms[gi].1;
             rhos.iter()
                 .enumerate()
                 .map(move |(ri, &rho)| {
                     let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, plan, true);
                     c.mix = axis[ri].2.clone();
+                    c.flare_deg = flare;
                     if let Some(why) = why {
                         c.passes = false;
                         c.error = Some(why.clone());
@@ -886,12 +904,12 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         Some(c) => {
             let stations = 2 * n - 1;
             on_progress(Progress::Verifying { stations });
-            let grid = Grid::build_topsides(hull, c.depth_in, stations, params.hull.topsides()).0;
+            let grid = Grid::build_topsides(hull, c.depth_in, stations, candidate_topsides(params, c)).0;
             let sec = sections(&grid, c.thickness_in);
             let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
             let pi = pairs
                 .iter()
-                .position(|&(gi, ti)| grids[gi].depth == c.depth_in && ts[ti] == c.thickness_in)
+                .position(|&(gi, ti)| geoms[gi] == (c.depth_in, c.flare_deg) && ts[ti] == c.thickness_in)
                 .ok_or_else(|| anyhow::anyhow!("winner wall not on the search grid"))?;
             let plan = &plans[pi];
             let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, plan, false);
@@ -1309,7 +1327,7 @@ fn convergence(
     // series[case][check][resolution]
     let mut series: Vec<Vec<(&'static str, [f64; 3])>> = vec![Vec::new(); params.load_cases.len()];
     for (r, &ns) in stations.iter().enumerate() {
-        let grid = Grid::build_topsides(hull, c.depth_in, ns, params.hull.topsides()).0;
+        let grid = Grid::build_topsides(hull, c.depth_in, ns, candidate_topsides(params, c)).0;
         let sec = sections(&grid, c.thickness_in);
         for (k, (case, s)) in params.load_cases.iter().zip(seats).enumerate() {
             for sample in seats::samples(&s.seats_in, params.seats.variance_in, &grid) {
@@ -1392,6 +1410,11 @@ pub fn extrapolate(stations: [usize; 3], series: &[(String, [f64; 3])]) -> Conve
     out
 }
 
+/// Topsides candidate `c` was built with: the params' gunwale settings and its own flare.
+pub fn candidate_topsides(params: &Params, c: &Candidate) -> Topsides {
+    Topsides { flare_deg: c.flare_deg, ..params.hull.topsides() }
+}
+
 /// Is `b` a better winner than `a` (both passing) under the objective?
 /// Weight: lighter. Drag: less drag, ties broken by weight.
 fn better(params: &Params, b: &Candidate, a: &Candidate) -> bool {
@@ -1449,6 +1472,7 @@ fn evaluate(
         thickness_in: t,
         density_pcf: rho,
         depth_in: grid.depth,
+        flare_deg: params.hull.flare_deg,
         hull_weight_lb: hull_weight(grid, sec, rho),
         mix: None,
         verdict: None,

@@ -825,6 +825,7 @@ mod tests {
                     thickness_in: 0.5,
                     density_pcf: 60.0,
                     mix: None,
+                    flare_deg: 0.0,
                     depth_in: 12.0 + i as f64,
                     hull_weight_lb: 100.0,
                     verdict: None,

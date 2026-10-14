@@ -8,7 +8,7 @@
 [hull]
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
-flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
+flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical (demolding draft, e.g. 3-5)
 # gunwale_radius_in = 200.0  # constructable gunwale: top view straight from the bow, one arc of this radius,
 #                            # straight to the stern; sides straight from the waterline up to it (narrowest
 #                            # such outline that encloses the waterline). Full-ended hulls like off1 need a very
@@ -69,6 +69,8 @@ knee_patch_in = 3.0       # never 0: a point load does not converge
 thickness_in = [0.375, 0.75, 0.0625]
 density_pcf  = [50.0, 64.0, 1.0]
 depth_in     = [10.0, 16.0, 1.0]
+# flare_deg    = [3.0, 5.0, 1.0]   # optional: search the flare too (hull.flare_deg = 0 then); more flare
+#                                  # = more concrete, so it is chosen only when a check needs it
 
 [gates]
 dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)

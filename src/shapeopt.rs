@@ -125,6 +125,7 @@ pub fn loaded_turn(
     hull: &Hull,
     hull_lb: f64,
     depth_in: f64,
+    flare_deg: f64,
 ) -> Result<Turn> {
     let loads: Vec<(f64, f64)> = match &params.objective.displacements {
         Some(ds) => ds.iter().map(|d| (d.crew_lb, d.weight)).collect(),
@@ -133,7 +134,8 @@ pub fn loaded_turn(
             vec![(crew, 1.0)]
         }
     };
-    let g = Grid::build_topsides(hull, depth_in, STATIONS, params.hull.topsides()).0;
+    let ts = crate::hull::Topsides { flare_deg, ..params.hull.topsides() };
+    let g = Grid::build_topsides(hull, depth_in, STATIONS, ts).0;
     let nz = g.nz();
     let topsides = Hull {
         name: "loaded".into(),
@@ -233,7 +235,7 @@ fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
     let params = &for_shape(params, &s);
     let r = run_inner(params, &hull, true, &|_| {})?;
     let c = representative(&r).context("reference shape: inner search produced no candidates")?;
-    let top = race::topsides(&hull, c.depth_in, params.hull.topsides());
+    let top = race::topsides(&hull, c.depth_in, crate::optimize::candidate_topsides(params, &c));
     race::plan(&top, c.hull_weight_lb, rp).context("race paths on the reference (midpoint) shape")
 }
 
@@ -312,7 +314,7 @@ fn eval_shape(
     let r = run_inner(params, &hull, true, &|_| {})?;
     let mut rep = representative(&r).context("inner search produced no candidates")?;
     let mut m = shape_metrics(ss, &shape);
-    match loaded_turn(params, &shape, &hull, rep.hull_weight_lb, rep.depth_in) {
+    match loaded_turn(params, &shape, &hull, rep.hull_weight_lb, rep.depth_in, rep.flare_deg) {
         Ok(t) => m.turn = Some(t),
         Err(e) if refs.is_some() && m.rejected.is_none() => {
             rep.passes = false;
@@ -324,7 +326,7 @@ fn eval_shape(
         && m.rejected.is_none()
     {
         let c = &w.candidate;
-        let top = race::topsides(&hull, c.depth_in, params.hull.topsides());
+        let top = race::topsides(&hull, c.depth_in, crate::optimize::candidate_topsides(params, c));
         match race::planned_time(&top, c.hull_weight_lb, rp, pl) {
             Ok(t) => rep.race_s = Some(t),
             Err(e) => {
@@ -491,7 +493,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     }
     if let (Some(w), Some(rp), ObjectiveKind::Race) = (&r.winner, &params.race, params.objective.kind) {
         let c = &w.candidate;
-        let ts = winner_params.hull.topsides();
+        let ts = crate::optimize::candidate_topsides(&winner_params, c);
         r.race = Some(
             race::run(&hull, c.hull_weight_lb, c.depth_in, ts, rp)
                 .context("race of the winner on re-planned paths")?,

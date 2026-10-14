@@ -179,7 +179,7 @@ fn turn_drag_falls_with_rocker_and_rises_with_length() {
     // 90 lb wall, 12 in mold, heaviest crew (340 lb), each floating at its own level draft.
     let td = |s: &ShapeParams| {
         let h = jaguar::hullgen::generate(s, 41, 21, "t").unwrap();
-        jaguar::shapeopt::loaded_turn(&p, s, &h, 90.0, 12.0).unwrap().drag_n
+        jaguar::shapeopt::loaded_turn(&p, s, &h, 90.0, 12.0, p.hull.flare_deg).unwrap().drag_n
     };
     let t0 = td(&base);
     let rockered = ShapeParams { fore_rocker: 0.5, aft_rocker: 0.5, ..base.clone() };
@@ -191,7 +191,10 @@ fn turn_drag_falls_with_rocker_and_rises_with_length() {
     let mut q = small(false);
     q.objective.displacements = Some(vec![jaguar::params::Displacement { crew_lb: 340.0, weight: 1.0 }]);
     let h = jaguar::hullgen::generate(&base, 41, 21, "t").unwrap();
-    assert_eq!(jaguar::shapeopt::loaded_turn(&q, &base, &h, 90.0, 12.0).unwrap().drag_n, t0);
+    assert_eq!(
+        jaguar::shapeopt::loaded_turn(&q, &base, &h, 90.0, 12.0, q.hull.flare_deg).unwrap().drag_n,
+        t0
+    );
 }
 
 /// The small search with the race objective on two sprint events (fast in debug).

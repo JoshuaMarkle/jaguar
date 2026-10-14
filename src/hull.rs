@@ -143,8 +143,9 @@ pub const TOPSIDE_LINES: usize = 10;
 /// How the topsides above `draft_design` are built ([`Grid::build_topsides`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Topsides {
-    /// Outward lean of the sides, deg from vertical. With a gunwale outline it
-    /// is the lean at the widest station only (it sets the gunwale beam).
+    /// Outward lean of the sides, deg from vertical (demolding draft). With a
+    /// gunwale outline it is the minimum lean at every station with waterline
+    /// breadth; the outline may lean more where it must.
     pub flare_deg: f64,
     /// Some(R): the gunwale in top view is straight from the bow tip, one
     /// circular arc of radius R in, straight to the stern tip (constructable
@@ -244,21 +245,26 @@ impl Gunwale {
         }
     }
 
-    /// Waterline excess over this outline at the worst table station of `hull`
-    /// (x, inches; <= 0 = the outline encloses the waterline).
-    pub fn deficit(&self, hull: &Hull) -> (f64, f64) {
+    /// Excess of the waterline, widened by `offset` where it has breadth, over
+    /// this outline at the worst table station of `hull` (x, inches; <= 0 = the
+    /// outline clears it). offset = (depth - draft) tan(flare): every side then
+    /// leans out at least the flare.
+    pub fn deficit(&self, hull: &Hull, offset: f64) -> (f64, f64) {
         let nw = hull.z.len();
         hull.x
             .iter()
             .zip(&hull.half_breadth)
-            .map(|(&x, row)| (x, row[nw - 1] - self.half_breadth(x)))
+            .map(|(&x, row)| {
+                let yw = row[nw - 1];
+                (x, if yw > 0.0 { yw + offset } else { yw } - self.half_breadth(x))
+            })
             .fold((0.0, f64::NEG_INFINITY), |a, p| if p.1 > a.1 { p } else { a })
     }
 
     /// The gunwale of `hull` built to `depth` with arc radius `r`: the
-    /// narrowest such outline that encloses the design waterline (sides never
-    /// lean in) and is at least the waterline beam widened by `flare_deg` at
-    /// midships. The arc peaks at the middle of the widest waterline stations.
+    /// narrowest such outline that clears the design waterline widened by
+    /// (depth - draft) tan(`flare_deg`) wherever the waterline has breadth, so
+    /// every side leans out at least the flare (demolding). The arc peaks at the middle of the widest waterline stations.
     /// The outline rises everywhere with its half-beam b, so b is bisected; Err
     /// when no b works (a larger b only shrinks the largest radius that fits).
     pub fn of_hull(hull: &Hull, depth: f64, flare_deg: f64, r: f64) -> std::result::Result<Gunwale, String> {
@@ -273,10 +279,11 @@ impl Gunwale {
             .collect();
         let xc = 0.5 * (widest[0] + widest[widest.len() - 1]);
         let (x0, x1) = (hull.x[0], hull.x[hull.x.len() - 1]);
-        let b0 = top + (depth - hull.draft_design).max(0.0) * flare_deg.to_radians().tan();
+        let offset = (depth - hull.draft_design).max(0.0) * flare_deg.to_radians().tan();
+        let b0 = top + offset;
         let at = |b: f64| Gunwale::new(x0, x1, xc, b, r);
         let g0 = at(b0)?;
-        if g0.deficit(hull).1 <= 1e-9 {
+        if g0.deficit(hull, offset).1 <= 1e-9 {
             return Ok(g0);
         }
         // Largest b with the arc clear of both tips: r < (e^2 + b^2) / (2 b), e the
@@ -284,9 +291,9 @@ impl Gunwale {
         let e = (xc - x0).min(x1 - xc);
         let b_cap = if r > e { r - (r * r - e * e).sqrt() } else { f64::INFINITY };
         let b_hi = (b_cap * (1.0 - 1e-9)).min(b0 + 4.0 * top);
-        let enclosing = b_hi > b0 && at(b_hi).is_ok_and(|g| g.deficit(hull).1 <= 1e-9);
+        let enclosing = b_hi > b0 && at(b_hi).is_ok_and(|g| g.deficit(hull, offset).1 <= 1e-9);
         if !enclosing {
-            let (x, d) = at(b_hi.max(b0)).map_or((f64::NAN, f64::NAN), |g| g.deficit(hull));
+            let (x, d) = at(b_hi.max(b0)).map_or((f64::NAN, f64::NAN), |g| g.deficit(hull, offset));
             return Err(format!(
                 "no gunwale of radius {r:.0} in encloses the waterline: at the widest that fits \
                  ({:.1} in half-beam) it is still {d:.2} in inside at x = {x:.1} in; use a smaller \
@@ -297,7 +304,7 @@ impl Gunwale {
         let (mut lo, mut hi) = (b0, b_hi);
         for _ in 0..60 {
             let mid = 0.5 * (lo + hi);
-            if at(mid).is_ok_and(|g| g.deficit(hull).1 <= 1e-9) { hi = mid } else { lo = mid }
+            if at(mid).is_ok_and(|g| g.deficit(hull, offset).1 <= 1e-9) { hi = mid } else { lo = mid }
         }
         at(hi)
     }
@@ -338,7 +345,7 @@ impl Grid {
         let nw = hull.z.len();
         // Concave outline vs piecewise-linear waterline: the table stations decide.
         // `of_hull` already widened the outline to enclose; this guards it.
-        let worst = gw.deficit(hull);
+        let worst = gw.deficit(hull, 0.0);
         let (nz, nx) = (g.z.len(), g.x.len());
         for i in 0..nx {
             let (yw, yg) = (g.y[i * nz + nw - 1], gw.half_breadth(g.x[i]));
@@ -505,15 +512,23 @@ mod tests {
         let nw = h.z.len();
         let top = h.half_breadth.iter().map(|r| r[nw - 1]).fold(0.0, f64::max);
         let g = Gunwale::of_hull(&h, 12.0, 0.0, 200.0).unwrap();
-        assert!(g.deficit(&h).1 <= 1e-9, "encloses");
+        assert!(g.deficit(&h, 0.0).1 <= 1e-9, "encloses");
         assert!(g.b > top, "off1's full ends need a gunwale wider than the waterline");
         // Narrowest: a hair narrower no longer encloses.
         let tighter = Gunwale::new(g.x0, g.x1, g.xc, g.b - 1e-3, 200.0).unwrap();
-        assert!(tighter.deficit(&h).1 > 0.0);
-        // Flare sets a floor on the half-beam.
-        let wide = Gunwale::of_hull(&h, 12.0, 30.0, 200.0).unwrap();
-        let floor = top + (12.0 - h.draft_design) * 30f64.to_radians().tan();
-        assert!((wide.b - floor.max(g.b)).abs() < 1e-6);
+        assert!(tighter.deficit(&h, 0.0).1 > 0.0);
+        // Flare = demolding draft: every station with waterline breadth leans out at least it.
+        let off = (12.0 - h.draft_design) * 4f64.to_radians().tan();
+        let drafted = Gunwale::of_hull(&h, 12.0, 4.0, 200.0).unwrap();
+        assert!(drafted.b > g.b && drafted.deficit(&h, off).1 <= 1e-9);
+        for (&x, row) in h.x.iter().zip(&h.half_breadth) {
+            if row[nw - 1] > 0.0 {
+                let lean =
+                    ((drafted.half_breadth(x) - row[nw - 1]) / (12.0 - h.draft_design)).atan().to_degrees();
+                assert!(lean >= 4.0 - 1e-6, "x {x}: lean {lean}");
+            }
+        }
+        let _ = top;
         // Too large a radius: no outline fits, with the reason.
         let e = Gunwale::of_hull(&h, 12.0, 0.0, 5000.0).unwrap_err();
         assert!(e.contains("no gunwale of radius 5000") || e.contains("too large"), "{e}");
@@ -525,9 +540,9 @@ mod tests {
         let plain = Topsides { flare_deg: 10.0, ..Topsides::default() };
         assert_eq!(Grid::build_topsides(&h, 14.0, 161, plain).0.y, Grid::build_flared(&h, 14.0, 161, 10.0).y);
         // off1's full bow needs a very wide gunwale: allow any lean to test the geometry.
-        let ts = Topsides { flare_deg: 10.0, gunwale_radius_in: Some(200.0), gunwale_max_flare_deg: 89.0 };
+        let ts = Topsides { flare_deg: 3.0, gunwale_radius_in: Some(200.0), gunwale_max_flare_deg: 89.0 };
         let (g, why) = Grid::build_topsides(&h, 14.0, 161, ts);
-        let gw = Gunwale::of_hull(&h, 14.0, 10.0, 200.0).unwrap();
+        let gw = Gunwale::of_hull(&h, 14.0, 3.0, 200.0).unwrap();
         let (nw, nz) = (h.z.len(), g.nz());
         let vertical = Grid::build(&h, 14.0, 161);
         for i in [10, 40, 80, 120, 150] {

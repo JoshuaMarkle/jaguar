@@ -54,11 +54,16 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    = [min, max] searched as a shape variable): in top view the gunwale runs straight from the bow
    tip, tangent onto one arc of radius R, then straight to the stern tip (`hull::Gunwale`); each
    side is ruled from the design waterline up to it. The arc peaks at the middle of the widest
-   waterline stations; its half-beam is the smallest that encloses the design waterline (checked at
-   the table stations, exact since the outline is concave) and at least the waterline beam plus
-   (D - draft) tan(flare). Every candidate of a depth fails, with the reason, when no outline of
+   waterline stations; its half-beam is the smallest that clears the design waterline widened by
+   (D - draft) tan(flare) wherever it has breadth, so every side leans out at least the flare (the
+   demolding draft; checked at the table stations, exact since the outline is concave). Every candidate of a depth fails, with the reason, when no outline of
    radius R fits or the sides would lean out more than `hull.gunwale_max_flare_deg` (default 30)
-   anywhere (401 even stations). Off = byte-identical to before. Export and the web view build the same surface.
+   anywhere (401 even stations). Off = byte-identical to before.
+   **Flare as a search axis** (optional `search.flare_deg = [min, max, step]`, then `hull.flare_deg`
+   must be 0): each (depth, flare) is its own topsides; candidates record `flare_deg`, ordered
+   (thickness, density, depth, flare). More flare only adds wall, so it is chosen only when a gate
+   needs it; the low end is reported as the "demolding draft" limit. Each value multiplies the
+   wall grid (a shape search with 6 flares took 120 s). Export and the web view build the same surface.
 2. **Section** per station: thin shell of thickness t on both sides + keel strip: A, zbar, I. The
    girth follows the hull: waterline segments with zero half-breadth at both ends (below the
    rockered keel, the closed stem) are not wall. Same rule for the wetted surface in drag.
@@ -168,7 +173,7 @@ KG), strength fit values, and per check the station, section values (M, V, A, zb
 or punching intermediates (d_load, depth, b0, P, v_u, v_c) with capacity and D/C; recomputed by
 the checks' own code so each demand and capacity equals that case's verdict (or `error`). The terminal prints one line per case under the winner (seats bow to stern as
 knee@lb, source, variance, D/C), the mix provenance
-line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, length, beam, shape, weight, GM, drag, race_s and the
+line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam, shape, weight, GM, drag, race_s and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.

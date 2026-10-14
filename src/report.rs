@@ -102,6 +102,12 @@ fn hull_line(c: &Candidate) -> String {
     if let Some(sh) = &c.shape {
         s.push_str(&format!("  draft {:.1} in", sh.draft_in));
     }
+    if c.flare_deg != 0.0 {
+        s.push_str(&format!("  flare {:.1} deg", c.flare_deg));
+    }
+    if let Some(r) = c.shape.as_ref().and_then(|sh| sh.gunwale_radius_in) {
+        s.push_str(&format!("  gunwale R {r:.0} in"));
+    }
     s
 }
 
@@ -484,12 +490,15 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
     })
 }
 
-/// Topsides of a result's winner: `hull.flare_deg`, and the gunwale radius of
+/// Topsides of a result's winner: its flare (else `hull.flare_deg`), and the gunwale radius of
 /// the winner's shape (shape search) or `hull.gunwale_radius_in`.
 pub fn result_topsides(v: &serde_json::Value) -> crate::hull::Topsides {
     let h = &v["params"]["hull"];
     crate::hull::Topsides {
-        flare_deg: h["flare_deg"].as_f64().unwrap_or(0.0),
+        flare_deg: v["winner"]["candidate"]["flare_deg"]
+            .as_f64()
+            .or_else(|| h["flare_deg"].as_f64())
+            .unwrap_or(0.0),
         gunwale_radius_in: v["winner"]["candidate"]["shape"]["gunwale_radius_in"]
             .as_f64()
             .or_else(|| h["gunwale_radius_in"].as_f64()),
@@ -568,6 +577,7 @@ mod tests {
             thickness_in: t,
             density_pcf: rho,
             mix: None,
+            flare_deg: 0.0,
             depth_in: 12.0,
             hull_weight_lb: wt,
             verdict: Some(Verdict {

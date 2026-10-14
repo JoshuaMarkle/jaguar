@@ -252,6 +252,13 @@ fn gunwale_max_flare() -> f64 {
     crate::hull::GUNWALE_MAX_FLARE_DEG
 }
 
+impl Params {
+    /// Flares the wall search tries: `search.flare_deg`, else `hull.flare_deg`.
+    pub fn flares(&self) -> Vec<f64> {
+        self.search.flare_deg.map_or_else(|| vec![self.hull.flare_deg], range)
+    }
+}
+
 impl HullParams {
     pub fn topsides(&self) -> crate::hull::Topsides {
         crate::hull::Topsides {
@@ -627,6 +634,11 @@ pub struct Search {
     pub thickness_in: [f64; 3],
     pub density_pcf: [f64; 3],
     pub depth_in: [f64; 3],
+    /// Optional flare axis [min, max, step], deg: the flare (demolding draft)
+    /// becomes a wall-search variable, so more flare (more wall) is chosen only
+    /// when it buys a gate (freeboard, flotation, ...). Absent = `hull.flare_deg`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flare_deg: Option<[f64; 3]>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -675,6 +687,14 @@ impl Params {
         }
         if !(0.0..=45.0).contains(&self.hull.flare_deg) {
             bail!("hull.flare_deg must be in [0, 45], got {}", self.hull.flare_deg);
+        }
+        if let Some([lo, hi, st]) = self.search.flare_deg {
+            if !(lo >= 0.0 && hi <= 45.0 && lo <= hi && st > 0.0) {
+                bail!("search.flare_deg must be [min >= 0, max <= 45, step > 0], got [{lo}, {hi}, {st}]");
+            }
+            if self.hull.flare_deg != 0.0 {
+                bail!("give hull.flare_deg (fixed) or search.flare_deg (searched), not both");
+            }
         }
         let pu = &self.punching;
         if !(pu.knees == 1 || pu.knees == 2)

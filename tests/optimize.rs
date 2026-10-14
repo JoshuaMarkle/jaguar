@@ -485,3 +485,35 @@ fn gunwale_outline_on_a_fixed_hull() {
     let same = plain.candidates.iter().find(|c| key(c) == key(&w.candidate)).unwrap();
     assert!(w.candidate.hull_weight_lb > same.hull_weight_lb);
 }
+
+/// search.flare_deg: flare is a wall-search axis. More flare only adds wall, so on off1 (no
+/// gate needs it) the lightest passing wall takes the demolding minimum; every candidate
+/// records its flare and the order is (thickness, density, depth, flare).
+#[test]
+fn flare_axis_takes_the_demolding_minimum_unless_needed() {
+    let (mut p, h) = example();
+    p.search.thickness_in = [0.375, 0.5, 0.125];
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    p.search.flare_deg = Some([3.0, 5.0, 1.0]);
+    p.validate().unwrap();
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.as_ref().unwrap();
+    assert_eq!(w.candidate.flare_deg, 3.0);
+    let ax = w.search_space.iter().find(|a| a.name == "flare_deg").unwrap();
+    assert_eq!((ax.count, ax.limit), (Some(3), Some("demolding draft")));
+    let n = r.candidates.len();
+    assert_eq!(n % 3, 0);
+    for k in r.candidates.chunks(3) {
+        assert_eq!(k.iter().map(|c| c.flare_deg).collect::<Vec<_>>(), vec![3.0, 4.0, 5.0]);
+        // Same wall, more flare: more concrete.
+        assert!(k[0].hull_weight_lb < k[1].hull_weight_lb && k[1].hull_weight_lb < k[2].hull_weight_lb);
+    }
+    // A fixed flare of 3 gives the same winner as the axis.
+    p.search.flare_deg = None;
+    p.hull.flare_deg = 3.0;
+    let fixed = optimize::run(&p, &h).unwrap();
+    assert_eq!(fixed.winner.unwrap().candidate.hull_weight_lb, w.candidate.hull_weight_lb);
+    // Both at once is ambiguous.
+    p.search.flare_deg = Some([3.0, 5.0, 1.0]);
+    assert!(p.validate().unwrap_err().to_string().contains("not both"));
+}
