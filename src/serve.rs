@@ -9,6 +9,9 @@
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
 //! * `GET  /vendor/three.min.js` -> three.js r128 (web/vendor, MIT, web/vendor/three.LICENSE),
 //!   embedded too, so the 3D view never depends on a CDN or the network.
+//! * `[race]` has no form fields, so it always comes from the CLI canoe.toml, read fresh on
+//!   every request: `/api/params` returns it, and `/api/run`, `/api/race` and `/api/prefs`
+//!   replace the posted `[race]` (absent from prefs saved before it existed) with it.
 //! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file and
 //!   mix_data made relative to the CLI canoe.toml dir when inside it>, "dir": "<that dir>",
 //!   "source": "prefs"|"file"} (UI prefills its form). Read fresh each call: the saved
@@ -90,6 +93,8 @@ struct Shared {
 
 /// Request handler, independent of the socket so it can be unit tested.
 struct App {
+    /// The CLI canoe.toml (source of `[race]`, re-read on each request).
+    params_path: PathBuf,
     toml_text: String,
     base_dir: PathBuf,
     /// Saved form settings (see `POST /api/prefs`).
@@ -128,6 +133,7 @@ impl App {
             ..Default::default()
         };
         Ok(App {
+            params_path: params_path.to_path_buf(),
             toml_text,
             base_dir,
             prefs_path,
@@ -249,6 +255,24 @@ impl App {
     }
 
     /// Params of the most recent run or prefs save, else the startup params.
+    /// `[race]` of the CLI canoe.toml as it is on disk now (None: the file has none).
+    fn file_race(&self) -> Result<Option<toml::Value>, String> {
+        let text = std::fs::read_to_string(&self.params_path)
+            .map_err(|e| format!("reading {}: {e}", self.params_path.display()))?;
+        let table: toml::Table =
+            toml::from_str(&text).map_err(|e| format!("{}: {e}", self.params_path.display()))?;
+        Ok(table.get("race").cloned())
+    }
+
+    /// The posted canoe.toml text with its `[race]` replaced by the CLI canoe.toml's (when the
+    /// file has one). Text that does not parse is returned as is, for `Params::parse` to report.
+    fn with_file_race(&self, body: &str) -> Result<String, String> {
+        let Some(race) = self.file_race()? else { return Ok(body.to_string()) };
+        let Ok(mut table) = toml::from_str::<toml::Table>(body) else { return Ok(body.to_string()) };
+        table.insert("race".into(), race);
+        toml::to_string(&table).map_err(|e| e.to_string())
+    }
+
     fn current(&self) -> Params {
         self.lock().params.clone().unwrap_or_else(|| self.params.clone())
     }
@@ -267,6 +291,14 @@ impl App {
             f.strip_prefix(&self.base_dir).or_else(|_| f.strip_prefix(&canon)).unwrap_or(f).to_path_buf()
         };
         let mut rel = params;
+        match self.file_race() {
+            Ok(Some(v)) => match v.try_into() {
+                Ok(r) => rel.race = Some(r),
+                Err(e) => return err_reply(500, format!("{}: [race]: {e}", self.params_path.display())),
+            },
+            Ok(None) => rel.race = None,
+            Err(e) => return err_reply(500, e),
+        }
         rel.hull.file = rel.hull.file.as_deref().map(rel_to);
         rel.material.mix_data = rel_to(&rel.material.mix_data);
         match serde_json::to_value(&rel) {
@@ -284,7 +316,11 @@ impl App {
     }
 
     fn save_prefs(&self, body: &str) -> Reply {
-        let params = match Params::parse(body, &self.base_dir) {
+        let body = match self.with_file_race(body) {
+            Ok(b) => b,
+            Err(e) => return err_reply(500, e),
+        };
+        let params = match Params::parse(&body, &self.base_dir) {
             Ok(p) => p,
             Err(e) => return err_reply(400, format!("{e:#}")),
         };
@@ -382,12 +418,16 @@ impl App {
 
     /// `POST /api/race`: race the last winner with the posted params' `[race]`.
     fn race(&self, body: &str) -> Reply {
-        let params = match Params::parse(body, &self.base_dir) {
+        let body = match self.with_file_race(body) {
+            Ok(b) => b,
+            Err(e) => return err_reply(500, e),
+        };
+        let params = match Params::parse(&body, &self.base_dir) {
             Ok(p) => p,
             Err(e) => return err_reply(400, format!("{e:#}")),
         };
         let Some(rp) = params.race else {
-            return err_reply(400, "no [race] section in the params (add one to canoe.toml)");
+            return err_reply(400, format!("no [race] section in {}: add one", self.params_path.display()));
         };
         let (state, result) = {
             let s = self.lock();
@@ -412,7 +452,11 @@ impl App {
     }
 
     fn start_run(&self, body: &str) -> Reply {
-        let params = match Params::parse(body, &self.base_dir) {
+        let body = match self.with_file_race(body) {
+            Ok(b) => b,
+            Err(e) => return err_reply(500, e),
+        };
+        let params = match Params::parse(&body, &self.base_dir) {
             Ok(p) => p,
             Err(e) => return err_reply(400, format!("{e:#}")),
         };
@@ -883,32 +927,73 @@ mod tests {
         assert!(!page.contains("<script src=\"http"), "no script from the network");
     }
 
+    /// An App on a temporary canoe.toml: the example with `edit` applied (paths made absolute).
+    fn app_on(edit: impl FnOnce(&mut Params)) -> (App, Params) {
+        let dir = tmpdir();
+        let mut p =
+            Params::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml"))).unwrap();
+        edit(&mut p);
+        let path = dir.join("canoe.toml");
+        std::fs::write(&path, toml::to_string(&p).unwrap()).unwrap();
+        (App::new(&path, dir.join("prefs.toml")).unwrap(), p)
+    }
+
     #[test]
-    fn race_needs_params_and_a_winner() {
-        let a = app();
-        let mut params = Params::parse(&a.toml_text, &a.base_dir).unwrap();
-        let mut rp = params.race.clone().expect("example has [race]");
-        rp.events.retain(|e| e.name == "Symposium men's 200 m sprint");
-        rp.events[0].weight = 1.0;
-        params.race = Some(rp);
-        let body = toml::to_string(&params).unwrap();
+    fn race_needs_a_race_section_and_a_winner() {
+        let one_sprint = |p: &mut Params| {
+            let rp = p.race.as_mut().unwrap();
+            rp.events.retain(|e| e.name == "Symposium men's 200 m sprint");
+            rp.events[0].weight = 1.0;
+        };
+        let (a, params) = app_on(one_sprint);
+        let mut form = params.clone();
+        form.race = None; // what the form sends with prefs saved before [race] existed
+        let body = toml::to_string(&form).unwrap();
         assert_eq!(a.handle("POST", "/api/race", "bogus = 1").0, 400);
         assert_eq!(a.handle("POST", "/api/race", &body).0, 404, "no result yet");
-        let mut no_race = params.clone();
-        no_race.race = None;
-        let (st, _, msg) = a.handle("POST", "/api/race", &toml::to_string(&no_race).unwrap());
-        assert!(st == 400 && msg.contains("no [race]"), "{st} {msg}");
         let result = crate::run(&params, &|_| {}).unwrap();
         a.lock().result = Some(serde_json::to_string(&result).unwrap());
-        let (st, ct, body) = a.handle("POST", "/api/race", &body);
-        assert_eq!((st, ct), (200, "application/json"), "{body}");
-        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        // The form has no [race]: the CLI canoe.toml's is used.
+        let (st, ct, out) = a.handle("POST", "/api/race", &body);
+        assert_eq!((st, ct), (200, "application/json"), "{out}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["format"], crate::race::RACE_FORMAT);
         assert_eq!(v["events"].as_array().unwrap().len(), 1);
         assert!(v["events"][0]["speed_m"].as_array().unwrap().len() > 100);
+        // The file wins over a stale copy in the form.
+        let mut stale = params.clone();
+        stale.race.as_mut().unwrap().events[0].name = "stale".into();
+        let v: serde_json::Value =
+            serde_json::from_str(&a.handle("POST", "/api/race", &toml::to_string(&stale).unwrap()).2)
+                .unwrap();
+        assert_eq!(v["events"][0]["name"], "Symposium men's 200 m sprint");
         a.lock().state = "running";
-        assert_eq!(a.handle("POST", "/api/race", &toml::to_string(&params).unwrap()).0, 409);
+        assert_eq!(a.handle("POST", "/api/race", &body).0, 409);
         assert_eq!(a.handle("GET", "/api/race", "").0, 405);
+        // A canoe.toml with no [race] at all: a clear 400 naming the file.
+        let (b, p2) = app_on(|p| p.race = None);
+        b.lock().result = Some(serde_json::to_string(&result).unwrap());
+        let (st, _, msg) = b.handle("POST", "/api/race", &toml::to_string(&p2).unwrap());
+        assert!(
+            st == 400 && msg.contains("no [race] section in") && msg.contains("canoe.toml"),
+            "{st} {msg}"
+        );
+    }
+
+    #[test]
+    fn old_prefs_without_race_get_it_from_the_file() {
+        let (a, params) = app_on(|_| {});
+        let mut old = params.clone();
+        old.race = None;
+        // Saved prefs that predate [race]: params come back with the file's [race], and saving
+        // them again stores it.
+        std::fs::write(&a.prefs_path, toml::to_string(&old).unwrap()).unwrap();
+        let v = params_of(&a);
+        assert_eq!(v["source"], "prefs");
+        assert_eq!(v["params"]["race"]["event"].as_array().unwrap().len(), 9);
+        assert_eq!(a.handle("POST", "/api/prefs", &toml::to_string(&old).unwrap()).0, 200);
+        let saved = std::fs::read_to_string(&a.prefs_path).unwrap();
+        assert!(saved.contains("[race]"));
     }
 
     #[test]

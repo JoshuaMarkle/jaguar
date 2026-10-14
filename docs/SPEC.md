@@ -267,7 +267,8 @@ geometry the rules leave to the site marked as assumptions.
   in arcs, path covered so far; controls play/pause (space), restart, viewing speed 0.25-50x, a
   time scrubber and follow (40 m window on the canoe); live time, speed, distance and current
   turn; speed along the path with the canoe's cursor; the event table and recommended weightings.
-  The form carries `[race]` through but does not edit it (edit canoe.toml).
+  `[race]` has no form fields: the server always uses the CLI canoe.toml's, read fresh on each
+  request (also for runs and saved prefs), so edit it there.
 * `--measured "EVENT=SECONDS"` first fits `paddler_power_w` (bisection) so that event takes the
   measured time. Calibrate before trusting absolute times; the weightings depend on it less.
 * Neglected: wind, current, yaw acceleration, stroke pulsation, heel. Drag is the rank-only
