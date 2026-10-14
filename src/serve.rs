@@ -9,6 +9,11 @@
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
 //! * `GET  /vendor/three.min.js` -> three.js r128 (web/vendor, MIT, web/vendor/three.LICENSE),
 //!   embedded too, so the 3D view never depends on a CDN or the network.
+//! * `POST /api/import-mesh?name=<file.stl|file.obj>[&units=in|mm|cm|m|ft][&length_axis=x|y|z]
+//!   [&up_axis=..][&flip_up=1][&bow_at_max=1]` body = the mesh file's bytes (a canoe made in CAD,
+//!   `meshimport.rs`). Writes `<stem>_hull.json` next to the CLI canoe.toml (refusing to
+//!   overwrite a hull that is not a mesh import) and returns {"file", "measured"}; 400 if the
+//!   mesh cannot be read.
 //! * `[race]` has no form fields, so it always comes from the CLI canoe.toml, read fresh on
 //!   every request: `/api/params` returns it, and `/api/run`, `/api/race` and `/api/prefs`
 //!   replace the posted `[race]` (absent from prefs saved before it existed) with it.
@@ -370,6 +375,64 @@ impl App {
     }
 
     /// Every jaguar-hull/1 JSON in `base_dir`, sorted by file name. Read fresh each call.
+    /// `POST /api/import-mesh`: a CAD mesh into a hull table next to the canoe.toml.
+    fn import_mesh(&self, query: &str, bytes: &[u8]) -> Reply {
+        use crate::meshimport::{self as mi, MeshOptions};
+        let q = |k: &str| {
+            query.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}=")[..])).map(|v| v.to_string())
+        };
+        let Some(name) = q("name").as_deref().and_then(safe_name) else {
+            return err_reply(400, "give ?name=<file.stl|file.obj> (a bare file name)");
+        };
+        let path = Path::new(&name);
+        let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let stem: String = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .collect();
+        if stem.is_empty() {
+            return err_reply(400, "bad mesh file name");
+        }
+        let parsed = match ext.as_str() {
+            "stl" => mi::parse_stl(bytes),
+            "obj" => mi::parse_obj(&String::from_utf8_lossy(bytes)),
+            e => {
+                return err_reply(
+                    400,
+                    format!("mesh must be .stl or .obj (got .{e}): export one from your CAD"),
+                );
+            }
+        };
+        let opts = (|| -> Result<MeshOptions> {
+            Ok(MeshOptions {
+                units: q("units").filter(|u| u != "auto").as_deref().map(mi::unit_scale).transpose()?,
+                length_axis: q("length_axis").as_deref().map(mi::axis_index).transpose()?,
+                up_axis: q("up_axis").as_deref().map(mi::axis_index).transpose()?,
+                flip_up: q("flip_up").is_some_and(|v| v == "1"),
+                bow_at_max: q("bow_at_max").is_some_and(|v| v == "1"),
+                ..MeshOptions::new()
+            })
+        })();
+        let (hull, m) = match opts.and_then(|o| mi::hull_from_mesh(&parsed?, &stem, &o)) {
+            Ok(v) => v,
+            Err(e) => return err_reply(400, format!("{e:#}")),
+        };
+        let file = format!("{stem}_hull.json");
+        let out = self.base_dir.join(&file);
+        if let Ok(old) = Hull::load(&out)
+            && !old.source.starts_with("mesh import")
+        {
+            return err_reply(409, format!("{file} exists and is not a mesh import: rename the mesh"));
+        }
+        if let Err(e) = hull.save(&out) {
+            return err_reply(500, format!("{e:#}"));
+        }
+        json_reply(200, serde_json::json!({ "file": file, "measured": m }))
+    }
+
     fn hulls(&self) -> Reply {
         let entries = match std::fs::read_dir(&self.base_dir) {
             Ok(e) => e,
@@ -584,11 +647,21 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
 
 fn serve_on(server: tiny_http::Server, app: App) {
     for mut req in server.incoming_requests() {
-        let mut body = String::new();
-        if req.as_reader().read_to_string(&mut body).is_err() {
-            body.clear();
+        let mut raw = Vec::new();
+        if req.as_reader().read_to_end(&mut raw).is_err() {
+            raw.clear();
         }
         let url = req.url().to_string();
+        // A mesh upload is binary; every other body is text.
+        if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/import-mesh") {
+            let (status, ctype, text) = app.import_mesh(url.split_once('?').map_or("", |q| q.1), &raw);
+            let header =
+                tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header");
+            let _ = req
+                .respond(tiny_http::Response::from_string(text).with_status_code(status).with_header(header));
+            continue;
+        }
+        let body = String::from_utf8_lossy(&raw).into_owned();
         if req.method().as_str() == "GET" && url.split('?').next() == Some("/api/export") {
             let (status, ctype, file, bytes) = app.export(url.split_once('?').map_or("", |q| q.1));
             let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
@@ -912,6 +985,38 @@ mod tests {
         assert!(body.contains("error"));
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/run", &a.toml_text.clone()).0, 409);
+    }
+
+    #[test]
+    fn import_mesh_writes_a_hull_next_to_the_canoe_toml() {
+        let (a, _) = app_on(|_| {});
+        let hull = Hull::load(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden/off1_hull.json")))
+            .unwrap();
+        let spec = export::ExportSpec {
+            depth_in: 12.0,
+            thickness_in: Some(0.375),
+            flare_deg: 0.0,
+            gunwale_radius_in: None,
+            stations: 161,
+            girth: 41,
+            pocket_in: None,
+        };
+        let stl = export::to_stl(&export::build_mesh(&hull, &spec).unwrap(), "off1");
+        let (st, _, body) = a.import_mesh("name=My%20Canoe.stl&units=in", &stl);
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["file"], "My_Canoe_hull.json");
+        assert!((v["measured"]["thickness_in"].as_f64().unwrap() - 0.375).abs() < 0.02);
+        assert!((v["measured"]["depth_in"].as_f64().unwrap() - 12.0).abs() < 0.05);
+        // It shows up in the hull picker and loads.
+        let list = a.handle("GET", "/api/hulls", "").2;
+        assert!(list.contains("My_Canoe_hull.json"), "{list}");
+        assert_eq!(a.handle("GET", "/api/hull?file=My_Canoe_hull.json", "").0, 200);
+        assert_eq!(a.import_mesh("name=x.step", &stl).0, 400, "not a mesh");
+        assert_eq!(a.import_mesh("name=bad.stl", b"nonsense").0, 400);
+        // Never overwrites a hull that is not a mesh import.
+        hull.save(&a.base_dir.join("keep_hull.json")).unwrap();
+        assert_eq!(a.import_mesh("name=keep.stl", &stl).0, 409);
     }
 
     #[test]

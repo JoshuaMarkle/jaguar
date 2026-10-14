@@ -17,6 +17,7 @@ src/params.rs       canoe.toml -> Params (the only input)
 src/mix.rs          lab CSV -> strength fit (docs/MIX_DATA.md)
 src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid
 src/hullgen.rs      parametric hull from shape factors (gen-hull, shape search)
+src/meshimport.rs   CAD canoe (STL / OBJ mesh) -> hull table, measured wall + depth, as-drawn canoe.toml
 src/section.rs      shell A, zbar, I per station
 src/equilibrium.rs  float + trim, GM, V(x), M(x)
 src/flotation.rs    swamped flotation: bow/stern air pocket length
@@ -31,7 +32,7 @@ src/report.rs       terminal summary, result.json, race summary + result.json re
 src/export.rs       STEP / STL of the winner (CAD, mold shop)
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step;
                     web/vendor/three.min.js r128 embedded, so it works offline)
-src/main.rs         CLI: run | check | mix | import-michlet | gen-hull | export | race | serve
+src/main.rs         CLI: run | check | mix | import-michlet | import-mesh | gen-hull | export | race | serve
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from

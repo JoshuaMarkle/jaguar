@@ -12,6 +12,7 @@ jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no v
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
+jaguar import-mesh canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
 jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
@@ -196,6 +197,25 @@ line and the search-space table (shape factors inside their bounds are counted, 
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.
+
+## CAD import (`src/meshimport.rs`)
+`jaguar import-mesh` (and the web form's "Import CAD mesh", `POST /api/import-mesh`) reads a canoe
+drawn in CAD, exported as an STL (binary or ASCII) or OBJ mesh, and writes a jaguar-hull/1 table:
+units (in/mm/cm/m/ft, detected from a 12-30 ft length or given), axes (length = longest side, up =
+shortest, keel at the narrower end; or given), bow at the low end of the length axis (or
+`--bow-at-max`). Each of `--stations` x `--waterlines` cuts takes the outer crossing on each side
+(their mean; the difference is reported as asymmetry). The table runs from the keel to the lowest
+gunwale over the middle 80% (a sheer rising toward the ends is reported, not analysed). A solid
+mesh's wall is measured from the inner crossing (normal to the wall; median, min, max over the
+middle) and cross-checked by 2 x volume / area; a surface mesh has none. With `--canoe`, it also
+writes a canoe.toml that analyses the design as drawn: that hull with no flare, templates, stem
+radius, gunwale outline or shape search (the CAD shape is the shape), search pinned to the drawn
+wall (or `--thickness`) and depth, and to `--density` if given (else the mix range: the lightest
+passing mix). `jaguar run` then gives every check, drag, stability and flotation; a single pinned
+design that fails is shown with all its checks (it is the design asked about, not a fallback), and
+`jaguar race` races it (with a note). Verified on JAGUAR's own exported solids: wall within 0.02 in,
+offsets within 0.15 in, the off1 winner reproduced (weight within 2%, punching D/C within 0.005;
+GM within 0.05 in, which is enough to cross off1's GM gate at 0.25).
 
 ## Export (`src/export.rs`)
 `jaguar export` writes the canoe for CAD and the mold shop, in inches. From a result.json it takes

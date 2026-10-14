@@ -77,6 +77,9 @@ which widens the whole gunwale; on the gunwale example 3 deg pushes midships lea
 shape passes. Options: stem zone exempt from the draft, or gunwale tips allowed past the waterline
 tips (overhang, longer LOA).
 
+T70 (`jaguar import-mesh`, web "Import CAD mesh"): CAD canoes as STL / OBJ, analysed as drawn.
+STEP is not read directly (it needs a CAD kernel: export STL from the CAD instead).
+
 Declined 2026-10-13 (do not build): multi-mix zones / I-beam pours, multi-pour graph, mix re-sweep
 with zones.
 

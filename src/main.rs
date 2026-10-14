@@ -27,6 +27,43 @@ enum Cmd {
         #[arg(default_value = "canoe.toml")]
         params: PathBuf,
     },
+    /// Read a canoe made in CAD (STL or OBJ mesh; solid wall or surface) into a jaguar-hull/1 JSON,
+    /// measuring its wall and depth; with --canoe, also write a canoe.toml that analyses it as drawn.
+    ImportMesh {
+        mesh: PathBuf,
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+        /// Units of the mesh: in | mm | cm | m | ft (default: detected from the length)
+        #[arg(long)]
+        units: Option<String>,
+        /// Length / up axis: x | y | z (default: longest / shortest side)
+        #[arg(long)]
+        length_axis: Option<String>,
+        #[arg(long)]
+        up_axis: Option<String>,
+        /// The keel is at the high end of the up axis
+        #[arg(long)]
+        flip_up: bool,
+        /// The bow is at the high end of the length axis
+        #[arg(long)]
+        bow_at_max: bool,
+        #[arg(long, default_value_t = 81)]
+        stations: usize,
+        #[arg(long, default_value_t = 41)]
+        waterlines: usize,
+        /// canoe.toml to take everything else from (crew, mixes, gates, [race]); writes --analysis
+        #[arg(long)]
+        canoe: Option<PathBuf>,
+        /// Where to write the analysis canoe.toml (default: <mesh stem>_analysis.toml)
+        #[arg(long)]
+        analysis: Option<PathBuf>,
+        /// Wall thickness, in (default: measured; needed for a surface mesh to analyse one wall)
+        #[arg(long)]
+        thickness: Option<f64>,
+        /// Mix density of the drawn design, pcf (default: the canoe.toml's range, lightest passing)
+        #[arg(long)]
+        density: Option<f64>,
+    },
     /// Convert a Godzilla/Michlet off1.mlt + out.mlt into a jaguar-hull/1 JSON.
     ImportMichlet {
         off1: PathBuf,
@@ -156,6 +193,79 @@ fn main() -> Result<()> {
             );
             for l in fit.source_lines().iter().chain(&fit.weak_fit_warnings()) {
                 println!("{l}");
+            }
+        }
+        Cmd::ImportMesh {
+            mesh,
+            out,
+            units,
+            length_axis,
+            up_axis,
+            flip_up,
+            bow_at_max,
+            stations,
+            waterlines,
+            canoe,
+            analysis,
+            thickness,
+            density,
+        } => {
+            use jaguar::meshimport::{self as mi, MeshOptions};
+            let bytes = std::fs::read(&mesh)?;
+            let ext = mesh.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            let tris = match ext.as_str() {
+                "stl" => mi::parse_stl(&bytes)?,
+                "obj" => mi::parse_obj(&String::from_utf8_lossy(&bytes))?,
+                e => anyhow::bail!("mesh must be .stl or .obj (got .{e}); export one from your CAD"),
+            };
+            let opts = MeshOptions {
+                units: units.as_deref().map(mi::unit_scale).transpose()?,
+                length_axis: length_axis.as_deref().map(mi::axis_index).transpose()?,
+                up_axis: up_axis.as_deref().map(mi::axis_index).transpose()?,
+                flip_up,
+                bow_at_max,
+                stations,
+                waterlines,
+            };
+            let stem = mesh.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let (hull, m) = mi::hull_from_mesh(&tris, &stem, &opts)?;
+            let out = out.unwrap_or_else(|| mesh.with_file_name(format!("{stem}_hull.json")));
+            hull.save(&out)?;
+            let f = |v: Option<f64>| v.map_or("-".into(), |x| format!("{x:.3}"));
+            println!(
+                "read {} triangles, units {}, length axis {}, up axis {}",
+                m.triangles, m.units, m.length_axis, m.up_axis
+            );
+            println!(
+                "canoe {:.1} x {:.1} in, gunwale depth {:.2} in (sheer max {:.2}); wall {} in (min {}, max {}; 2V/A {})",
+                m.length_in,
+                m.beam_in,
+                m.depth_in,
+                m.sheer_max_in,
+                f(m.thickness_in),
+                f(m.thickness_min_in),
+                f(m.thickness_max_in),
+                f(m.thickness_volume_in)
+            );
+            for n in &m.notes {
+                println!("note: {n}");
+            }
+            println!("wrote {} ({} x {})", out.display(), hull.x.len(), hull.z.len());
+            if let Some(c) = canoe {
+                let base = std::fs::read_to_string(&c)?;
+                let dir = c.parent().unwrap_or(std::path::Path::new(""));
+                let (text, notes) = mi::analysis_toml(&base, dir, &out, &m, thickness, density)?;
+                let a = analysis.unwrap_or_else(|| mesh.with_file_name(format!("{stem}_analysis.toml")));
+                Params::parse(&text, a.parent().unwrap_or(std::path::Path::new("")))?;
+                std::fs::write(&a, text)?;
+                for n in notes {
+                    println!("note: {n}");
+                }
+                println!(
+                    "wrote {} (as drawn). Next: jaguar run {} -o result.json ; jaguar race result.json",
+                    a.display(),
+                    a.display()
+                );
             }
         }
         Cmd::ImportMichlet { off1, out_mlt, out } => {
@@ -331,6 +441,9 @@ fn main() -> Result<()> {
                 let p = race::calibrate_power(&top, input.hull_lb, &rp, event.trim(), secs)?;
                 println!("calibrated: paddler_power_w = {p:.1} W ({} in {secs} s)", event.trim());
                 rp.paddler_power_w = p;
+            }
+            if let Some(why) = &input.fails {
+                println!("note: racing the drawn design, which does not pass every check ({why})");
             }
             let r = race::run(&input.hull, input.hull_lb, input.depth_in, input.topsides, &rp)?;
             for l in report::race_lines(&r) {

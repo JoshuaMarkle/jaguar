@@ -442,6 +442,23 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                         format!("freeboard: {dc_ok} pass D/C but none also meet {:.2} in", g.freeboard_min_in)
                     };
                     out.push(format!("  hint: blocker is {blocker}"));
+                    // One pinned wall (an as-drawn analysis, jaguar import-mesh): that design is the
+                    // answer, not a fallback, so show every check.
+                    if r.candidates.len() == 1 {
+                        out.push(format!(
+                            "  the design: {:.2} lb  GM {} in  freeboard {:.2} in{}",
+                            b.hull_weight_lb,
+                            fmt_opt(b.gm_in, 2),
+                            bv.freeboard_in,
+                            b.error.as_deref().map_or(String::new(), |e| format!("  ({e})"))
+                        ));
+                        for k in &bv.checks {
+                            out.push(format!(
+                                "    {:<20} demand {:>8.1}  capacity {:>8.1}  D/C {:.3}",
+                                k.name, k.demand, k.capacity, k.dc
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -459,6 +476,9 @@ pub struct RaceInput {
     pub topsides: crate::hull::Topsides,
     /// `[race]` of the run's canoe.toml, if it had one.
     pub race: Option<crate::params::RaceParams>,
+    /// Set when the canoe raced is a single pinned design that does not pass every check
+    /// (an as-drawn analysis): why, so the race output can say so.
+    pub fails: Option<String>,
 }
 
 /// Winner hull (generated, or `hull.file`), wall weight, depth and flare of a result file.
@@ -466,15 +486,33 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
     use anyhow::Context;
     let v: serde_json::Value = serde_json::from_str(text).context("parsing result JSON")?;
     anyhow::ensure!(v["format"] == crate::optimize::RESULT_FORMAT, "not a jaguar-result/1 file");
-    let c = &v["winner"]["candidate"];
-    anyhow::ensure!(c.is_object(), "the result has no winner: no canoe to race");
-    let num = |f: &str| c[f].as_f64().with_context(|| format!("winner has no {f}"));
+    // The winner; or, for a single pinned design (an as-drawn analysis), that design even when it
+    // fails a check: it is the canoe asked about, not a fallback the search picked.
+    let cands = v["candidates"].as_array().map_or(&[][..], |a| a.as_slice());
+    let (c, fails) = if v["winner"]["candidate"].is_object() {
+        (&v["winner"]["candidate"], None)
+    } else if cands.len() == 1 && cands[0]["verdict"].is_object() {
+        let c = &cands[0];
+        let why = c["error"].as_str().map(|s| s.to_string()).unwrap_or_else(|| {
+            format!(
+                "D/C {:.3}, GM {} in",
+                c["verdict"]["dc"].as_f64().unwrap_or(f64::NAN),
+                c["gm_in"].as_f64().map_or("-".into(), |g| format!("{g:.2}"))
+            )
+        });
+        (c, Some(why))
+    } else {
+        anyhow::bail!("the result has no winner: no canoe to race");
+    };
+    let num = |f: &str| c[f].as_f64().with_context(|| format!("candidate has no {f}"));
     let hull: crate::hull::Hull = if v["winner_hull"].is_object() {
         serde_json::from_value(v["winner_hull"].clone()).context("winner_hull")?
     } else {
         let f =
             v["params"]["hull"]["file"].as_str().context("result has neither winner_hull nor hull.file")?;
-        crate::hull::Hull::load(Path::new(f))?
+        let hp: crate::params::HullParams =
+            serde_json::from_value(v["params"]["hull"].clone()).context("params.hull")?;
+        crate::hull::Hull::load(Path::new(f))?.prepared(&hp)?
     };
     hull.validate()?;
     let race = match &v["params"]["race"] {
@@ -487,6 +525,7 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
         depth_in: num("depth_in")?,
         topsides: result_topsides(&v),
         race,
+        fails,
     })
 }
 
@@ -793,6 +832,12 @@ mod tests {
             c.gm_in = Some(0.1);
         }
         assert!(summary_lines(&r).join("\n").contains("blocker is stability: best GM 0.10"));
+        // A single pinned design (as drawn) shows itself even when it fails.
+        let mut one = base(None, true);
+        one.candidates.truncate(1);
+        let s1 = summary_lines(&one).join("\n");
+        assert!(s1.contains("the design: 84.80 lb"), "{s1}");
+        assert!(!s.contains("the design:"), "not for a search");
         assert!(l.len() <= MAX_LINES);
     }
 
