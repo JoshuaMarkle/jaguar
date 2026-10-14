@@ -68,74 +68,48 @@ impl Hull {
         }
     }
 
-    /// The hull with the sharp centreline crease at the bow and stern (where port and starboard
-    /// meet) given a round nose of radius `r`, in, tip and keel kept where they are (length and
-    /// draft unchanged; concrete is only added, see [`nose_at_start`]): the stem in plan, on
-    /// every waterline whose tip is on the stem (tip line steeper than 45 deg; the trace of each
-    /// stacked foam sheet), and the keel V in each station's section. Where the hull is already
-    /// wider than r it is left alone. The
-    /// table is refined to resolve the noses: waterlines every r/4 up to the design draft,
-    /// stations every r/4 over each stem nose. Err past `FILLET_MAX_STATIONS` stations.
+    /// The hull with a side-view radius `r`, in, at the forefoot of the bow and of the stern (the
+    /// corner where the stem meets the keel line), so the bottom has no point. The profile corner
+    /// is cut on an arc tangent to the stem and to the keel; every waterline the arc shortens
+    /// keeps its plan shape at the tip (shifted aft, the shift blended out over 4 r), so the entry
+    /// angle stays as sharp. Length overall, draft and sections away from the ends are unchanged;
+    /// concrete is only removed. The table is refined to resolve the arc (waterlines every r/8
+    /// over it, stations every r/8 within 5 r of each end). Err when the stem is shorter than the
+    /// arc needs, or past `FILLET_MAX_STATIONS` stations.
     pub fn filleted(&self, r: f64) -> Result<Hull> {
         ensure!(r.is_finite() && r > 0.0, "fillet radius must be > 0, got {r}");
-        let (z0, dd) = (self.z[0], self.draft_design);
+        let n = self.x.len();
+        let (xa, xb, ztop) = (self.x[0], self.x[n - 1], self.z[self.z.len() - 1]);
+        // Bow in its own coordinates, stern mirrored (x measured in from the stern tip).
+        let mirrored: Vec<f64> = self.x.iter().rev().map(|v| xb - v).collect();
+        let rows_rev: Vec<Vec<f64>> = self.half_breadth.iter().rev().cloned().collect();
+        let ends =
+            [forefoot(&self.x, &self.z, &self.half_breadth, r), forefoot(&mirrored, &self.z, &rows_rev, r)];
+        for (end, name) in ends.iter().zip(["bow", "stern"]) {
+            if let Some((_, zc)) = end {
+                ensure!(
+                    *zc <= ztop + 1e-9,
+                    "forefoot radius {r} in does not fit the {name}: the stem is shorter than the arc \
+                     (it would reach z = {zc:.2} in, the table stops at {ztop:.2} in); use a smaller radius"
+                );
+            }
+        }
+        let h = 0.125 * r;
+        let blend = 4.0 * r;
         let mut z = self.z.clone();
-        z.extend(linspace(z0, dd, ((dd - z0) / (0.25 * r)).ceil() as usize + 1));
+        for (_, zc) in ends.iter().flatten() {
+            let lo = (zc - r).max(self.z[0]);
+            z.extend(linspace(lo, *zc, ((zc - lo) / h).ceil() as usize + 1));
+        }
         z.sort_by(f64::total_cmp);
         z.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-        // Source waterline at height zz (linear between the table's waterlines), at its stations.
-        let column = |zz: f64| -> Vec<f64> {
-            let k = self.z.partition_point(|&v| v <= zz).clamp(1, self.z.len() - 1);
-            let t = ((zz - self.z[k - 1]) / (self.z[k] - self.z[k - 1])).clamp(0.0, 1.0);
-            self.half_breadth.iter().map(|row| row[k - 1] * (1.0 - t) + row[k] * t).collect()
-        };
-        let cols: Vec<Vec<f64>> = z.iter().map(|&zz| column(zz)).collect();
-        // Keel height of each table station (None = no breadth), the hull's side profile.
-        let kz: Vec<Option<f64>> = self
-            .half_breadth
-            .iter()
-            .map(|row| row.iter().position(|v| *v > 0.0).map(|k| self.z[k.saturating_sub(1)]))
-            .collect();
-        // A waterline's tip crease is on the stem when the waterline runs to the hull's end
-        // station, or the keel profile rises steeper than 45 deg behind its tip; otherwise it is
-        // the keel crease, which the section nose rounds.
-        let stem = |c: &[f64], bow: bool| -> bool {
-            let n = c.len();
-            let first = if bow { c.iter().position(|v| *v > 0.0) } else { c.iter().rposition(|v| *v > 0.0) };
-            let Some(j) = first else { return false };
-            let (end, next) =
-                if bow { (j == 0 || j == 1, j + 1) } else { (j + 1 == n || j + 2 == n, j.wrapping_sub(1)) };
-            if end {
-                return true;
-            }
-            match (kz.get(j).copied().flatten(), kz.get(next).copied().flatten()) {
-                (Some(a), Some(b)) => (a - b).abs() >= (self.x[j] - self.x[next]).abs(),
-                _ => false,
-            }
-        };
-        let plans: Vec<[Option<(f64, f64)>; 2]> = (0..z.len())
-            .map(|k| {
-                let [b, s] = nose_both(&self.x, &cols[k], r);
-                [b.filter(|_| stem(&cols[k], true)), s.filter(|_| stem(&cols[k], false))]
-            })
-            .collect();
-        // Stations: the table's, plus every r/4 over each stem nose.
         let mut x = self.x.clone();
-        let (xa, xb) = (self.x[0], self.x[self.x.len() - 1]);
-        for p in &plans {
-            // One lattice of r/4 steps from each end, so the waterlines share stations.
-            let h = 0.25 * r;
-            for (from, sign, span) in [(xa, 1.0, p[0]), (xb, -1.0, p[1].map(|(tip, end)| (-end, -tip)))] {
-                let Some((lo, hi)) = span else { continue };
-                // Refine at most 40 r into the hull (a waterline that never reaches r).
-                let (lo, hi) = (lo.max(xa).max(hi - 40.0 * r), hi.min(xb).min(lo + 40.0 * r));
-                let (m0, m1) = if sign > 0.0 {
-                    ((lo - from) / h, (hi - from) / h)
-                } else {
-                    ((from - hi) / h, (from - lo) / h)
-                };
-                for m in (m0.floor().max(0.0) as usize)..=(m1.ceil() as usize) {
-                    x.push((from + sign * m as f64 * h).clamp(xa, xb));
+        for (k, end) in ends.iter().enumerate() {
+            if let Some((xe, _)) = end {
+                let m = ((r + blend) / h).ceil() as usize;
+                for i in 0..=m {
+                    let d = xe + i as f64 * h;
+                    x.push(if k == 0 { xa + d } else { xb - d }.clamp(xa, xb));
                 }
             }
         }
@@ -143,42 +117,58 @@ impl Hull {
         x.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
         ensure!(
             x.len() <= FILLET_MAX_STATIONS,
-            "keel fillet of {r} in needs {} stations (max {FILLET_MAX_STATIONS}): use a larger radius",
+            "forefoot radius of {r} in needs {} stations (max {FILLET_MAX_STATIONS}): use a larger radius",
             x.len()
         );
-        // Stem noses per waterline, then the keel nose per station.
-        let mut rows = vec![vec![0.0; z.len()]; x.len()];
-        for (k, col) in cols.iter().enumerate() {
-            for (i, &xi) in x.iter().enumerate() {
-                let j = self.x.partition_point(|&v| v <= xi).clamp(1, self.x.len() - 1);
-                let t = ((xi - self.x[j - 1]) / (self.x[j] - self.x[j - 1])).clamp(0.0, 1.0);
-                rows[i][k] = nosed_both(&plans[k], r, xi, col[j - 1] * (1.0 - t) + col[j] * t);
-            }
-        }
-        // The keel nose of a station within r of a tip is capped by the stem nose's width there
-        // (the rounded edge is one tube following the crease; a section just behind the stem
-        // cuts its vertical part), so the stem keeps a round front.
-        let width = |xi: f64| -> f64 {
-            let d = (xi - xa).min(xb - xi);
-            if d <= 0.0 {
-                0.0
-            } else if d < r {
-                (r * r - (r - d) * (r - d)).sqrt()
-            } else {
-                r
-            }
+        // Source waterline at height zz (linear between the table's waterlines), at its stations.
+        let column = |zz: f64| -> Vec<f64> {
+            let k = self.z.partition_point(|&v| v <= zz).clamp(1, self.z.len() - 1);
+            let t = ((zz - self.z[k - 1]) / (self.z[k] - self.z[k - 1])).clamp(0.0, 1.0);
+            self.half_breadth.iter().map(|row| row[k - 1] * (1.0 - t) + row[k] * t).collect()
         };
-        for (row, &xi) in rows.iter_mut().zip(&x) {
-            if let Some(nose) = nose_at_start(&z, row, r) {
-                let cap = width(xi);
-                for (k, v) in row.iter_mut().enumerate() {
-                    *v = v.max(nosed_value(Some(nose), r, z[k], 0.0).min(cap));
+        let lerp = |c: &[f64], xi: f64| -> f64 {
+            let j = self.x.partition_point(|&v| v <= xi).clamp(1, n - 1);
+            let t = ((xi - self.x[j - 1]) / (self.x[j] - self.x[j - 1])).clamp(0.0, 1.0);
+            c[j - 1] * (1.0 - t) + c[j] * t
+        };
+        let mut rows = vec![vec![0.0; z.len()]; x.len()];
+        for (k, &zz) in z.iter().enumerate() {
+            let c = column(zz);
+            let crev: Vec<f64> = c.iter().rev().copied().collect();
+            // (tip, shift) per end, in that end's coordinates.
+            let shift = |end: &Option<(f64, f64)>, xs: &[f64], col: &[f64]| -> Option<(f64, f64)> {
+                let (xe, zc) = (*end)?;
+                if zz < zc - r - 1e-12 || zz > zc {
+                    return None;
                 }
+                let j = col.iter().position(|v| *v > 0.0)?;
+                let tip = xs[j.saturating_sub(1)];
+                let arc = xe + r - (r * r - (zz - zc) * (zz - zc)).max(0.0).sqrt();
+                (arc > tip + 1e-12).then_some((tip, arc - tip))
+            };
+            let sb = shift(&ends[0], &self.x, &c);
+            let ss = shift(&ends[1], &mirrored, &crev);
+            for (i, &xi) in x.iter().enumerate() {
+                let bow = xi - xa <= xb - xi;
+                let (d, sh) = if bow { (xi - xa, sb) } else { (xb - xi, ss) };
+                let src = match sh {
+                    None => d,
+                    Some((tip, s)) => {
+                        let u = (d - tip - s) / blend;
+                        if u < 0.0 {
+                            rows[i][k] = 0.0;
+                            continue;
+                        }
+                        let w = if u >= 1.0 { 1.0 } else { u * u * (3.0 - 2.0 * u) };
+                        d - s * (1.0 - w)
+                    }
+                };
+                rows[i][k] = lerp(&c, if bow { xa + src } else { xb - src });
             }
         }
         let h = Hull {
             name: format!("{}-f{r}", self.name),
-            source: format!("{}, round nose r = {r} in at the stem and keel", self.source),
+            source: format!("{}, forefoot radius r = {r} in (side view)", self.source),
             x,
             z,
             half_breadth: rows,
@@ -584,52 +574,41 @@ pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
 /// Largest station count a filleted table may reach (guards a tiny radius on a long hull).
 const FILLET_MAX_STATIONS: usize = 6000;
 
-/// Round nose of radius `r` on the crease where a profile (s along the centreline, y >= 0
-/// half-breadth, piecewise linear) leaves the centreline at its start, keeping the tip where it
-/// is: the profile is held at least as wide as a capsule on the tip (a half-round of radius r,
-/// then half-breadth r) until it is wider than r by itself. A radius-r nose is 2r wide, and a
-/// fine entry of half-angle a only reaches that r / tan a behind the tip, so that is how far the
-/// nose reaches; it is the least concrete that gives the tip radius r. Returns (tip, end of the
-/// nose); None when the profile starts off the centreline (no crease).
-fn nose_at_start(s: &[f64], y: &[f64], r: f64) -> Option<(f64, f64)> {
-    let j = y.iter().position(|v| *v > 0.0)?;
-    if j == 0 {
+/// Forefoot arc of an end (x from that end's tip): (stem x, arc centre height). The stem is the
+/// last station with no breadth before the first one with some; the keel profile is the table's
+/// (linear between stations, so between stations j-1 and j it is station j's lowest breadth
+/// row). The arc is the radius-`r` circle tangent to the stem (centre r aft of it) sitting on
+/// the keel within 2 r: centre height = max over the keel there of keel + sqrt(r^2 - dx^2).
+/// None when the end has breadth at its tip station (no stem crease) or no breadth at all.
+fn forefoot(xs: &[f64], z: &[f64], rows: &[Vec<f64>], r: f64) -> Option<(f64, f64)> {
+    let keel = |row: &[f64]| row.iter().position(|v| *v > 0.0).map(|k| z[k.saturating_sub(1)]);
+    let j0 = rows.iter().position(|row| keel(row).is_some())?;
+    if j0 == 0 {
         return None;
     }
-    let tip = s[j - 1];
-    // First point behind tip + r where the profile reaches r (linear between vertices).
-    let mut end = s[s.len() - 1];
-    for k in j..s.len() {
-        if s[k] >= tip + r && y[k] >= r {
-            let (a, b) = ((s[k - 1], y[k - 1]), (s[k], y[k]));
-            end = if a.1 < r && b.1 > a.1 { a.0 + (r - a.1) / (b.1 - a.1) * (b.0 - a.0) } else { b.0 };
-            end = end.max(tip + r);
-            break;
+    let xe = xs[j0 - 1];
+    let c = xe + r;
+    let mut zc = f64::NEG_INFINITY;
+    for j in j0..xs.len() {
+        let (lo, hi) = (xs[j - 1].max(xe), xs[j].min(xe + 2.0 * r));
+        if lo >= hi {
+            if xs[j - 1] >= xe + 2.0 * r {
+                break;
+            }
+            continue;
         }
+        let Some(kz) = keel(&rows[j]) else { continue };
+        // Closest point of (lo, hi] to the centre's x.
+        let dx = if c < lo {
+            lo - c
+        } else if c > hi {
+            c - hi
+        } else {
+            0.0
+        };
+        zc = zc.max(kz + (r * r - dx * dx).max(0.0).sqrt());
     }
-    Some((tip, end))
-}
-
-/// Profile value at `s` with the nose (from [`nose_at_start`]) applied.
-fn nosed_value(nose: Option<(f64, f64)>, r: f64, s: f64, y: f64) -> f64 {
-    match nose {
-        Some((tip, _)) if s >= tip && s <= tip + r => {
-            y.max((r * r - (s - tip - r) * (s - tip - r)).max(0.0).sqrt())
-        }
-        Some((tip, end)) if s > tip + r && s <= end => y.max(r),
-        _ => y,
-    }
-}
-
-/// Bow and stern noses of a profile along x (the stern by mirroring).
-fn nose_both(s: &[f64], y: &[f64], r: f64) -> [Option<(f64, f64)>; 2] {
-    let rs: Vec<f64> = s.iter().rev().map(|v| -v).collect();
-    let ry: Vec<f64> = y.iter().rev().copied().collect();
-    [nose_at_start(s, y, r), nose_at_start(&rs, &ry, r)]
-}
-
-fn nosed_both(n: &[Option<(f64, f64)>; 2], r: f64, s: f64, y: f64) -> f64 {
-    nosed_value(n[1], r, -s, nosed_value(n[0], r, s, y))
+    zc.is_finite().then_some((xe, zc))
 }
 
 /// Linear interpolation of column `k` of `table` (rows at `xs`) at `x`, clamped.
@@ -816,86 +795,84 @@ mod tests {
         interp_col(&h.x, &h.half_breadth, k - 1, x) * (1.0 - t) + interp_col(&h.x, &h.half_breadth, k, x) * t
     }
 
+    /// First x with breadth on waterline z (the side profile's front), in the refined table.
+    fn front(h: &Hull, z: f64) -> f64 {
+        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
+        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
+        let i = h.half_breadth.iter().position(|row| row[k - 1] * (1.0 - t) + row[k] * t > 0.0).unwrap();
+        h.x[i.saturating_sub(1)]
+    }
+
     #[test]
-    fn nose_rounds_a_wedge_stem_and_keeps_the_tip() {
-        // Wedge ends (half-angle 10 deg), vertical sides: a vertical stem, the plan crease.
+    fn forefoot_gets_a_side_view_arc_and_keeps_the_entry() {
+        // Wedge waterlines (half-angle 10 deg) on a plumb stem at x = 0 and a flat keel: breadth
+        // from z = 2 up (the table's keel row is 1.75), a square forefoot corner.
         let th = 10f64.to_radians();
-        let h = table(100.0, 4.0, 41, 5, |x, _| (x.min(100.0 - x) * th.tan()).min(6.0));
-        let r = 0.5;
-        let f = h.filleted(r).unwrap();
-        // Tip kept at x = 0 (length unchanged); a half-round of radius r there, then at least r
-        // wide until the wedge is (r / tan 10 = 2.8 in); never narrower; untouched beyond.
-        let first = f.x.iter().zip(&f.half_breadth).find(|(_, row)| row[2] > 0.0).map(|(x, _)| *x).unwrap();
-        assert!(first > 0.0 && first <= 0.25 * r + 1e-9, "tip stays at the bow: first breadth at {first}");
-        assert!((at(&f, r, 2.0) - r).abs() < 0.03 * r, "{}", at(&f, r, 2.0));
-        let want = (r * r - (0.5 * r) * (0.5 * r)).sqrt();
-        assert!((at(&f, 0.5 * r, 2.0) - want).abs() < 0.03 * r, "{} vs {want}", at(&f, 0.5 * r, 2.0));
-        for (i, &x) in f.x.iter().enumerate() {
-            for (k, &z) in f.z.iter().enumerate() {
-                assert!(f.half_breadth[i][k] >= at(&h, x, z) - 1e-9);
-            }
-        }
-        assert!((at(&f, 100.0 - r, 2.0) - r).abs() < 0.03 * r, "stern mirrors the bow");
-        assert!(at(&f, 2.0, 2.0) >= r - 1e-9);
-        assert!((at(&f, 3.5, 2.0) - at(&h, 3.5, 2.0)).abs() < 1e-12);
-        // Away from the ends: untouched.
-        assert_eq!(at(&f, 50.0, 2.0), at(&h, 50.0, 2.0));
-    }
-
-    #[test]
-    fn nose_rounds_a_v_keel_and_leaves_a_round_bottom() {
-        // V sections (half-angle 30 deg from vertical) the whole length, open (non-zero) ends.
-        let ph = 30f64.to_radians();
-        let v = table(60.0, 6.0, 7, 25, |_, z| z * ph.tan());
+        let h = table(
+            60.0,
+            6.0,
+            31,
+            25,
+            |x, z| if z < 2.0 { 0.0 } else { (x.min(60.0 - x) * th.tan()).min(5.0) },
+        );
         let r = 1.0;
-        let f = v.filleted(r).unwrap();
-        // Keel kept at z = 0, round of radius r on it.
-        let keel = f.z.iter().zip(&f.half_breadth[3]).find(|(_, y)| **y > 0.0).map(|(z, _)| *z).unwrap();
-        assert!(keel <= 0.25 * r + 1e-9, "keel stays: first breadth at z = {keel}");
-        assert!((at(&f, 30.0, r) - r).abs() < 0.03, "{}", at(&f, 30.0, r));
-        // At least r wide until the V is r wide by itself (z = r / tan 30), untouched above.
-        assert!(at(&f, 30.0, 1.5) >= r - 1e-9);
-        assert!(at(&f, 30.0, 4.0) == at(&v, 30.0, 4.0), "above the nose: untouched");
-        // Round bottom of radius 3 > r: unchanged.
-        let rr = 3.0;
-        let round = table(60.0, 3.0, 7, 61, |_, z| (rr * rr - (z - rr) * (z - rr)).max(0.0).sqrt());
-        let g = round.filleted(r).unwrap();
-        for &z in &[0.2, 0.5, 1.0, 2.0] {
-            assert!(
-                (at(&g, 30.0, z) - at(&round, 30.0, z)).abs() < 0.01,
-                "z {z}: {} vs {}",
-                at(&g, 30.0, z),
-                at(&round, 30.0, z)
-            );
+        let f = h.filleted(r).unwrap();
+        let (kz, zc) = (1.75, 1.75 + r);
+        // On the arc: a waterline 0.6 r below the centre starts 0.2 r aft of the stem; at the
+        // centre and above the stem is untouched; at the keel the arc reaches r aft.
+        assert!((front(&f, zc - 0.6 * r) - 0.2 * r).abs() <= 0.125 * r + 1e-9, "{}", front(&f, zc - 0.6 * r));
+        assert!(front(&f, zc + 0.5) < 1e-9 && front(&f, 5.0) < 1e-9);
+        // One refined waterline (r/8) above the keel the arc is 1 - sqrt(1 - (7/8)^2) = 0.52 r aft.
+        let low = kz + 0.125 * r;
+        let want = r - (r * r - (zc - low) * (zc - low)).sqrt();
+        assert!((front(&f, low) - want).abs() <= 0.125 * r + 1e-9, "{} vs {want}", front(&f, low));
+        // Entry angle kept: just behind the new tip the waterline opens at the same 10 deg.
+        let z = 2.25; // a refined waterline on the arc (tip 0.13 r aft)
+        let tip = front(&f, z) + 0.125 * r;
+        let slope = (at(&f, tip + 0.25 * r, z) - at(&f, tip + 0.125 * r, z)) / (0.125 * r);
+        assert!((slope - th.tan()).abs() < 0.02 * th.tan(), "slope {slope} vs {}", th.tan());
+        // Stern mirrors the bow; concrete only removed; untouched away from the ends.
+        assert!((front_stern(&f, zc - 0.6 * r) - (60.0 - 0.2 * r)).abs() <= 0.125 * r + 1e-9);
+        for (i, &x) in f.x.iter().enumerate() {
+            for (k, &zz) in f.z.iter().enumerate() {
+                assert!(f.half_breadth[i][k] <= at(&h, x, zz) + 1e-9, "x {x} z {zz}");
+            }
         }
+        assert_eq!(at(&f, 30.0, 3.0), at(&h, 30.0, 3.0));
+        assert_eq!(at(&f, 10.0, 2.5), at(&h, 10.0, 2.5));
+        // An end with breadth at its tip has no stem crease: unchanged.
+        let open = table(60.0, 6.0, 31, 25, |_, _| 2.0);
+        let g = open.filleted(r).unwrap();
+        assert_eq!(at(&g, 0.0, 3.0), 2.0);
+    }
+
+    fn front_stern(h: &Hull, z: f64) -> f64 {
+        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
+        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
+        let i = h.half_breadth.iter().rposition(|row| row[k - 1] * (1.0 - t) + row[k] * t > 0.0).unwrap();
+        h.x[(i + 1).min(h.x.len() - 1)]
     }
 
     #[test]
-    fn nose_on_off1_keeps_length_adds_little_and_stays_compact() {
+    fn forefoot_on_off1_keeps_length_and_entry_and_rejects_a_too_big_radius() {
         let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
-        let f = h.filleted(0.5).unwrap();
-        assert!(f.z.len() > h.z.len() && f.x.len() < 400, "{} stations", f.x.len());
+        let f = h.filleted(1.0).unwrap();
+        assert!(f.x.len() < 400, "{} stations", f.x.len());
+        // Same length overall: the stems' tops do not move.
+        let top = h.draft_design;
+        assert!(front(&f, top) < 1e-9 && (front_stern(&f, top) - h.length).abs() < 1e-9);
+        // The forefoot (stem foot at about z 4.0 at the bow) is cut back: just above it the
+        // waterline starts aft of the stem; concrete only removed.
+        let z = 4.1;
+        assert!(front(&f, z) > 0.3 && front(&h, z) < 1e-9, "{}", front(&f, z));
         for (i, &x) in f.x.iter().enumerate() {
             for (k, &z) in f.z.iter().enumerate() {
-                assert!(f.half_breadth[i][k] >= at(&h, x, z) - 1e-9, "x {x} z {z}");
+                assert!(f.half_breadth[i][k] <= at(&h, x, z) + 1e-9, "x {x} z {z}");
             }
         }
-        // Same overall extent: the tips do not move.
-        let ext = |h: &Hull| {
-            let nz = h.z.len();
-            let xs: Vec<f64> =
-                h.x.iter().zip(&h.half_breadth).filter(|(_, r)| r[nz - 1] > 0.0).map(|(x, _)| *x).collect();
-            (xs[0], xs[xs.len() - 1])
-        };
-        let (a, b) = (ext(&h), ext(&f));
-        assert!(b.0 <= a.0 + 1e-9 && b.1 >= a.1 - 1e-9, "{a:?} vs {b:?}");
-        // Round stem front: 0.25 in behind the tip the half-breadth is the circle's, not r
-        // (the keel nose of the first stations is capped by the stem nose).
-        let g = h.filleted(1.0).unwrap();
-        let want = (1.0f64 - 0.75 * 0.75).sqrt();
-        for z in [5.0, 5.8] {
-            assert!((at(&g, 0.25, z) - want).abs() < 0.05, "z {z}: {} vs {want}", at(&g, 0.25, z));
-        }
+        // The stem is only about 1.9 in tall above the forefoot: a 3 in arc does not fit.
+        let e = h.filleted(3.0).unwrap_err().to_string();
+        assert!(e.contains("does not fit"), "{e}");
         assert!(h.filleted(0.0).is_err());
     }
 

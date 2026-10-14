@@ -518,9 +518,9 @@ fn flare_axis_takes_the_demolding_minimum_unless_needed() {
     assert!(p.validate().unwrap_err().to_string().contains("not both"));
 }
 
-/// hull.keel_fillet_radius_in: the run analyses the nosed hull (tips kept, so the same length;
-/// concrete only added), the winner hull is that table, and the STEP export keeps its refined
-/// stations so the noses are in the file.
+/// hull.keel_fillet_radius_in: the run analyses the hull with the side-view forefoot arcs (stem
+/// tops kept, so the same length; concrete only removed), the winner hull is that table, and the
+/// STEP export keeps its refined stations so the arcs are in the file.
 #[test]
 fn keel_fillet_keeps_length_and_reaches_the_export() {
     let (mut p, h) = example();
@@ -537,8 +537,8 @@ fn keel_fillet_keeps_length_and_reaches_the_export() {
     let key = |c: &optimize::Candidate| (c.thickness_in, c.density_pcf, c.depth_in);
     for (c0, c1) in plain.candidates.iter().zip(&r.candidates) {
         assert_eq!(key(c0), key(c1));
-        assert!(c1.hull_weight_lb >= c0.hull_weight_lb - 1e-9, "a nose only adds concrete");
-        assert!(c1.hull_weight_lb < c0.hull_weight_lb * 1.01, "and only a little");
+        assert!(c1.hull_weight_lb <= c0.hull_weight_lb + 1e-9, "the forefoot arc only removes concrete");
+        assert!(c1.hull_weight_lb > c0.hull_weight_lb * 0.99, "and only a little");
     }
     let text = serde_json::to_string(&r).unwrap();
     let (hull, spec) = jaguar::export::from_result(&text, 161, 41).unwrap();

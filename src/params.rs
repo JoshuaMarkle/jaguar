@@ -294,9 +294,9 @@ pub struct HullParams {
     /// so the search tunes the buildable hull. >= 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<usize>,
-    /// Present = round the sharp centreline crease at the bow and stern (stem and keel,
-    /// where port and starboard meet) to this radius, in (`Hull::filleted`), so the wall
-    /// has no knife edge (stress concentration, mold). Applied after `templates`.
+    /// Present = side-view radius, in, at the forefoot of the bow and stern (where the stem
+    /// meets the keel line; `Hull::filleted`), so the bottom has no point (stress
+    /// concentration). Plan-view entry stays sharp. Applied after `templates`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keel_fillet_radius_in: Option<f64>,
     /// With a gunwale outline: steepest outward side lean allowed anywhere

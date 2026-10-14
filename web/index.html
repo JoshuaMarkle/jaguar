@@ -279,7 +279,7 @@ const SHAPE_OPT = [
   ['draft_step_in', 'Draft step', 'in', 'Snap the sampled design draft to multiples of this. Empty = continuous. (Mold depth already steps by the search range.)', 'continuous'],
   ['min_entry_angle_deg', 'Min entry angle', 'deg', 'Smallest allowed waterline entry half-angle at the bow (chord over the first 5% of length). Finer bows are rejected as unbuildable. Empty = no limit.', 'no limit'],
 ];
-const FIL_T = 'Round the sharp centreline edge at the bow and stern (the stem in top view, the V keel in the end sections) to this radius, so the concrete has no knife edge. The tips stay where they are (same length and draft): the hull is held at least 2 x radius wide near each tip, so a fine bow gets a little blunter and slightly heavier. Empty = sharp.';
+const FIL_T = 'Side-view radius where the stem meets the keel line (the forefoot) at the bow and stern, so the bottom has no point (a stress concentration). The corner is cut on this arc; each waterline it shortens keeps its shape at the tip, so the entry angle stays as sharp. Length is unchanged. Empty = pointed forefoot.';
 const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius or gunwale outline). Then Run analyses that design; Race races it.';
 const TPL_T = 'Constructable mold: build the hull from this many cross-section templates (tips included, closer at the ends) with straight surfaces between them, as hot-wire foam or frames with straight battens produce. The analysis, export and 3D view use that loft; with shape search the optimizer tunes it. 9-11 cost about 1% race time (docs/HULLS.md). Empty = smooth hull.';
 const GW_T = 'Constructable gunwale: in top view the sides run straight from the bow, one circular arc of this radius through the middle, straight to the stern; each side is straight from the waterline up to it. The gunwale is the narrowest such outline that keeps the sides from leaning in (and at least the flare at midships). Empty = off. Full-ended hulls need a small radius; a radius that fits no outline rejects the design.';
@@ -360,7 +360,7 @@ function buildForm() {
       + `${row('meshfile', 'Import CAD mesh', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the mesh (auto: from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><input type="file" id="meshfile" accept=".stl,.obj"></div>')}`
       + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div></div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join('')
-      + row('hull.keel_fillet_radius_in', 'Stem / keel radius', FIL_T, '<input type="number" id="hull.keel_fillet_radius_in" step="any" min="0" placeholder="sharp">', 'in')
+      + row('hull.keel_fillet_radius_in', 'Forefoot radius', FIL_T, '<input type="number" id="hull.keel_fillet_radius_in" step="any" min="0" placeholder="sharp">', 'in')
       + row('hull.templates', 'Mold templates', TPL_T, '<input type="number" id="hull.templates" step="1" min="3" placeholder="smooth">'))
     + section('shape', SHAPE.map(pair).join('')
       + row('shape.symmetric', 'Symmetric ends', SYM_T, '<input type="checkbox" class="switch" id="shape.symmetric">')
