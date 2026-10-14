@@ -7,6 +7,8 @@
 //!
 //! HTTP API (all JSON unless noted; this is the contract with web/index.html):
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
+//! * `GET  /vendor/three.min.js` -> three.js r128 (web/vendor, MIT, web/vendor/three.LICENSE),
+//!   embedded too, so the 3D view never depends on a CDN or the network.
 //! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file and
 //!   mix_data made relative to the CLI canoe.toml dir when inside it>, "dir": "<that dir>",
 //!   "source": "prefs"|"file"} (UI prefills its form). Read fresh each call: the saved
@@ -65,6 +67,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
+/// three.js r128, byte-identical to cdnjs (sha512 SRI checked when vendored).
+const THREE_JS: &str = include_str!("../web/vendor/three.min.js");
 
 /// Run state shared between the HTTP thread and the optimizer thread.
 #[derive(Debug, Default)]
@@ -143,6 +147,7 @@ impl App {
             ("GET", "/") | ("GET", "/index.html") => {
                 (200, "text/html; charset=utf-8", INDEX_HTML.to_string())
             }
+            ("GET", "/vendor/three.min.js") => (200, "text/javascript; charset=utf-8", THREE_JS.to_string()),
             ("GET", "/api/params") => self.get_params(),
             ("POST", "/api/prefs") => self.save_prefs(body),
             ("DELETE", "/api/prefs") => match std::fs::remove_file(&self.prefs_path) {
@@ -188,8 +193,19 @@ impl App {
             ("POST", "/api/race") => self.race(body),
             (
                 _,
-                "/" | "/index.html" | "/api/params" | "/api/prefs" | "/api/hulls" | "/api/hull"
-                | "/api/status" | "/api/mix" | "/api/result" | "/api/run" | "/api/export" | "/api/race",
+                "/"
+                | "/index.html"
+                | "/vendor/three.min.js"
+                | "/api/params"
+                | "/api/prefs"
+                | "/api/hulls"
+                | "/api/hull"
+                | "/api/status"
+                | "/api/mix"
+                | "/api/result"
+                | "/api/run"
+                | "/api/export"
+                | "/api/race",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
         }
@@ -852,6 +868,19 @@ mod tests {
         assert!(body.contains("error"));
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/run", &a.toml_text.clone()).0, 409);
+    }
+
+    #[test]
+    fn three_js_is_served_locally() {
+        let a = app();
+        let (st, ct, body) = a.handle("GET", "/vendor/three.min.js", "");
+        assert_eq!((st, ct), (200, "text/javascript; charset=utf-8"));
+        assert!(body.contains("Three.js Authors") && body.len() > 500_000);
+        assert_eq!(a.handle("POST", "/vendor/three.min.js", "").0, 405);
+        // The page loads it from here and from nowhere else.
+        let page = a.handle("GET", "/", "").2;
+        assert!(page.contains(r#"<script src="/vendor/three.min.js"></script>"#));
+        assert!(!page.contains("<script src=\"http"), "no script from the network");
     }
 
     #[test]
