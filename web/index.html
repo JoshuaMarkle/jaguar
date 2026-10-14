@@ -733,9 +733,14 @@ function buildCanoe() {
   canoe = new THREE.Group();
   canoe.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0xd2cfc9, side: THREE.DoubleSide })));
   canoe.add(new THREE.LineSegments(new THREE.WireframeGeometry(g), new THREE.LineBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.08 })));
-  // Swamped-flotation bulkheads: planes air_pocket_in in from the bow and from the stern.
+  // Swamped-flotation pockets: a bulkhead plane air_pocket_in in from the bow and from the stern,
+  // and a cover over each pocket at the gunwale (the sealed void under it).
   const pocket = w && typeof w.air_pocket_in === 'number' ? w.air_pocket_in : null;
-  if (pocket !== null && pocket > 0) for (const xb of [hull.x[0] + pocket, hull.x[nx - 1] - pocket]) bulkhead(canoe, xb, zs, gw, depth);
+  if (pocket !== null && pocket > 0) {
+    for (const xb of [hull.x[0] + pocket, hull.x[nx - 1] - pocket]) bulkhead(canoe, xb, zs, gw, depth);
+    pocketCover(canoe, hull.x[0], hull.x[0] + pocket, gw, depth);
+    pocketCover(canoe, hull.x[nx - 1] - pocket, hull.x[nx - 1], gw, depth);
+  }
   scene.add(canoe);
   // Waterline plane at the loaded midship waterline (from the winner's diagrams).
   const dg = result && result.winner && result.winner.diagrams;
@@ -772,6 +777,21 @@ function bulkhead(group, x, zs, gw, depth) {
     new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
   const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, p.y, 0))), new THREE.LineBasicMaterial({ color: 0x141414 }));
   for (const o of [face, edge]) { o.rotation.y = Math.PI / 2; o.position.x = x; group.add(o); }
+}
+
+// Air pocket cover: the gunwale outline from x0 to x1 at the mold depth, as a filled plane + outline.
+function pocketCover(group, x0, x1, gw, depth) {
+  const xs = hull.x, n = 24, at = x => { let i = 1; while (i < xs.length - 1 && xs[i] < x) i++;
+    const t = Math.min(1, Math.max(0, (x - xs[i - 1]) / (xs[i] - xs[i - 1])));
+    return (1 - t) * halfBreadth(hull, i - 1, depth, flareDeg(), gw, depth) + t * halfBreadth(hull, i, depth, flareDeg(), gw, depth); };
+  const pts = [];
+  for (let k = 0; k <= n; k++) { const x = x0 + (x1 - x0) * k / n; pts.push(new THREE.Vector2(x, at(x))); }
+  for (let k = n; k >= 0; k--) { const x = x0 + (x1 - x0) * k / n; pts.push(new THREE.Vector2(x, -at(x))); }
+  const face = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts)),
+    new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
+  const edge = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, p.y, 0))), new THREE.LineBasicMaterial({ color: 0x141414 }));
+  // Shape lies in XY (y = half breadth); lay it flat at the gunwale so half breadth runs along z.
+  for (const o of [face, edge]) { o.rotation.x = -Math.PI / 2; o.position.y = depth; group.add(o); }
 }
 
 // ---------- plot tabs ----------

@@ -277,9 +277,12 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   bulkhead one casting layer thick inboard of each sealed pocket: b = t / `punching.layers` (2 when
   no layer fields are given; t with an explicit `d_over_t`, which gives no pass count), so a 3/8 in
   wall cast in 3 layers gets 1/8 in bulkheads. They run from x0 + l to x0 + l + b and from
-  xn - l - b to xn - l (x0, xn the hull's ends, l = `air_pocket_in`), fused into the same single
-  solid so the mold shop sees where the foam/sealed volume goes. The bulkheads are not in the
-  analysis weight (2 b x interior area, about 8.5 in^3 on the examples/canoe.toml winner, 2 layers). `--no-pockets` leaves them out. A
+  xn - l - b to xn - l (x0, xn the hull's ends, l = `air_pocket_in`). A top cover as thick closes
+  each pocket at the mold depth (the interior from D - b up, from the solid end to the bulkhead),
+  so each pocket is a sealed void: one solid with an inner shell per pocket (STEP
+  `BREP_WITH_VOIDS`; STL simply has the extra shells), so the mold shop sees where the foam/sealed
+  volume goes. Bulkheads and covers are not in the analysis weight (10 in^3 on the
+  examples/canoe.toml winner, 2 layers). `--no-pockets` leaves them out. A
   pocket shorter than the solid end at the export's station spacing is an error (use more
   `--stations`, or `--no-pockets`).
 * A flat bottom (lowest offset at the keel height) keeps its chine corner.

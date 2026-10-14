@@ -427,7 +427,7 @@ fn main() -> Result<()> {
                     None => "the whole wall: punching gives no layer count".into(),
                 };
                 println!(
-                    "air pocket bulkheads at {l:.1} in from each tip, {b:.3} in thick ({one}; --no-pockets to leave out)"
+                    "air pockets {l:.1} in from each tip, sealed by a bulkhead and a top cover {b:.3} in thick ({one}; --no-pockets to leave out)"
                 );
             }
         }

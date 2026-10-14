@@ -17,7 +17,9 @@
 //!   gate (`flotation.rs`: from each tip of the analysis grid, x0 and xn, inward l, interior up to
 //!   the mold depth). A solid bulkhead one casting layer thick (b = t / `layers`, or t when the
 //!   pass count is unknown) closes the interior from x0 + l to x0 + l + b and from xn - l - b to
-//!   xn - l, fused into the wall (one solid). Rows are inserted at those four x,
+//!   xn - l, fused into the wall, and a top cover as thick closes each pocket at the mold depth
+//!   (interior from D - b up), from the solid end to the bulkhead: each pocket is a sealed void
+//!   inside the one solid (STEP: BREP_WITH_VOIDS, one inner shell per pocket). Rows are inserted at those four x,
 //!   linear between the neighbouring resampled stations. Err if a bulkhead would fall in the
 //!   solid end or the pockets overlap.
 //! * Coincident vertices are welded, zero-area and mirrored-duplicate facets removed, so a solid
@@ -408,8 +410,9 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             }
         }
         ensure!(best >= 2, "wall thickness {t} in leaves no hollow section: the hull would be solid");
-        // Cell r (rows r..r+1) is hollow inside [ra, rb] except across a pocket bulkhead.
-        let solid_cell = |r: usize| cuts.is_some_and(|c| (c[0] <= r && r < c[1]) || (c[2] <= r && r < c[3]));
+        // Cell r (rows r..r+1) is hollow inside [ra, rb] except across a pocket and its bulkhead:
+        // a covered pocket is solid from outside, its void an inner shell (below).
+        let solid_cell = |r: usize| cuts.is_some_and(|c| r < c[1] || r >= c[2]);
         if let Some(c) = cuts {
             ensure!(
                 ra < c[0] && c[3] < rb,
@@ -444,6 +447,53 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             s.push((outer[r] + m - 1, -yo));
             side.push(s);
         }
+        // Pocket voids: the inner U of each pocket's rows (solid end to bulkhead) below the cover,
+        // a flat lid at D - b (through a centre point per row) and a cap at each end.
+        if let (Some(c), Some(b)) = (cuts, spec.bulkhead_in()) {
+            let zc = z_top - b;
+            for (p0, p1) in [(ra, c[0]), (c[3], rb)] {
+                if p1 <= p0 {
+                    continue;
+                }
+                let mut ring = vec![];
+                for r in p0..=p1 {
+                    let half = inner_half[r].as_ref().unwrap();
+                    let k = half.iter().position(|q| q.1 <= zc).unwrap_or(half.len());
+                    ensure!(
+                        k < half.len() && half[half.len() - 1].1 < zc - 1e-6,
+                        "air pocket at x = {:.2} in is shallower than its {b:.3} in cover",
+                        rows[r].0
+                    );
+                    // The inner points themselves (the void wall stays t from the outer one, corners
+                    // kept); those above the cover move down onto it where the girth crosses D - b.
+                    let top = if k > 0 && half[k].1 < zc {
+                        let (a, q) = (half[k - 1], half[k]);
+                        let s = (a.1 - zc) / (a.1 - q.1);
+                        (a.0 + s * (q.0 - a.0), zc)
+                    } else {
+                        half[k]
+                    };
+                    let clip: Vec<(f64, f64)> =
+                        half.iter().enumerate().map(|(j, q)| if j < k { top } else { *q }).collect();
+                    let g = push_row(rows[r].0, &full(&clip));
+                    let cen = push_row(rows[r].0, &[(0.0, zc)]);
+                    ring.push((g, cen));
+                }
+                for w in ring.windows(2) {
+                    let ((ga, ca), (gb, cb)) = (w[0], w[1]);
+                    for j in 0..m - 1 {
+                        quad(&mut tris, ga + j, ga + j + 1, gb + j + 1, gb + j);
+                    }
+                    quad(&mut tris, ga, gb, cb, ca);
+                    quad(&mut tris, ca, cb, gb + m - 1, ga + m - 1);
+                }
+                for &(g, cen) in [ring[0], ring[ring.len() - 1]].iter() {
+                    for j in 0..m - 1 {
+                        tris.push([cen as u32, (g + j) as u32, (g + j + 1) as u32]);
+                    }
+                }
+            }
+        }
         for r in 0..nr - 1 {
             if hollow_cell[r] {
                 for j in 0..m - 1 {
@@ -473,7 +523,22 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     }
     let mut mesh = clean(Mesh { verts, tris, closed });
     orient(&mut mesh)?;
-    if mesh.volume() < 0.0 || (!closed && outward_flip(&mesh)) {
+    if closed {
+        // Each shell on its own: the outer one (largest volume) encloses positive volume, the
+        // pocket voids negative (facing into the void, out of the concrete).
+        let comp = components(&mesh);
+        let n = comp.iter().max().map_or(0, |c| c + 1);
+        let mut vol = vec![0.0; n];
+        for (t, &k) in mesh.tris.iter().zip(&comp) {
+            vol[k] += tri_volume(&mesh, t);
+        }
+        let outer = (0..n).max_by(|&a, &b| vol[a].abs().total_cmp(&vol[b].abs())).unwrap_or(0);
+        for (t, &k) in mesh.tris.iter_mut().zip(&comp) {
+            if (k == outer) == (vol[k] < 0.0) {
+                t.swap(1, 2);
+            }
+        }
+    } else if outward_flip(&mesh) {
         for t in &mut mesh.tris {
             t.swap(1, 2);
         }
@@ -528,6 +593,44 @@ fn orient(m: &mut Mesh) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Connected shell of each facet (facets sharing an edge), numbered in first-facet order.
+pub fn components(m: &Mesh) -> Vec<usize> {
+    let mut by_edge: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    for (f, t) in m.tris.iter().enumerate() {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            by_edge.entry((a.min(b), a.max(b))).or_default().push(f);
+        }
+    }
+    let mut comp = vec![usize::MAX; m.tris.len()];
+    let mut next = 0;
+    for seed in 0..m.tris.len() {
+        if comp[seed] != usize::MAX {
+            continue;
+        }
+        comp[seed] = next;
+        let mut stack = vec![seed];
+        while let Some(f) = stack.pop() {
+            let t = m.tris[f];
+            for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                for &g in &by_edge[&(a.min(b), a.max(b))] {
+                    if comp[g] == usize::MAX {
+                        comp[g] = next;
+                        stack.push(g);
+                    }
+                }
+            }
+        }
+        next += 1;
+    }
+    comp
+}
+
+/// Signed volume of the tetrahedron (origin, facet).
+fn tri_volume(m: &Mesh, t: &[u32; 3]) -> f64 {
+    let [a, b, c] = t.map(|i| m.verts[i as usize]);
+    dot(a, cross(b, c)) / 6.0
 }
 
 /// Open surface: true if its facets point inward (toward the centreline / up into the canoe).
@@ -714,8 +817,18 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
         let ec = w.e(format!("EDGE_CURVE('',#{},#{},#{line},.T.)", vp[a as usize], vp[b as usize]));
         edge_id.insert((a, b), ec);
     }
-    let mut faces = Vec::with_capacity(mesh.tris.len());
-    for t in &mesh.tris {
+    // Shells: the outer one, then each void (written facing out of the void, as a closed shell
+    // is; BREP_WITH_VOIDS turns it round).
+    let comp = if mesh.closed { components(mesh) } else { vec![0; mesh.tris.len()] };
+    let nshell = comp.iter().max().map_or(1, |c| c + 1);
+    let shell_vol: Vec<f64> = (0..nshell)
+        .map(|k| {
+            mesh.tris.iter().zip(&comp).filter(|(_, c)| **c == k).map(|(t, _)| tri_volume(mesh, t)).sum()
+        })
+        .collect();
+    let mut faces: Vec<Vec<usize>> = vec![vec![]; nshell];
+    for (t, &k) in mesh.tris.iter().zip(&comp) {
+        let t = &if shell_vol[k] < 0.0 { [t[0], t[2], t[1]] } else { *t };
         let [pa, pb, pc] = t.map(|i| mesh.verts[i as usize]);
         let oe: Vec<String> = [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])]
             .iter()
@@ -735,15 +848,27 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
         let rd = w.e(dir(sub(pb, pa)));
         let ap = w.e(format!("AXIS2_PLACEMENT_3D('',#{loc},#{nd},#{rd})"));
         let pl = w.e(format!("PLANE('',#{ap})"));
-        faces.push(w.e(format!("ADVANCED_FACE('',(#{fb}),#{pl},.T.)")));
+        faces[k].push(w.e(format!("ADVANCED_FACE('',(#{fb}),#{pl},.T.)")));
     }
-    let list = faces.iter().map(|f| format!("#{f}")).collect::<Vec<_>>().join(",");
+    let list = |k: usize| faces[k].iter().map(|f| format!("#{f}")).collect::<Vec<_>>().join(",");
     let rep = if mesh.closed {
-        let sh = w.e(format!("CLOSED_SHELL('',({list}))"));
-        let br = w.e(format!("MANIFOLD_SOLID_BREP('{name}',#{sh})"));
+        let outer = (0..nshell).find(|&k| shell_vol[k] > 0.0).unwrap_or(0);
+        let sh = w.e(format!("CLOSED_SHELL('',({}))", list(outer)));
+        let voids: Vec<String> = (0..nshell)
+            .filter(|&k| k != outer)
+            .map(|k| {
+                let v = w.e(format!("CLOSED_SHELL('',({}))", list(k)));
+                format!("#{}", w.e(format!("ORIENTED_CLOSED_SHELL('',*,#{v},.F.)")))
+            })
+            .collect();
+        let br = if voids.is_empty() {
+            w.e(format!("MANIFOLD_SOLID_BREP('{name}',#{sh})"))
+        } else {
+            w.e(format!("BREP_WITH_VOIDS('{name}',#{sh},({}))", voids.join(",")))
+        };
         w.e(format!("ADVANCED_BREP_SHAPE_REPRESENTATION('{name}',(#{ax},#{br}),#{ctx})"))
     } else {
-        let sh = w.e(format!("OPEN_SHELL('',({list}))"));
+        let sh = w.e(format!("OPEN_SHELL('',({}))", list(0)));
         let sm = w.e(format!("SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))"));
         w.e(format!("MANIFOLD_SURFACE_SHAPE_REPRESENTATION('{name}',(#{ax},#{sm}),#{ctx})"))
     };

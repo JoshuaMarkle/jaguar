@@ -277,28 +277,58 @@ fn at_x(m: &Mesh, x: f64) -> Vec<[f64; 3]> {
 }
 
 #[test]
-fn box_pocket_bulkheads_are_fused_t_thick_at_the_pocket_ends() {
-    // Box section 20 x 12, t = 0.5: inner U = 19 x 11.5 = 218.5 in^2. Pockets of 20 in from
-    // each tip: bulkheads fill x in [20, 20.5] and [79.5, 80], each exactly 218.5 * 0.5 in^3.
-    // 23 girth points: 2 in apart on the 22 in half girth, so one lands on the chine corner.
+fn box_pockets_are_sealed_voids_under_a_cover_and_behind_a_bulkhead() {
+    // Box section 20 x 12, t = 0.5, no layer count: bulkhead and cover 0.5 thick. Stations on
+    // the box's own 5 in spacing, so the hull is hollow from x = 5 with the full inner U
+    // 19 x 11.5 = 218.5 in^2. Pockets of 20 in from each tip: bulkheads fill x in [20, 20.5] and
+    // [79.5, 80]; covers fill the top 0.5 in of the interior (19 x 0.5) from x 5 to 20 and 80 to
+    // 95, over a sealed void 19 x 11 x 15. 23 girth points land one on the chine corner.
     let h = boxy(100.0, 10.0, 6.0);
-    let s = ExportSpec { girth: 23, ..spec(12.0, Some(0.5)) };
+    let s = ExportSpec { girth: 23, stations: 21, ..spec(12.0, Some(0.5)) };
     let plain = build_mesh(&h, &s).unwrap();
     let m = build_mesh(&h, &pockets(s.clone(), 20.0)).unwrap();
-    assert!(m.closed && watertight(&m), "one watertight solid with the bulkheads");
+    assert!(m.closed && watertight(&m), "watertight with the bulkheads, covers and voids");
+    // At x = 5 (next to the closed tip) the inner wall is the mitred 45 deg offset, 10 - t sqrt 2
+    // from the centreline, as in the open hull; the cover tapers from there to 19 wide at x = 10.
+    let w5 = 2.0 * (10.0 - 0.5 * 2f64.sqrt());
+    let cover = 0.5 * (5.0 * 0.5 * (w5 + 19.0) + 10.0 * 19.0);
     let dv = m.volume() - plain.volume();
-    assert!((dv - 2.0 * 218.5 * 0.5).abs() < 1e-6, "bulkhead volume {dv}");
+    let want = 2.0 * 218.5 * 0.5 + 2.0 * cover;
+    assert!((dv - want).abs() < 1e-6, "bulkheads + covers {dv} vs {want}");
     assert_eq!(m.bbox(), plain.bbox());
-    for x in [20.0, 20.5, 79.5, 80.0] {
+    // Three shells: the canoe and one void per pocket, each void enclosing the air (negative).
+    let comp = jaguar::export::components(&m);
+    assert_eq!(comp.iter().max(), Some(&2));
+    let mut vols = [0.0; 3];
+    for (t, &k) in m.tris.iter().zip(&comp) {
+        let one = Mesh { verts: m.verts.clone(), tris: vec![*t], closed: false };
+        vols[k] += one.volume();
+    }
+    let mut v = vols.to_vec();
+    v.sort_by(f64::total_cmp);
+    // (x = 5 has a mitred inner bottom too, so the void is a little under 11 x the cover width.)
+    let void = 11.0 * (5.0 * 0.5 * (w5 + 19.0) + 10.0 * 19.0);
+    assert!((v[0] - v[1]).abs() < 1e-6 && v[2] > 0.0, "{vols:?}");
+    assert!(v[0] < 0.0 && (-v[0] / void - 1.0).abs() < 0.01, "{vols:?} vs {void}");
+    // The void ends at the pocket face of each bulkhead, under the cover; the face toward the
+    // middle of the canoe reaches the top (open interior).
+    for x in [20.0, 80.0] {
         let p = at_x(&m, x);
-        // bulkhead face: inner U corner and its top centre
-        assert!(p.iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 12.0).abs() < 1e-9), "top centre at {x}");
+        assert!(p.iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 11.5).abs() < 1e-9), "void lid at {x}");
         assert!(
             p.iter().any(|v| (v[1] - 9.5).abs() < 1e-9 && (v[2] - 0.5).abs() < 1e-9),
-            "inner bilge at {x}"
+            "void bilge at {x}"
         );
     }
-    // zero length = no bulkheads: the same file as without
+    for x in [20.5, 79.5] {
+        let p = at_x(&m, x);
+        assert!(p.iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 12.0).abs() < 1e-9), "bulkhead top at {x}");
+    }
+    // STEP: one solid with two voids.
+    let st = to_step(&m, "b");
+    assert!(st.contains("BREP_WITH_VOIDS") && st.matches("ORIENTED_CLOSED_SHELL").count() == 2);
+    assert!(!to_step(&plain, "b").contains("BREP_WITH_VOIDS"));
+    // zero length = no pockets: the same file as without
     let z = build_mesh(&h, &pockets(s, 0.0)).unwrap();
     assert_eq!(to_stl(&z, "b"), to_stl(&plain, "b"));
 }
@@ -307,18 +337,20 @@ fn box_pocket_bulkheads_are_fused_t_thick_at_the_pocket_ends() {
 fn bulkheads_are_one_casting_layer_thick() {
     // 3 layers of a 3/8 in wall: 1/8 in bulkheads, at [20, 20.125] and [79.875, 80].
     let h = boxy(100.0, 10.0, 6.0);
-    let s = ExportSpec { girth: 23, layers: Some(3), ..spec(12.0, Some(0.375)) };
+    let s = ExportSpec { girth: 23, stations: 21, layers: Some(3), ..spec(12.0, Some(0.375)) };
     assert_eq!(s.bulkhead_in(), Some(0.125));
     let plain = build_mesh(&h, &s).unwrap();
     let m = build_mesh(&h, &pockets(s, 20.0)).unwrap();
     assert!(m.closed && watertight(&m));
-    // Inner U 19.25 x 11.625 = 223.78 in^2, two bulkheads 1/8 in thick.
-    let inner = 2.0 * (10.0 - 0.375) * (12.0 - 0.375);
-    assert!(
-        (m.volume() - plain.volume() - 2.0 * inner * 0.125).abs() < 1e-6,
-        "{}",
-        m.volume() - plain.volume()
-    );
+    // Bulkheads (inner U 19.25 x 11.625) and covers (19.25 wide, x 5 to 20) all 1/8 in thick.
+    let (w, d) = (2.0 * (10.0 - 0.375), 12.0 - 0.375);
+    let w5 = 2.0 * (10.0 - 0.375 * 2f64.sqrt());
+    let want = 2.0 * w * d * 0.125 + 2.0 * 0.125 * (5.0 * 0.5 * (w5 + w) + 10.0 * w);
+    let dv = m.volume() - plain.volume();
+    assert!((dv - want).abs() < 1e-6, "{dv} vs {want}");
+    for x in [20.0, 80.0] {
+        assert!(at_x(&m, x).iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 11.875).abs() < 1e-9), "lid at {x}");
+    }
     for x in [20.125, 79.875] {
         assert!(at_x(&m, x).iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 12.0).abs() < 1e-9), "face at {x}");
     }
@@ -339,7 +371,7 @@ fn off1_pockets_stay_a_valid_solid() {
         assert!(dv > last, "l {l}: bulkheads add {dv} in^3");
         last = dv;
         let a = to_step(&m, "off1");
-        assert!(a.contains("MANIFOLD_SOLID_BREP") && a.matches("CLOSED_SHELL").count() == 1);
+        assert!(a.contains("BREP_WITH_VOIDS") && a.matches("ORIENTED_CLOSED_SHELL").count() == 2, "l {l}");
     }
 }
 
