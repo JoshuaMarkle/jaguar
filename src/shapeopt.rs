@@ -33,7 +33,7 @@
 use crate::hull::{Grid, Hull, linspace};
 use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
 use crate::optimize::{Candidate, Progress, RunResult, run_inner, run_with_progress};
-use crate::params::{ObjectiveKind, Params, ShapeSearch};
+use crate::params::{ObjectiveKind, Params, SHAPE_DIMS, ShapeSearch};
 use crate::race;
 use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
 use crate::units::{IN3_PER_FT3, WATER_PCF};
@@ -61,7 +61,7 @@ impl SplitMix64 {
     }
 }
 
-fn to_shape(v: &[f64; 10]) -> ShapeParams {
+fn to_shape(v: &[f64; SHAPE_DIMS]) -> ShapeParams {
     ShapeParams {
         length_in: v[0],
         beam_in: v[1],
@@ -73,6 +73,7 @@ fn to_shape(v: &[f64; 10]) -> ShapeParams {
         aft_rocker: v[7],
         fore_len_frac: v[8],
         aft_len_frac: v[9],
+        gunwale_radius_in: (v[10] > 0.0).then_some(v[10]),
         metrics: None,
     }
 }
@@ -80,7 +81,7 @@ fn to_shape(v: &[f64; 10]) -> ShapeParams {
 /// Apply manufacturability rules to a raw point: snap draft/length/beam to
 /// their steps (nearest multiple inside the bounds) and tie aft = fore when
 /// `symmetric`.
-pub fn normalize(ss: &ShapeSearch, mut v: [f64; 10]) -> [f64; 10] {
+pub fn normalize(ss: &ShapeSearch, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS] {
     for (d, step, [lo, hi]) in [
         (0, ss.length_step_in, ss.length_in),
         (1, ss.beam_step_in, ss.beam_in),
@@ -102,7 +103,7 @@ pub fn normalize(ss: &ShapeSearch, mut v: [f64; 10]) -> [f64; 10] {
 /// Dimensions the search moves (fixed bounds and symmetric-tied aft ones excluded).
 fn free_dims(ss: &ShapeSearch) -> Vec<usize> {
     let b = ss.bounds();
-    (0..10).filter(|&d| b[d].1[1] > b[d].1[0] && !(ss.symmetric && matches!(d, 6 | 7 | 9))).collect()
+    (0..SHAPE_DIMS).filter(|&d| b[d].1[1] > b[d].1[0] && !(ss.symmetric && matches!(d, 6 | 7 | 9))).collect()
 }
 
 /// Steady turn of shape `s` floating level at `draft_in` with total weight
@@ -132,7 +133,7 @@ pub fn loaded_turn(
             vec![(crew, 1.0)]
         }
     };
-    let g = Grid::build_flared(hull, depth_in, STATIONS, params.hull.flare_deg);
+    let g = Grid::build_topsides(hull, depth_in, STATIONS, params.hull.topsides()).0;
     let nz = g.nz();
     let topsides = Hull {
         name: "loaded".into(),
@@ -171,15 +172,15 @@ pub fn shape_metrics(ss: &ShapeSearch, s: &ShapeParams) -> ShapeMetrics {
     m
 }
 
-fn key(v: &[f64; 10]) -> [u64; 10] {
+fn key(v: &[f64; SHAPE_DIMS]) -> [u64; SHAPE_DIMS] {
     v.map(f64::to_bits)
 }
 
 /// Latin hypercube sample of `n` points in the bounds.
-fn lhs(ss: &ShapeSearch, n: usize) -> Vec<[f64; 10]> {
+fn lhs(ss: &ShapeSearch, n: usize) -> Vec<[f64; SHAPE_DIMS]> {
     let b = ss.bounds();
     let mut rng = SplitMix64(ss.seed);
-    let mut pts = vec![[0.0; 10]; n];
+    let mut pts = vec![[0.0; SHAPE_DIMS]; n];
     for (d, (_, [lo, hi])) in b.iter().enumerate() {
         let mut perm: Vec<usize> = (0..n).collect();
         for i in (1..n).rev() {
@@ -227,10 +228,12 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
 fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
     let rp = params.race.as_ref().context("objective.kind = race needs [race]")?;
     let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
-    let hull = generate(&to_shape(&mid), STATIONS, WATERLINES, "reference")?;
+    let s = to_shape(&mid);
+    let hull = generate(&s, STATIONS, WATERLINES, "reference")?;
+    let params = &for_shape(params, &s);
     let r = run_inner(params, &hull, true, &|_| {})?;
     let c = representative(&r).context("reference shape: inner search produced no candidates")?;
-    let top = race::topsides(&hull, c.depth_in, params.hull.flare_deg);
+    let top = race::topsides(&hull, c.depth_in, params.hull.topsides());
     race::plan(&top, c.hull_weight_lb, rp).context("race paths on the reference (midpoint) shape")
 }
 
@@ -279,8 +282,18 @@ fn representative(r: &RunResult) -> Option<Candidate> {
         .cloned()
 }
 
-fn hull_for(v: &[f64; 10], index: usize) -> Result<Hull> {
+fn hull_for(v: &[f64; SHAPE_DIMS], index: usize) -> Result<Hull> {
     generate(&to_shape(v), STATIONS, WATERLINES, &format!("opt-{index}"))
+}
+
+/// `params` for one shape: its searched gunwale radius becomes `hull.gunwale_radius_in`
+/// (the inner search and every topsides builder read it there).
+fn for_shape(params: &Params, s: &ShapeParams) -> Params {
+    let mut p = params.clone();
+    if s.gunwale_radius_in.is_some() {
+        p.hull.gunwale_radius_in = s.gunwale_radius_in;
+    }
+    p
 }
 
 fn eval_shape(
@@ -288,14 +301,16 @@ fn eval_shape(
     ss: &ShapeSearch,
     refs: Option<Refs>,
     plan: Option<&race::Plan>,
-    v: &[f64; 10],
+    v: &[f64; SHAPE_DIMS],
     index: usize,
 ) -> Result<Eval> {
     let hull = hull_for(v, index)?;
+    let mut shape = to_shape(v);
+    let params = &for_shape(params, &shape);
+    shape.gunwale_radius_in = params.hull.gunwale_radius_in;
     // Called on a 1-thread pool (`on_workers`): "parallel" rayon calls run serially there.
     let r = run_inner(params, &hull, true, &|_| {})?;
     let mut rep = representative(&r).context("inner search produced no candidates")?;
-    let mut shape = to_shape(v);
     let mut m = shape_metrics(ss, &shape);
     match loaded_turn(params, &shape, &hull, rep.hull_weight_lb, rep.depth_in) {
         Ok(t) => m.turn = Some(t),
@@ -309,7 +324,7 @@ fn eval_shape(
         && m.rejected.is_none()
     {
         let c = &w.candidate;
-        let top = race::topsides(&hull, c.depth_in, params.hull.flare_deg);
+        let top = race::topsides(&hull, c.depth_in, params.hull.topsides());
         match race::planned_time(&top, c.hull_weight_lb, rp, pl) {
             Ok(t) => rep.race_s = Some(t),
             Err(e) => {
@@ -385,34 +400,37 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     let plan = if params.objective.kind == ObjectiveKind::Race { Some(race_plan(params, ss)?) } else { None };
     let free = free_dims(ss);
 
-    let mut shapes: Vec<[f64; 10]> = Vec::new();
+    let mut shapes: Vec<[f64; SHAPE_DIMS]> = Vec::new();
     let mut evals: Vec<Eval> = Vec::new();
-    let mut seen: HashSet<[u64; 10]> = HashSet::new();
+    let mut seen: HashSet<[u64; SHAPE_DIMS]> = HashSet::new();
     let done = AtomicUsize::new(0);
 
-    let batch_eval =
-        |batch: Vec<[f64; 10]>, shapes: &mut Vec<[f64; 10]>, evals: &mut Vec<Eval>| -> Result<()> {
-            let base = shapes.len();
-            let total = base + batch.len();
-            on_progress(Progress::Started { total });
-            let out: Vec<Result<Eval>> = on_workers(batch.len(), &|i| {
-                let (v, index) = (&batch[i], base + i);
-                on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
-                let e = eval_shape(params, ss, refs, plan.as_ref(), v, index);
-                if let Ok(e) = &e {
-                    let k = done.fetch_add(1, Ordering::SeqCst) + 1;
-                    on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
-                }
-                e
-            })?;
-            for (v, e) in batch.into_iter().zip(out) {
-                evals.push(e?);
-                shapes.push(v);
+    let batch_eval = |batch: Vec<[f64; SHAPE_DIMS]>,
+                      shapes: &mut Vec<[f64; SHAPE_DIMS]>,
+                      evals: &mut Vec<Eval>|
+     -> Result<()> {
+        let base = shapes.len();
+        let total = base + batch.len();
+        on_progress(Progress::Started { total });
+        let out: Vec<Result<Eval>> = on_workers(batch.len(), &|i| {
+            let (v, index) = (&batch[i], base + i);
+            on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
+            let e = eval_shape(params, ss, refs, plan.as_ref(), v, index);
+            if let Ok(e) = &e {
+                let k = done.fetch_add(1, Ordering::SeqCst) + 1;
+                on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
             }
-            Ok(())
-        };
+            e
+        })?;
+        for (v, e) in batch.into_iter().zip(out) {
+            evals.push(e?);
+            shapes.push(v);
+        }
+        Ok(())
+    };
 
-    let init: Vec<[f64; 10]> = lhs(ss, ss.samples).into_iter().filter(|v| seen.insert(key(v))).collect();
+    let init: Vec<[f64; SHAPE_DIMS]> =
+        lhs(ss, ss.samples).into_iter().filter(|v| seen.insert(key(v))).collect();
     batch_eval(init, &mut shapes, &mut evals)?;
 
     let ranked = |evals: &[Eval]| {
@@ -457,7 +475,10 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
             on_progress(p)
         }
     };
-    let mut r = run_with_progress(params, &hull, &forward)?;
+    let winner_params = for_shape(params, &shape);
+    let mut r = run_with_progress(&winner_params, &hull, &forward)?;
+    // The record keeps the input params; the winner's radius is in its shape.
+    r.params = params.clone();
     if shape.metrics.as_ref().is_some_and(|m| m.rejected.is_some()) {
         // Every shape broke a [shape_search] constraint: no winner, never a rejected one.
         r.winner = None;
@@ -470,8 +491,9 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
     }
     if let (Some(w), Some(rp), ObjectiveKind::Race) = (&r.winner, &params.race, params.objective.kind) {
         let c = &w.candidate;
+        let ts = winner_params.hull.topsides();
         r.race = Some(
-            race::run(&hull, c.hull_weight_lb, c.depth_in, params.hull.flare_deg, rp)
+            race::run(&hull, c.hull_weight_lb, c.depth_in, ts, rp)
                 .context("race of the winner on re-planned paths")?,
         );
     }

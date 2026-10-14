@@ -34,7 +34,15 @@ fn boxy(l: f64, half: f64, draft: f64) -> Hull {
 }
 
 fn spec(depth: f64, t: Option<f64>) -> ExportSpec {
-    ExportSpec { depth_in: depth, thickness_in: t, flare_deg: 0.0, stations: 81, girth: 41, pocket_in: None }
+    ExportSpec {
+        depth_in: depth,
+        thickness_in: t,
+        flare_deg: 0.0,
+        gunwale_radius_in: None,
+        stations: 81,
+        girth: 41,
+        pocket_in: None,
+    }
 }
 
 /// Every undirected edge used by exactly two facets, once in each direction.

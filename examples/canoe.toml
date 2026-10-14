@@ -9,6 +9,11 @@
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
 flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
+# gunwale_radius_in = 200.0  # constructable gunwale: top view straight from the bow, one arc of this radius,
+#                            # straight to the stern; sides straight from the waterline up to it (narrowest
+#                            # such outline that encloses the waterline). Full-ended hulls like off1 need a very
+#                            # wide gunwale, which gunwale_max_flare_deg rejects (every design then fails, with why).
+# gunwale_max_flare_deg = 30.0  # steepest side lean allowed with a gunwale outline (default 30)
 
 # A design must pass EVERY load case. Seats are knee positions from the bow, one per paddler;
 # omit seats_in for auto seats ([seats] below).

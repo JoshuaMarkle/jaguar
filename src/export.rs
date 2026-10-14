@@ -38,6 +38,8 @@ pub struct ExportSpec {
     pub thickness_in: Option<f64>,
     /// Topside flare, deg from vertical (as `hull.flare_deg`).
     pub flare_deg: f64,
+    /// Line-arc-line gunwale radius, in (as `hull.gunwale_radius_in`); None = flared extrusion.
+    pub gunwale_radius_in: Option<f64>,
     /// Longitudinal stations (resampled evenly, as the analysis grid).
     pub stations: usize,
     /// Points around the full girth, sheer to sheer (odd, so one lies on the keel centreline).
@@ -228,7 +230,16 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     if let Some(t) = spec.thickness_in {
         ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
     }
-    let grid = Grid::build_flared(hull, spec.depth_in, spec.stations, spec.flare_deg);
+    // The export draws what it is given; buildability limits were the run's to apply.
+    let ts = crate::hull::Topsides {
+        flare_deg: spec.flare_deg,
+        gunwale_radius_in: spec.gunwale_radius_in,
+        gunwale_max_flare_deg: 89.9,
+    };
+    let (grid, unbuildable) = Grid::build_topsides(hull, spec.depth_in, spec.stations, ts);
+    if let Some(why) = unbuildable {
+        anyhow::bail!("export: {why}");
+    }
     let z_top = *grid.z.last().unwrap();
     // Keel line: fitted at the table stations that have offsets, then a monotone cubic along x.
     let (kx, kz): (Vec<f64>, Vec<f64>) =
@@ -737,7 +748,8 @@ pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, E
     let spec = ExportSpec {
         depth_in: num("depth_in")?,
         thickness_in: Some(num("thickness_in")?),
-        flare_deg: v["params"]["hull"]["flare_deg"].as_f64().unwrap_or(0.0),
+        flare_deg: crate::report::result_topsides(&v).flare_deg,
+        gunwale_radius_in: crate::report::result_topsides(&v).gunwale_radius_in,
         stations,
         girth,
         pocket_in: c["air_pocket_in"].as_f64(),
@@ -777,6 +789,7 @@ mod tests {
             depth_in: 12.0,
             thickness_in: None,
             flare_deg: 0.0,
+            gunwale_radius_in: None,
             stations: 41,
             girth: 21,
             pocket_in: None,
@@ -795,6 +808,7 @@ mod tests {
             depth_in: 12.0,
             thickness_in: Some(0.375),
             flare_deg: 0.0,
+            gunwale_radius_in: None,
             stations: 41,
             girth: 21,
             pocket_in: None,

@@ -50,6 +50,15 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 ## Physics
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
+   Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`
+   = [min, max] searched as a shape variable): in top view the gunwale runs straight from the bow
+   tip, tangent onto one arc of radius R, then straight to the stern tip (`hull::Gunwale`); each
+   side is ruled from the design waterline up to it. The arc peaks at the middle of the widest
+   waterline stations; its half-beam is the smallest that encloses the design waterline (checked at
+   the table stations, exact since the outline is concave) and at least the waterline beam plus
+   (D - draft) tan(flare). Every candidate of a depth fails, with the reason, when no outline of
+   radius R fits or the sides would lean out more than `hull.gunwale_max_flare_deg` (default 30)
+   anywhere (401 even stations). Off = byte-identical to before. Export and the web view build the same surface.
 2. **Section** per station: thin shell of thickness t on both sides + keel strip: A, zbar, I. The
    girth follows the hull: waterline segments with zero half-breadth at both ends (below the
    rockered keel, the closed stem) are not wall. Same rule for the wetted surface in drag.

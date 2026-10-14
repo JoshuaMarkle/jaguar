@@ -173,6 +173,7 @@ fn turn_drag_falls_with_rocker_and_rises_with_length() {
         aft_rocker: 0.1,
         fore_len_frac: 0.4,
         aft_len_frac: 0.4,
+        gunwale_radius_in: None,
         metrics: None,
     };
     // 90 lb wall, 12 in mold, heaviest crew (340 lb), each floating at its own level draft.
@@ -235,4 +236,36 @@ fn race_objective_picks_the_fastest_passing_shape() {
     pw.objective.kind = jaguar::params::ObjectiveKind::Weight;
     let rw = jaguar::run(&pw, &|_| {}).unwrap();
     assert!(rw.race.is_none() && rw.candidates.iter().all(|c| c.race_s.is_none()));
+}
+
+/// Searched gunwale radius: every shape carries its radius inside the bounds, the winner's
+/// sides stay within the lean limit, and the result exports with that gunwale.
+#[test]
+fn gunwale_radius_is_searched() {
+    let mut p = small(false);
+    let ss = p.shape_search.as_mut().unwrap();
+    ss.gunwale_radius_in = Some([150.0, 600.0]);
+    // Buildable shapes need straight / hollow waterline ends: sample more than the default 12.
+    ss.samples = 40;
+    p.validate().unwrap();
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    for c in &r.candidates {
+        let g = c.shape.as_ref().unwrap().gunwale_radius_in.expect("radius on every shape");
+        assert!((150.0..=600.0).contains(&g), "{g}");
+    }
+    let w = r.winner.as_ref().expect("a buildable shape");
+    let s = w.candidate.shape.as_ref().unwrap();
+    let hull = r.winner_hull.as_ref().unwrap();
+    let ts = jaguar::hull::Topsides { gunwale_radius_in: s.gunwale_radius_in, ..p.hull.topsides() };
+    let (_, why) = jaguar::hull::Grid::build_topsides(hull, w.candidate.depth_in, 161, ts);
+    assert!(why.is_none(), "{why:?}");
+    // The record keeps the input params; result readers find the radius on the winner's shape.
+    assert!(r.params.hull.gunwale_radius_in.is_none());
+    let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+    assert_eq!(jaguar::report::result_topsides(&v).gunwale_radius_in, s.gunwale_radius_in);
+    let (_, spec) = jaguar::export::from_result(&v.to_string(), 81, 41).unwrap();
+    assert_eq!(spec.gunwale_radius_in, s.gunwale_radius_in);
+    // Fixed and searched radius together are ambiguous.
+    p.hull.gunwale_radius_in = Some(300.0);
+    assert!(p.validate().unwrap_err().to_string().contains("not both"));
 }

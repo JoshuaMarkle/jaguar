@@ -8,6 +8,7 @@
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 11 | 109.3 | 8.7 | punching 0.90 |
 | barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 125.7 | 48.5 | punching 0.90 |
 | shape_opt.toml | shape search pick (entry 9.3 deg, rocker 3.5/3.0 in) | 216 x 24.6 (18 ft) | 0.375 | 58 | 12 | **90.8** | 2.6 | punching 0.90 |
+| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 318 in, waterline ends fore_wp 1.22 / aft_wp 1.27) | 224 x 25.1 (18 ft 8 in) | 0.375 | 58 | 12 | 100.4 | 2.3 | punching 0.90 |
 | shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 103.1 | 0.54 | punching 0.90 |
 
 All verified at 321 stations: 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee

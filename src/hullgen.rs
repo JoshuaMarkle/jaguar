@@ -38,6 +38,11 @@ pub struct ShapeParams {
     /// Fraction of length in the aft taper zone (0..1). If fore + aft > 1
     /// both are scaled down to sum to 1 (no parallel midbody).
     pub aft_len_frac: f64,
+    /// Gunwale arc radius, in, when the topsides use the line-arc-line gunwale
+    /// (`hull::Gunwale`; set by the shape search, not part of the generated
+    /// offsets, which stop at the design waterline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gunwale_radius_in: Option<f64>,
     /// Measured from the generated shape by the shape search (output only;
     /// not accepted in shape.toml).
     #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
@@ -210,6 +215,7 @@ mod tests {
             aft_rocker: 0.3,
             fore_len_frac: 0.4,
             aft_len_frac: 0.4,
+            gunwale_radius_in: None,
             metrics: None,
         }
     }

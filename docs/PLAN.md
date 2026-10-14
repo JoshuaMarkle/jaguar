@@ -56,6 +56,10 @@ share straight-resistance tables between crews of similar weight (draft interpol
 T63 (web Race tab, `POST /api/race`) is done. Open: editing `[race]` courses and events in the
 form (today they come from canoe.toml).
 
+T65 (constructable line-arc-line gunwale, `hull.gunwale_radius_in` / `shape_search.gunwale_radius_in`,
+side lean limit `hull.gunwale_max_flare_deg`) is done. On full-ended hulls such as off1 no buildable
+radius exists at 30 deg; the team should confirm the lean limit the mold shop can build.
+
 Declined 2026-10-13 (do not build): multi-mix zones / I-beam pours, multi-pour graph, mix re-sweep
 with zones.
 

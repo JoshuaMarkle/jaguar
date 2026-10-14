@@ -62,6 +62,12 @@ above the waterline, not the generator, so searching it would need a second oute
   draft (deterministic, independent of sampling). Neglected: the linear lift term, added mass,
   waves, heel. Use it to rank shapes; `shape.metrics.turn` gives `drag_n`, `moment_nm` (yaw moment
   the paddlers hold) and `drift_deg`.
+* `gunwale_radius_in = [min, max]` (optional): constructable line-arc-line gunwale (docs/SPEC.md
+  Physics 1), the radius searched as an 11th shape variable and stored in `shape.gunwale_radius_in`.
+  A straight entry from the tip encloses only straight or hollow waterline ends (Series 7 `wp`
+  >= about 1), so the search moves there; full ends need gunwales too wide for
+  `hull.gunwale_max_flare_deg`. `examples/shape_gunwale.toml`: 100.4 lb, 223.6 in, R 318 in,
+  draft 4.5 in (tall topsides let the gunwale widen within 30 deg), vs 90.8 lb without it.
 * `kind = "race"` (needs `[race]`, src/race.rs): score = weighted race time over the `[race]`
   events, so wall weight, displacement, straight and turning drag are weighed by how they move
   the clock instead of by `straight_weight` / `displacements` (`jaguar race` prints the

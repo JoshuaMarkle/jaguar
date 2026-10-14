@@ -449,7 +449,8 @@ pub struct RaceInput {
     pub hull: crate::hull::Hull,
     pub hull_lb: f64,
     pub depth_in: f64,
-    pub flare_deg: f64,
+    /// Flare and gunwale outline the winner was built with.
+    pub topsides: crate::hull::Topsides,
     /// `[race]` of the run's canoe.toml, if it had one.
     pub race: Option<crate::params::RaceParams>,
 }
@@ -478,9 +479,24 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
         hull,
         hull_lb: num("hull_weight_lb")?,
         depth_in: num("depth_in")?,
-        flare_deg: v["params"]["hull"]["flare_deg"].as_f64().unwrap_or(0.0),
+        topsides: result_topsides(&v),
         race,
     })
+}
+
+/// Topsides of a result's winner: `hull.flare_deg`, and the gunwale radius of
+/// the winner's shape (shape search) or `hull.gunwale_radius_in`.
+pub fn result_topsides(v: &serde_json::Value) -> crate::hull::Topsides {
+    let h = &v["params"]["hull"];
+    crate::hull::Topsides {
+        flare_deg: h["flare_deg"].as_f64().unwrap_or(0.0),
+        gunwale_radius_in: v["winner"]["candidate"]["shape"]["gunwale_radius_in"]
+            .as_f64()
+            .or_else(|| h["gunwale_radius_in"].as_f64()),
+        gunwale_max_flare_deg: h["gunwale_max_flare_deg"]
+            .as_f64()
+            .unwrap_or(crate::hull::GUNWALE_MAX_FLARE_DEG),
+    }
 }
 
 /// Terminal summary of a race run: one line per event, then the recommended weightings.
@@ -712,6 +728,7 @@ mod tests {
             aft_rocker: 2.0,
             fore_len_frac: 0.4,
             aft_len_frac: 0.4,
+            gunwale_radius_in: None,
             metrics: None,
         });
         r.candidates[0].length_in = 220.0;

@@ -231,9 +231,35 @@ pub struct HullParams {
     pub stations: usize,
     /// Outward lean of the hull sides above the design waterline, degrees from
     /// vertical (0 = straight up, the default). Applies to every hull, fixed or
-    /// generated. Typical canoe flare 5-15 deg.
+    /// generated. Typical canoe flare 5-15 deg. With `gunwale_radius_in` it is
+    /// the lean at the widest station only.
     #[serde(default)]
     pub flare_deg: f64,
+    /// Present = constructable gunwale: in top view straight from the bow,
+    /// one arc of this radius (in) through the middle, straight to the stern;
+    /// sides ruled from the design waterline up to it (`hull::Gunwale`).
+    /// Designs whose sides would lean in are rejected. In a shape search,
+    /// `shape_search.gunwale_radius_in` searches the radius instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gunwale_radius_in: Option<f64>,
+    /// With a gunwale outline: steepest outward side lean allowed anywhere
+    /// along the hull, deg from vertical (default 30). Steeper = rejected.
+    #[serde(default = "gunwale_max_flare")]
+    pub gunwale_max_flare_deg: f64,
+}
+
+fn gunwale_max_flare() -> f64 {
+    crate::hull::GUNWALE_MAX_FLARE_DEG
+}
+
+impl HullParams {
+    pub fn topsides(&self) -> crate::hull::Topsides {
+        crate::hull::Topsides {
+            flare_deg: self.flare_deg,
+            gunwale_radius_in: self.gunwale_radius_in,
+            gunwale_max_flare_deg: self.gunwale_max_flare_deg,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -537,6 +563,11 @@ pub struct ShapeSearch {
     pub aft_rocker: [f64; 2],
     pub fore_len_frac: [f64; 2],
     pub aft_len_frac: [f64; 2],
+    /// Present = line-arc-line gunwale (see `hull.gunwale_radius_in`) with the
+    /// arc radius searched in [min, max], in. Absent = `hull.gunwale_radius_in`
+    /// (fixed) or no gunwale outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gunwale_radius_in: Option<[f64; 2]>,
     /// Snap sampled draft / length / beam to multiples of this, in (molds,
     /// strongbacks). Absent = continuous. Search depth already steps by
     /// `search.depth_in`.
@@ -568,7 +599,8 @@ pub struct ShapeSearch {
 
 impl ShapeSearch {
     /// (name, [min, max]) for every shape parameter, in `ShapeParams` order.
-    pub fn bounds(&self) -> [(&'static str, [f64; 2]); 10] {
+    /// The last, `gunwale_radius_in`, is [0, 0] (off, never searched) when absent.
+    pub fn bounds(&self) -> [(&'static str, [f64; 2]); SHAPE_DIMS] {
         [
             ("length_in", self.length_in),
             ("beam_in", self.beam_in),
@@ -580,9 +612,13 @@ impl ShapeSearch {
             ("aft_rocker", self.aft_rocker),
             ("fore_len_frac", self.fore_len_frac),
             ("aft_len_frac", self.aft_len_frac),
+            ("gunwale_radius_in", self.gunwale_radius_in.unwrap_or([0.0, 0.0])),
         ]
     }
 }
+
+/// Searched shape variables: the 10 Series 7 factors and the gunwale radius.
+pub const SHAPE_DIMS: usize = 11;
 
 /// Search axes. Each is an inclusive `[min, max, step]` range.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -821,6 +857,26 @@ impl Params {
         }
         if let Some(r) = &self.race {
             r.validate()?;
+        }
+        if let Some(r) = self.hull.gunwale_radius_in
+            && !(r.is_finite() && r > 0.0)
+        {
+            bail!("hull.gunwale_radius_in must be > 0");
+        }
+        if !(self.hull.gunwale_max_flare_deg > 0.0 && self.hull.gunwale_max_flare_deg < 90.0) {
+            bail!("hull.gunwale_max_flare_deg must be in (0, 90)");
+        }
+        if let Some(ss) = &self.shape_search
+            && let Some([lo, _]) = ss.gunwale_radius_in
+        {
+            if lo <= 0.0 {
+                bail!("shape_search.gunwale_radius_in min must be > 0");
+            }
+            if self.hull.gunwale_radius_in.is_some() {
+                bail!(
+                    "give hull.gunwale_radius_in (fixed) or shape_search.gunwale_radius_in (searched), not both"
+                );
+            }
         }
         Ok(())
     }

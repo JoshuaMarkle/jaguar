@@ -387,7 +387,7 @@ impl App {
             Ok(i) => i,
             Err(e) => return err_reply(409, format!("{e:#}")),
         };
-        match crate::race::run(&input.hull, input.hull_lb, input.depth_in, input.flare_deg, &rp)
+        match crate::race::run(&input.hull, input.hull_lb, input.depth_in, input.topsides, &rp)
             .and_then(|r| Ok(serde_json::to_string(&r)?))
         {
             Ok(s) => (200, "application/json", s),

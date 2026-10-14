@@ -73,6 +73,9 @@ enum Cmd {
         /// Topside flare, deg (overrides the result)
         #[arg(long)]
         flare: Option<f64>,
+        /// Line-arc-line gunwale radius, in (overrides the result; see hull.gunwale_radius_in)
+        #[arg(long)]
+        gunwale_radius: Option<f64>,
         #[arg(long, default_value_t = 161)]
         stations: usize,
         /// Points around the girth, sheer to sheer (odd)
@@ -236,7 +239,18 @@ fn main() -> Result<()> {
                 println!("{l}");
             }
         }
-        Cmd::Export { input, out, format, thickness, depth, flare, stations, girth, no_pockets } => {
+        Cmd::Export {
+            input,
+            out,
+            format,
+            thickness,
+            depth,
+            flare,
+            gunwale_radius,
+            stations,
+            girth,
+            no_pockets,
+        } => {
             use jaguar::export;
             let text = std::fs::read_to_string(&input)?;
             let is_result = serde_json::from_str::<serde_json::Value>(&text)
@@ -253,6 +267,7 @@ fn main() -> Result<()> {
                         depth_in: d,
                         thickness_in: None,
                         flare_deg: 0.0,
+                        gunwale_radius_in: None,
                         stations,
                         girth,
                         pocket_in: None,
@@ -267,6 +282,9 @@ fn main() -> Result<()> {
             }
             if let Some(f) = flare {
                 spec.flare_deg = f;
+            }
+            if gunwale_radius.is_some() {
+                spec.gunwale_radius_in = gunwale_radius;
             }
             if no_pockets {
                 spec.pocket_in = None;
@@ -309,12 +327,12 @@ fn main() -> Result<()> {
                     .rsplit_once('=')
                     .ok_or_else(|| anyhow::anyhow!("--measured wants \"EVENT=SECONDS\""))?;
                 let secs: f64 = secs.trim().parse()?;
-                let top = race::topsides(&input.hull, input.depth_in, input.flare_deg);
+                let top = race::topsides(&input.hull, input.depth_in, input.topsides);
                 let p = race::calibrate_power(&top, input.hull_lb, &rp, event.trim(), secs)?;
                 println!("calibrated: paddler_power_w = {p:.1} W ({} in {secs} s)", event.trim());
                 rp.paddler_power_w = p;
             }
-            let r = race::run(&input.hull, input.hull_lb, input.depth_in, input.flare_deg, &rp)?;
+            let r = race::run(&input.hull, input.hull_lb, input.depth_in, input.topsides, &rp)?;
             for l in report::race_lines(&r) {
                 println!("{l}");
             }

@@ -452,3 +452,36 @@ fn lrfd_live_factor_moves_the_answer() {
     let w = |r: &optimize::RunResult| r.winner.as_ref().map_or(f64::INFINITY, |w| w.candidate.hull_weight_lb);
     assert!(w(&heavy) >= w(&base));
 }
+
+/// Line-arc-line gunwale on a fixed hull: off1's full ends need a gunwale so wide that the
+/// default 30 deg side-lean limit rejects every depth (each candidate says why, no winner);
+/// with the limit lifted the same radius builds, the winner's sides never lean in and its
+/// gunwale follows the outline.
+#[test]
+fn gunwale_outline_on_a_fixed_hull() {
+    let (mut p, h) = example();
+    p.search.thickness_in = [0.375, 0.5, 0.125];
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    p.hull.gunwale_radius_in = Some(200.0);
+    let r = optimize::run(&p, &h).unwrap();
+    assert!(r.winner.is_none());
+    assert!(
+        r.candidates.iter().all(|c| !c.passes && c.error.as_deref().is_some_and(|e| e.contains("lean out")))
+    );
+    p.hull.gunwale_max_flare_deg = 89.0;
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.as_ref().expect("winner with the lean limit lifted");
+    let g = jaguar::hull::Grid::build_topsides(&h, w.candidate.depth_in, 161, p.hull.topsides()).0;
+    let gw = jaguar::hull::Gunwale::of_hull(&h, w.candidate.depth_in, p.hull.flare_deg, 200.0).unwrap();
+    let (nw, nz) = (h.z.len(), g.nz());
+    for i in 0..g.nx() {
+        assert!(g.y(i, nz - 1) >= g.y(i, nw - 1) - 1e-9);
+        assert!((g.y(i, nz - 1) - gw.half_breadth(g.x[i])).abs() < 1e-12);
+    }
+    // Wider topsides weigh more than the plain extrusion's lightest wall of the same t, rho, depth.
+    p.hull.gunwale_radius_in = None;
+    let plain = optimize::run(&p, &h).unwrap();
+    let key = |c: &optimize::Candidate| (c.thickness_in, c.density_pcf, c.depth_in);
+    let same = plain.candidates.iter().find(|c| key(c) == key(&w.candidate)).unwrap();
+    assert!(w.candidate.hull_weight_lb > same.hull_weight_lb);
+}

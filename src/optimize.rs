@@ -680,6 +680,7 @@ pub fn search_space(params: &Params, fit: &StrengthFit, c: &Candidate) -> Result
             sh.aft_rocker,
             sh.fore_len_frac,
             sh.aft_len_frac,
+            sh.gunwale_radius_in.unwrap_or(0.0),
         ];
         let steps = [ss.length_step_in, ss.beam_step_in, ss.draft_step_in];
         for (d, (name, [lo, hi])) in ss.bounds().into_iter().enumerate() {
@@ -832,8 +833,11 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
     let n = params.hull.stations;
     let done = AtomicUsize::new(0);
 
-    let grids: Vec<Grid> =
-        ds.par_iter().map(|&d| Grid::build_flared(hull, d, n, params.hull.flare_deg)).collect();
+    // Topsides per depth; `unbuildable[g]` = why that depth's gunwale outline cannot be
+    // built (its candidates then fail with the reason, analysed on the real geometry).
+    let tops = params.hull.topsides();
+    let (grids, unbuildable): (Vec<Grid>, Vec<Option<String>>) =
+        ds.par_iter().map(|&d| Grid::build_topsides(hull, d, n, tops)).unzip();
     let pairs: Vec<(usize, usize)> =
         (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
     // Seats per wall geometry (t, depth), solved at the middle density of the
@@ -855,11 +859,16 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let sec = sections(grid, t);
             let done = &done;
             let axis = &axis;
+            let why = &unbuildable[gi];
             rhos.iter()
                 .enumerate()
                 .map(move |(ri, &rho)| {
                     let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, plan, true);
                     c.mix = axis[ri].2.clone();
+                    if let Some(why) = why {
+                        c.passes = false;
+                        c.error = Some(why.clone());
+                    }
                     let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                     on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
                     (ti, ri, gi, c)
@@ -877,7 +886,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         Some(c) => {
             let stations = 2 * n - 1;
             on_progress(Progress::Verifying { stations });
-            let grid = Grid::build_flared(hull, c.depth_in, stations, params.hull.flare_deg);
+            let grid = Grid::build_topsides(hull, c.depth_in, stations, params.hull.topsides()).0;
             let sec = sections(&grid, c.thickness_in);
             let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
             let pi = pairs
@@ -1300,7 +1309,7 @@ fn convergence(
     // series[case][check][resolution]
     let mut series: Vec<Vec<(&'static str, [f64; 3])>> = vec![Vec::new(); params.load_cases.len()];
     for (r, &ns) in stations.iter().enumerate() {
-        let grid = Grid::build_flared(hull, c.depth_in, ns, params.hull.flare_deg);
+        let grid = Grid::build_topsides(hull, c.depth_in, ns, params.hull.topsides()).0;
         let sec = sections(&grid, c.thickness_in);
         for (k, (case, s)) in params.load_cases.iter().zip(seats).enumerate() {
             for sample in seats::samples(&s.seats_in, params.seats.variance_in, &grid) {

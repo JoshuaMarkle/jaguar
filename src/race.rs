@@ -35,7 +35,7 @@
 //! Neglected: wind, current, acceleration in yaw, paddle stroke pulsation,
 //! wave drag transients, the hull's heel in a turn.
 
-use crate::hull::{Grid, Hull};
+use crate::hull::{Grid, Hull, Topsides};
 use crate::params::{Course, Displacement, RaceEvent, RaceParams, Side};
 use crate::resistance::{level_draft_in, resistance, turn};
 use crate::units::M_TO_IN;
@@ -197,10 +197,10 @@ fn keel_z(y: &[f64], z: &[f64]) -> f64 {
     }
 }
 
-/// `hull` extruded to the mold depth with flare, as the wall search builds it,
-/// so a heavy crew floats inside the table.
-pub fn topsides(hull: &Hull, depth_in: f64, flare_deg: f64) -> Hull {
-    let g = Grid::build_flared(hull, depth_in, hull.x.len().max(41), flare_deg);
+/// `hull` extruded to the mold depth (flare, gunwale outline), as the wall
+/// search builds it, so a heavy crew floats inside the table.
+pub fn topsides(hull: &Hull, depth_in: f64, ts: Topsides) -> Hull {
+    let g = Grid::build_topsides(hull, depth_in, hull.x.len().max(41), ts).0;
     Hull {
         name: hull.name.clone(),
         draft_design: g.z[g.nz() - 1],
@@ -796,9 +796,9 @@ pub fn planned_time(top: &Hull, hull_lb: f64, rp: &RaceParams, plan: &Plan) -> R
 
 /// Every event of `rp` for the canoe `hull` (outer mold line) with wall weight
 /// `hull_lb`, mold depth and flare as built.
-pub fn run(hull: &Hull, hull_lb: f64, depth_in: f64, flare_deg: f64, rp: &RaceParams) -> Result<RaceResult> {
+pub fn run(hull: &Hull, hull_lb: f64, depth_in: f64, ts: Topsides, rp: &RaceParams) -> Result<RaceResult> {
     rp.validate()?;
-    let top = topsides(hull, depth_in, flare_deg);
+    let top = topsides(hull, depth_in, ts);
     // Parallel over events; collect keeps input order (deterministic).
     let events = rp.events.par_iter().map(|e| run_event(&top, hull_lb, rp, e)).collect::<Result<Vec<_>>>()?;
     let weighted_time_s = events.iter().map(|e| e.weight * e.time_s).sum();
@@ -910,7 +910,7 @@ mod tests {
     }
 
     fn off1() -> Hull {
-        topsides(&Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap(), 12.0, 0.0)
+        topsides(&Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap(), 12.0, Topsides::default())
     }
 
     #[test]
@@ -962,15 +962,15 @@ mod tests {
     fn planned_time_matches_the_optimal_run_on_the_reference() {
         let rp = params();
         let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
-        let top = topsides(&hull, 12.0, 0.0);
+        let top = topsides(&hull, 12.0, Topsides::default());
         let plan = plan(&top, 100.0, &rp).unwrap();
-        let full = run(&hull, 100.0, 12.0, 0.0, &rp).unwrap();
+        let full = run(&hull, 100.0, 12.0, Topsides::default(), &rp).unwrap();
         let t = planned_time(&top, 100.0, &rp, &plan).unwrap();
         // Same path; exact vs tabulated turn drag only.
         assert!((t / full.weighted_time_s - 1.0).abs() < 1e-3, "{t} vs {}", full.weighted_time_s);
         // A heavier wall is slower on the same paths, and re-planning can only help it.
         let heavy = planned_time(&top, 140.0, &rp, &plan).unwrap();
-        let replanned = run(&hull, 140.0, 12.0, 0.0, &rp).unwrap().weighted_time_s;
+        let replanned = run(&hull, 140.0, 12.0, Topsides::default(), &rp).unwrap().weighted_time_s;
         assert!(heavy > t && replanned <= heavy + 1e-3, "{heavy} {replanned}");
         // Second order: the held path costs < 0.2% here.
         assert!(heavy / replanned - 1.0 < 2e-3, "{heavy} vs {replanned}");
@@ -1106,13 +1106,19 @@ mod tests {
     fn recommendation_and_calibration() {
         let rp = params();
         let hull = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
-        let r = run(&hull, 100.0, 12.0, 0.0, &rp).unwrap();
+        let r = run(&hull, 100.0, 12.0, Topsides::default(), &rp).unwrap();
         let rec = &r.recommended;
         assert!(rec.straight_weight > 0.5 && rec.straight_weight < 1.0, "{}", rec.straight_weight);
         assert_eq!(rec.displacements.len(), 1);
         assert!((rec.displacements[0].weight - 1.0).abs() < 1e-12);
-        let p =
-            calibrate_power(&topsides(&hull, 12.0, 0.0), 100.0, &rp, "2M", r.events[0].time_s * 0.9).unwrap();
+        let p = calibrate_power(
+            &topsides(&hull, 12.0, Topsides::default()),
+            100.0,
+            &rp,
+            "2M",
+            r.events[0].time_s * 0.9,
+        )
+        .unwrap();
         assert!(p > 100.0, "faster measured time needs more power, got {p}");
     }
 }

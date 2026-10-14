@@ -90,6 +90,7 @@ aft_len_frac  = [0.3, 0.5]
 # beam_step_in   = 0.5
 # rocker_in = [0.5, 3.0]          # keel rise at 5% L from each end, in; outside = rejected
 # min_entry_angle_deg = 8.0       # waterline entry half-angle; finer bows rejected
+# gunwale_radius_in = [150.0, 800.0]  # constructable line-arc-line gunwale, radius searched (examples/shape_gunwale.toml)
 # symmetric = false               # true: aft factors follow the fore ones
 samples       = 96
 refine_rounds = 6
