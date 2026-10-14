@@ -1024,7 +1024,7 @@ pub fn eval_case(
     let max_paddler =
         case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
     let mut best: Option<(Loads, Verdict, (f64, f64))> = None;
-    for &(dead, live) in mat.method.combos() {
+    for (dead, live) in mat.combos() {
         let loads = if (dead, live) == (1.0, 1.0) {
             service.clone()
         } else {

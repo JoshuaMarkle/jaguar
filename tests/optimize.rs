@@ -427,3 +427,28 @@ fn lrfd_punching_scales_and_is_heavier() {
         assert!(w.candidate.hull_weight_lb > asd.candidate.hull_weight_lb);
     }
 }
+
+/// LRFD load factors are inputs: a larger paddler factor raises the same wall's D/C and never
+/// lightens the winner; the default factors reproduce 1.2D+1.6L.
+#[test]
+fn lrfd_live_factor_moves_the_answer() {
+    let (mut p, h) = example();
+    p.material.method = jaguar::params::DesignMethod::Lrfd;
+    p.search.thickness_in = [0.375, 0.5, 0.0625];
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    let base = optimize::run(&p, &h).unwrap();
+    p.material.lrfd_live = 2.0;
+    let heavy = optimize::run(&p, &h).unwrap();
+    let key = |c: &optimize::Candidate| (c.thickness_in, c.density_pcf, c.depth_in);
+    let mut compared = 0;
+    for (a, b) in base.candidates.iter().zip(&heavy.candidates) {
+        assert_eq!(key(a), key(b));
+        if let (Some(va), Some(vb)) = (&a.verdict, &b.verdict) {
+            assert!(vb.dc > va.dc, "{:?}: {} vs {}", key(a), vb.dc, va.dc);
+            compared += 1;
+        }
+    }
+    assert!(compared > 10);
+    let w = |r: &optimize::RunResult| r.winner.as_ref().map_or(f64::INFINITY, |w| w.candidate.hull_weight_lb);
+    assert!(w(&heavy) >= w(&base));
+}

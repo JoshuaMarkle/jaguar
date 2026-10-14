@@ -268,12 +268,23 @@ pub struct Material {
     /// [min tested - this, max tested + this] are not searched.
     pub density_extrapolation_pcf: f64,
     /// "asd" (default): service loads, every capacity / `factor_of_safety`.
-    /// "lrfd": strength envelope 1.2D+1.6L and 0.9D+1.6L (L = crew x
-    /// dynamic factor), capacity x phi (ACI 318-19 21.2.1: 0.60 plain
-    /// concrete, 0.75 for `aci_22_6` punching); `factor_of_safety` unused.
+    /// "lrfd": strength envelope lrfd_dead D + lrfd_live L and lrfd_dead_min D +
+    /// lrfd_live L (default 1.2D+1.6L, 0.9D+1.6L; L = crew x dynamic factor),
+    /// capacity x phi (ACI 318-19 21.2.1: 0.60 plain concrete, 0.75 for
+    /// `aci_22_6` punching); `factor_of_safety` unused.
     /// Freeboard, GM and drag always use service loads.
     #[serde(default)]
     pub method: DesignMethod,
+    /// LRFD factor on self weight; the buoyancy is solved to balance the
+    /// factored weight, so it carries the same factor. Default 1.2.
+    #[serde(default = "lrfd_dead")]
+    pub lrfd_dead: f64,
+    /// LRFD factor on self weight in the light-dead combination (default 0.9).
+    #[serde(default = "lrfd_dead_min")]
+    pub lrfd_dead_min: f64,
+    /// LRFD factor on the paddler loads (default 1.6).
+    #[serde(default = "lrfd_live")]
+    pub lrfd_live: f64,
     pub factor_of_safety: f64,
     /// Multiplier on crew weight for paddling impact.
     pub dynamic_load_factor: f64,
@@ -290,12 +301,24 @@ pub enum DesignMethod {
     Lrfd,
 }
 
-impl DesignMethod {
+fn lrfd_dead() -> f64 {
+    1.2
+}
+fn lrfd_dead_min() -> f64 {
+    0.9
+}
+fn lrfd_live() -> f64 {
+    1.6
+}
+
+impl Material {
     /// (dead, live) load factors of every strength combination.
-    pub fn combos(self) -> &'static [(f64, f64)] {
-        match self {
-            DesignMethod::Asd => &[(1.0, 1.0)],
-            DesignMethod::Lrfd => &[(1.2, 1.6), (0.9, 1.6)],
+    pub fn combos(&self) -> Vec<(f64, f64)> {
+        match self.method {
+            DesignMethod::Asd => vec![(1.0, 1.0)],
+            DesignMethod::Lrfd => {
+                vec![(self.lrfd_dead, self.lrfd_live), (self.lrfd_dead_min, self.lrfd_live)]
+            }
         }
     }
 }
@@ -737,6 +760,12 @@ impl Params {
         {
             bail!("material: need flex_over_split > 0 and density_extrapolation_pcf >= 0");
         }
+        let m = &self.material;
+        if !([m.lrfd_dead, m.lrfd_dead_min, m.lrfd_live].iter().all(|v| v.is_finite() && *v > 0.0)
+            && m.lrfd_dead_min <= m.lrfd_dead)
+        {
+            bail!("material: need lrfd_dead, lrfd_dead_min, lrfd_live > 0 and lrfd_dead_min <= lrfd_dead");
+        }
         if self.objective.speed_mps.is_nan() || self.objective.speed_mps <= 0.0 {
             bail!("objective.speed_mps must be > 0");
         }
@@ -839,6 +868,20 @@ mod tests {
         assert!(e.contains("needs [race] and [shape_search]"), "{e}");
         let p = Params::load(Path::new("examples/shape_race.toml")).unwrap();
         assert_eq!(p.objective.kind, ObjectiveKind::Race);
+    }
+
+    #[test]
+    fn lrfd_factors_are_inputs() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let p = Params::parse(&text, Path::new("examples")).unwrap();
+        assert_eq!((p.material.lrfd_dead, p.material.lrfd_dead_min, p.material.lrfd_live), (1.2, 0.9, 1.6));
+        assert_eq!(p.material.combos(), vec![(1.0, 1.0)], "asd: service loads");
+        let lrfd = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead = 1.25\nlrfd_live = 1.5");
+        let p = Params::parse(&lrfd, Path::new("examples")).unwrap();
+        assert_eq!(p.material.combos(), vec![(1.25, 1.5), (0.9, 1.5)]);
+        let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_min = 1.3");
+        let e = Params::parse(&bad, Path::new("examples")).unwrap_err().to_string();
+        assert!(e.contains("lrfd_dead_min <= lrfd_dead"), "{e}");
     }
 
     #[test]

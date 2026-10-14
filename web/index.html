@@ -222,6 +222,9 @@ const FIELDS = {
     ['density_extrapolation_pcf', 'Density extrapolation', 'pcf', 'How far beyond the lightest and heaviest tested mixes the search may go. The strength line is fitted through only a few lab points, so far outside them it is a guess.', 'any', 0],
     ['factor_of_safety', 'Factor of safety', '-', 'Strength is divided by this. Must be at least 1.', 'any', 1],
     ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight to cover paddling impact.', 'any', 0],
+    ['lrfd_dead', 'LRFD dead factor', '-', 'Design method lrfd only: factor on the self weight (the buoyancy balancing it carries the same factor). Default 1.2.', 'any', 0],
+    ['lrfd_dead_min', 'LRFD light-dead factor', '-', 'Design method lrfd only: self-weight factor of the second combination (light hull, full crew). Default 0.9.', 'any', 0],
+    ['lrfd_live', 'LRFD paddler factor', '-', 'Design method lrfd only: factor on the paddler loads (after the dynamic load factor). Default 1.6.', 'any', 0],
     ['knee_patch_in', 'Knee patch length', 'in', 'Length of the knee contact patch. Never zero: a point load makes D/C stop converging.', 'any', 0]],
   seats: [
     ['spacing_min_in', 'Min seat spacing', 'in', 'Auto seats: knees of neighbouring paddlers at least this far apart.', 'any', 0],

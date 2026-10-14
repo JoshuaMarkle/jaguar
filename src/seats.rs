@@ -142,7 +142,7 @@ struct Surrogate<'a> {
     nodes: Vec<Option<Node>>,
     /// Paddler weights x dynamic factor, `weights_lb` order.
     lb: Vec<f64>,
-    combos: &'static [(f64, f64)],
+    combos: Vec<(f64, f64)>,
     /// Allowables: tension, compression, shear, Kupfer f'c.
     cap: [f64; 4],
 }
@@ -163,7 +163,7 @@ impl<'a> Surrogate<'a> {
         let lb: Vec<f64> = case.weights_lb.iter().map(|w| w * mat.dynamic_load_factor).collect();
         let w: f64 = lb.iter().sum();
         let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
-        let combos = mat.method.combos();
+        let combos = mat.combos();
         let n = grid.nx();
         let x = grid.x.clone();
         let mut cap = [f64::NAN; 4];
@@ -174,7 +174,7 @@ impl<'a> Surrogate<'a> {
                 let service = solve(grid, sec, rho, &[CrewLoad { x_in: xe, lb: w }], patch, cg).ok()?;
                 let fb = crate::check::freeboard(grid, &service);
                 let (mut v0, mut m0, mut hoop) = (Vec::new(), Vec::new(), Vec::new());
-                for &(dead, live) in combos {
+                for &(dead, live) in &combos {
                     let ld = if (dead, live) == (1.0, 1.0) {
                         service.clone()
                     } else {

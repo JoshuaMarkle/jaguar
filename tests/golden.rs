@@ -61,6 +61,9 @@ fn golden_bending_dc() {
             flex_over_split: 1.0,
             density_extrapolation_pcf: 0.0,
             method: jaguar::params::DesignMethod::Asd,
+            lrfd_dead: 1.2,
+            lrfd_dead_min: 0.9,
+            lrfd_live: 1.6,
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),
@@ -181,8 +184,8 @@ fn golden_strength_checks_per_combination() {
         let sec = section::sections(&grid, f(i, "thickness"));
         let rho = f(i, "density");
         let combos = o["combos"].as_array().unwrap();
-        assert_eq!(combos.len(), p.material.method.combos().len(), "case {n}: combination count");
-        for (cb, &(dead, live)) in combos.iter().zip(p.material.method.combos()) {
+        assert_eq!(combos.len(), p.material.combos().len(), "case {n}: combination count");
+        for (cb, (dead, live)) in combos.iter().zip(p.material.combos()) {
             assert_eq!((f(cb, "dead"), f(cb, "live")), (dead, live), "case {n}: combination factors");
             let crew: Vec<CrewLoad> =
                 crew(i).into_iter().map(|c| CrewLoad { lb: c.lb * live, ..c }).collect();

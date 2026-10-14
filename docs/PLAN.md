@@ -55,8 +55,6 @@ planned for the midpoint shape, the winner re-raced on its own (`examples/shape_
 share straight-resistance tables between crews of similar weight (draft interpolation).
 T63 (web Race tab, `POST /api/race`) is done. Open: editing `[race]` courses and events in the
 form (today they come from canoe.toml).
-- **C6 (T64). LRFD factors as inputs**: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`
-  (today hard-coded 1.2 / 0.9 / 1.6 in `params.rs`).
 
 Declined 2026-10-13 (do not build): multi-mix zones / I-beam pours, multi-pour graph, mix re-sweep
 with zones.
@@ -81,13 +79,13 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Mixes separate from construction layers | layers done (T47); multi-mix declined |
 | Race cases 4/3/2 entered separately | done: 2M + 2F on in canoe.toml; 3M/3F/4_coed commented (fail GM at assumed crew CG) |
 | Graphs: M, V, D/C(x), all cases with toggles | done (T40, T41, T50 biaxial in D/C(x)) |
-| LRFD 1.2 / 1.6 | done (T46) |
+| LRFD 1.2 / 1.6 | done (T46; factors are inputs since T64) |
 | Auto seat solver + variance, manual override | done (T57, `[seats]`) |
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | declined 2026-10-13 |
 | Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective, T63 web tab) |
-| LRFD factors as inputs (1.2 / 1.6 blanks) | open (C6) |
+| LRFD factors as inputs (1.2 / 1.6 blanks) | done (T64: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`) |
 
 ## How to take a task
 

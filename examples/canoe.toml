@@ -53,6 +53,9 @@ mix_data = "../data/mix_tests.csv"
 flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
 density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
 method = "asd"            # "asd": capacity / factor_of_safety. "lrfd": 1.2D+1.6L & 0.9D+1.6L, phi 0.60 (0.75 aci_22_6 punching). lrfd -> 120.7 lb here
+# lrfd_dead = 1.2         # lrfd: factor on self weight (buoyancy balances the factored weight, so it carries it too)
+# lrfd_dead_min = 0.9     # lrfd: self-weight factor of the light-dead combination
+# lrfd_live = 1.6         # lrfd: factor on paddler loads
 factor_of_safety = 1.5
 dynamic_load_factor = 1.2
 knee_patch_in = 3.0       # never 0: a point load does not converge
