@@ -1,3 +1,4 @@
 # Shell hooks MUST stay LF: a CRLF in the `#!/bin/sh` shebang breaks execution
 # when Git Bash runs the hook on Windows.
 .githooks/pre-commit text eol=lf
+web/vendor/** -text
