@@ -558,9 +558,14 @@ pub struct Stability {
     /// Height of the crew's centre of gravity above the keel, in (kneeling
     /// paddlers ~12 in; an assumption, not a measurement).
     pub crew_cg_in: f64,
-    /// Minimum metacentric height GM_T, in. GM > 0 = upright is stable.
-    /// Without this gate a shape search makes the hull as narrow as possible.
+    /// Minimum metacentric height GM_T, in, of EVERY load case (and seat
+    /// sample). GM > 0 = upright is stable. Without this gate a shape search
+    /// makes the hull as narrow as possible.
     pub gm_min_in: f64,
+    /// Minimum GM_T of the empty canoe (no crew), in. Absent = not gated (it is
+    /// still computed and reported).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gm_empty_min_in: Option<f64>,
 }
 
 /// What "best" means.
@@ -925,6 +930,9 @@ impl Params {
         }
         if self.stability.crew_cg_in.is_nan() || self.stability.crew_cg_in < 0.0 {
             bail!("stability.crew_cg_in must be >= 0");
+        }
+        if self.stability.gm_empty_min_in.is_some_and(|g| !g.is_finite()) {
+            bail!("stability.gm_empty_min_in must be a number");
         }
         if let Some(f) = &self.flotation
             && !(f.air_pocket_max_in >= 0.0 && f.swamp_factor > 0.0 && f.swamp_factor.is_finite())

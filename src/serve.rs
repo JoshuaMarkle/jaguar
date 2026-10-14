@@ -973,6 +973,8 @@ mod tests {
                     drag_n: None,
                     race_s: None,
                     air_pocket_in: None,
+                    gm_cases_in: vec![],
+                    gm_empty_in: None,
                     thickness_in: 0.5,
                     density_pcf: 60.0,
                     mix: None,

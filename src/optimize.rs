@@ -66,6 +66,13 @@ pub struct Candidate {
     /// Loaded transverse metacentric height GM_T, in, worst load case.
     /// None until computed or if analysis failed. Gate: gm >= stability.gm_min_in.
     pub gm_in: Option<f64>,
+    /// GM_T per load case (input order), in: the worst seat sample evaluated
+    /// (all of them for a passing candidate). Empty until computed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gm_cases_in: Vec<f64>,
+    /// GM_T of the empty canoe (no crew), in. Gate: >= stability.gm_empty_min_in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gm_empty_in: Option<f64>,
     /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
     /// (heaviest) load case. None unless objective.kind = drag.
     pub drag_n: Option<f64>,
@@ -504,6 +511,8 @@ pub struct EmptyFloat {
     pub trim_in: Option<f64>,
     /// Minimum freeboard over the stations, in.
     pub freeboard_in: Option<f64>,
+    /// Transverse metacentric height GM_T of the empty canoe, in.
+    pub gm_in: Option<f64>,
     pub x_in: Vec<f64>,
     /// Local waterline height above keel, in.
     pub waterline_in: Vec<f64>,
@@ -523,6 +532,7 @@ pub fn empty_float_wall(params: &Params, grid: &Grid, sec: &Sections, wall: Wall
             draft_in: Some(loads.draft_in),
             trim_in: Some(loads.trim_in),
             freeboard_in: Some(freeboard(grid, &loads)),
+            gm_in: Some(loads.gm_in),
             x_in: grid.x.clone(),
             waterline_in: waterline(grid, &loads),
         },
@@ -1215,7 +1225,9 @@ fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &Z
         }
         let fb_ok = c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= params.gates.freeboard_min_in);
         let dc_over = c.verdict.as_ref().is_some_and(|v| v.dc > gate);
-        let gm_short = c.gm_in.is_some_and(|g| g < params.stability.gm_min_in);
+        let st = &params.stability;
+        let gm_short = c.gm_in.is_some_and(|g| g < st.gm_min_in)
+            || c.gm_empty_in.zip(st.gm_empty_min_in).is_some_and(|(g, m)| g < m);
         let need = if c.passes || c.error.is_some() || !fb_ok {
             Vec::new()
         } else if dc_over {
@@ -2210,6 +2222,8 @@ fn evaluate_wall(
         drag_n: None,
         race_s: None,
         air_pocket_in: None,
+        gm_cases_in: vec![],
+        gm_empty_in: None,
         thickness_in: t,
         density_pcf: rho,
         depth_in: grid.depth,
@@ -2237,10 +2251,21 @@ fn evaluate_wall(
             return c;
         }
     };
+    // The empty canoe: GM always reported; an error only fails the candidate when it is gated.
+    let (patch, cg) = (params.material.knee_patch_in, params.stability.crew_cg_in);
+    match wall.solve(grid, sec, 1.0, &[], patch, cg) {
+        Ok(l) => c.gm_empty_in = Some(l.gm_in),
+        Err(e) if params.stability.gm_empty_min_in.is_some() => {
+            c.error = Some(format!("empty canoe: {e:#}"));
+            return c;
+        }
+        Err(_) => {}
+    }
     for (case, seats) in params.load_cases.iter().zip(plan) {
         let v = match eval_envelope_wall(params, fit, grid, sec, wall, case, &seats.seats_in, early_exit) {
             Ok(env) => {
                 gm = gm.min(env.gm_in);
+                c.gm_cases_in.push(env.gm_in);
                 let lb: f64 = case.weights_lb.iter().sum();
                 if heaviest.is_none_or(|(h, _)| lb > h) {
                     heaviest = Some((lb, env.nominal.service.draft_in));
@@ -2307,9 +2332,15 @@ fn evaluate_wall(
                 }
             }
         }
+        let empty_ok = match (params.stability.gm_empty_min_in, c.gm_empty_in) {
+            (None, _) => true,
+            (Some(m), Some(g)) => g >= m,
+            (Some(_), None) => false,
+        };
         c.passes = v.dc <= params.gates.dc_search
             && v.freeboard_in >= params.gates.freeboard_min_in
-            && gm >= params.stability.gm_min_in;
+            && gm >= params.stability.gm_min_in
+            && empty_ok;
         c.verdict = Some(v);
         c.governing_case = Some(name);
     } else {

@@ -136,7 +136,12 @@ fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
     let var = if k.seat_variance_in > 0.0 { format!(" +/-{}", k.seat_variance_in) } else { String::new() };
     let state = match (&k.error, &k.verdict) {
         (Some(e), _) => format!("error: {}", e.chars().take(40).collect::<String>()),
-        (None, Some(v)) => format!("D/C {:.3}  fb {:.2} in", v.dc, v.freeboard_in),
+        (None, Some(v)) => format!(
+            "D/C {:.3}  fb {:.2} in{}",
+            v.dc,
+            v.freeboard_in,
+            k.gm_in.map_or(String::new(), |g| format!("  GM {g:.2} in"))
+        ),
         (None, None) => "-".to_string(),
     };
     format!("        case {:<12} seats [{}] in{src}{var}  {state}", k.name, seats.join(", "))
@@ -421,8 +426,12 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 ));
             }
             let mut extra = vec![];
+            if let Some(g) = c.gm_empty_in {
+                let min = p.stability.gm_empty_min_in.map_or(String::new(), |m| format!(" (min {m:.2})"));
+                extra.push(format!("GM empty {g:.2} in{min}"));
+            }
             if let Some(gm) = c.gm_in {
-                extra.push(format!("GM {gm:.2} in (min {:.2})", p.stability.gm_min_in));
+                extra.push(format!("loaded {gm:.2} in (min {:.2}, worst case)", p.stability.gm_min_in));
             }
             if let Some(d) = c.drag_n {
                 extra.push(format!(
@@ -513,9 +522,21 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                     let gm_min = p.stability.gm_min_in;
                     let gm_fail = analysed.iter().filter(|c| c.gm_in.is_some_and(|g| g < gm_min)).count();
                     let best_gm = analysed.iter().filter_map(|c| c.gm_in).fold(f64::NEG_INFINITY, f64::max);
+                    let empty_min = p.stability.gm_empty_min_in;
+                    let empty_fail = analysed
+                        .iter()
+                        .filter(|c| c.gm_empty_in.zip(empty_min).is_some_and(|(g, m)| g < m))
+                        .count();
+                    let best_empty =
+                        analysed.iter().filter_map(|c| c.gm_empty_in).fold(f64::NEG_INFINITY, f64::max);
                     let blocker = if gm_fail == analysed.len() {
                         format!(
                             "stability: best GM {best_gm:.2} in < gm_min {gm_min:.2} in (hull too narrow/tender)"
+                        )
+                    } else if empty_fail == analysed.len() {
+                        format!(
+                            "stability: best empty-canoe GM {best_empty:.2} in < gm_empty_min {:.2} in",
+                            empty_min.unwrap_or(0.0)
                         )
                     } else if dc_ok == 0 && fb_ok == 0 {
                         "both D/C and freeboard".to_string()
@@ -698,6 +719,8 @@ mod tests {
             drag_n: None,
             race_s: None,
             air_pocket_in: None,
+            gm_cases_in: vec![],
+            gm_empty_in: None,
             thickness_in: t,
             density_pcf: rho,
             mix: None,
@@ -876,7 +899,7 @@ mod tests {
         assert!(s.contains("strength: final split ="));
         assert!(s.contains("NOTE density 70 pcf"));
         assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in  draft 5.9 in"));
-        assert!(s.contains("GM 4.30 in (min"));
+        assert!(s.contains("loaded 4.30 in (min"));
         assert!(s.contains("drag 5.19 lb (23.1 N) at"));
         assert!(s.contains("race 104.2 s weighted"));
         assert!(s.contains("shape fore_wp"));

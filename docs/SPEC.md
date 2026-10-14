@@ -139,7 +139,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
      profile (h = local waterline - keel), each side a cantilever from the keel:
      sigma_y = 3 p h^2 / t^2 (`check::hoop_psi`). Absent = sigma_y 0
 6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
-   GM_T >= `gm_min_in` for every load case (and seat sample), and, with `[flotation]`, the canoe floats swamped
+   GM_T >= `gm_min_in` for every load case (and seat sample), the empty canoe (no crew) has GM_T >=
+   `stability.gm_empty_min_in` when that is given (optional; always computed: candidate `gm_empty_in`,
+   per-case `gm_cases_in`, winner `empty.gm_in`), and, with `[flotation]`, the canoe floats swamped
    (`src/flotation.rs`): wall volume + sealed bow and stern air pockets (equal length l from each
    tip, full hull interior up to D = enclosed area minus wall area) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
    by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are

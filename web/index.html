@@ -265,7 +265,7 @@ const FIELDS = {
     ['variance_in', 'Seat variance', 'in', 'Every load case must also pass with each knee moved up to this far forward or aft of its seat (all corners are checked). 0 = exact seats only.', 'any', 0]],
   stability: [
     ['crew_cg_in', 'Crew CG height', 'in', 'Height of the paddlers\' centre of gravity above the keel. Kneeling paddlers are about 12 in (an assumption, not a measurement). Higher = tippier.', 'any', 0],
-    ['gm_min_in', 'Min GM', 'in', 'Minimum metacentric height (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
+    ['gm_min_in', 'Min GM, each load case', 'in', 'Minimum metacentric height of EVERY load case (how strongly the loaded canoe rights itself when tilted). Above 0 = it will not tip over at rest. Without this a shape search would make the hull as narrow as possible.', 'any']],
   objective: [
     ['speed_mps', 'Race speed', 'm/s', 'Speed at which water resistance is computed for the drag objective. A 2-person sprint is about 2.5 m/s.', 'any', 0],
     ['straight_weight', 'Straight-line share', '-', 'Drag objective with shape search only: share of the shape score that is straight-line drag (0..1). The rest goes to the drag of holding a steady turn. 1 = drag only. Below 1 needs Optimize for = drag and Optimize hull shape on.', 'any', 0],
@@ -311,6 +311,7 @@ const SHAPE_OPT = [
   ['draft_step_in', 'Draft step', 'in', 'Snap the sampled design draft to multiples of this. Empty = continuous. (Mold depth already steps by the search range.)', 'continuous'],
   ['min_entry_angle_deg', 'Min entry angle', 'deg', 'Smallest allowed waterline entry half-angle at the bow (chord over the first 5% of length). Finer bows are rejected as unbuildable. Empty = no limit.', 'no limit'],
 ];
+const GME_T = 'Minimum metacentric height of the empty canoe (no crew aboard): how strongly it rights itself when it sits empty in the water, e.g. at the dock or launching. Empty = not gated (still computed and shown).';
 const FIL_T = 'Side-view radius where the stem meets the keel line (the forefoot) at the bow and stern, so the bottom has no point (a stress concentration). The corner is cut on this arc; each waterline it shortens keeps its shape at the tip, so the entry angle stays as sharp. Length is unchanged. Empty = pointed forefoot.';
 const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius or gunwale outline). Then Run analyses that design; Race races it.';
 const TPL_T = 'Constructable mold: build the hull from this many cross-section templates (tips included, closer at the ends) with straight surfaces between them, as hot-wire foam or frames with straight battens produce. The analysis, export and 3D view use that loft; with shape search the optimizer tunes it. 9-11 cost about 1% race time (docs/HULLS.md). Empty = smooth hull.';
@@ -419,7 +420,8 @@ function buildForm() {
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
     + section('search', FIELDS.search.map(f => triRow(f)).join('') + triRow(FLARE_AX))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
-    + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join(''))
+    + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join('')
+      + row('stability.gm_empty_min_in', 'Min GM, empty canoe', GME_T, '<input type="number" id="stability.gm_empty_min_in" step="any" placeholder="not gated">', 'in'))
     + section('flotation',
       row('flotation.on', 'Swamped flotation gate', flt, '<input type="checkbox" class="switch" id="flotation.on">')
       + `<div id="flotbody" style="display:grid;gap:var(--s1)">${FIELDS.flotation.map(f => numRow('flotation', f)).join('')}</div>`)
@@ -592,6 +594,7 @@ function fillForm(p, hulls) {
   const ds = p.objective.displacements;
   setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
+  $('stability.gm_empty_min_in').value = p.stability.gm_empty_min_in ?? '';
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
@@ -629,6 +632,7 @@ function formToml() {
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
+    if (sec === 'stability' && g('stability.gm_empty_min_in').trim() !== '') out.push(`gm_empty_min_in = ${fl(g('stability.gm_empty_min_in'))}`);
     if (sec === 'search') {
       const fa = [0, 1, 2].map(n => g(`search.flare_deg.${n}`).trim());
       if (fa.some(v => v !== '')) {
@@ -857,7 +861,7 @@ let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
   thickness: ['thickness', 'in', k => k.thickness_in], density: ['density', 'pcf', k => k.density_pcf], depth: ['depth', 'in', k => k.depth_in],
-  freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'lb', k => typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null],
+  freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM loaded', 'in', k => k.gm_in], gmempty: ['GM empty', 'in', k => k.gm_empty_in], drag: ['drag', 'lb', k => typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null],
   length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in],
   race: ['race time', 's', k => typeof k.race_s === 'number' ? k.race_s : null]};
 const defaultX = () => objKind === 'drag' ? 'drag' : objKind === 'race' ? 'race' : 'weight';
@@ -1443,6 +1447,18 @@ function savingRow(c) {
   const s = z.saved_lb || 0;
   return kv('Two-mix saving', `${s.toFixed(1)} lb <span class="muted">${(100 * s / z.single_mix_lb).toFixed(1)}% vs single mix ${z.single_mix_lb.toFixed(1)} lb</span>`, t);
 }
+// GM of the empty canoe (with its gate, if any), then each load case against the per-case gate.
+function gmRows(c, f) {
+  const st = (result && result.params && result.params.stability) || {};
+  const gate = (g, m) => m == null ? '' : ` <span class="muted">gate &ge; ${f(m, 2)}</span>${g < m ? ' <span class="t-error">below gate</span>' : ''}`;
+  const out = [];
+  if (typeof c.gm_empty_in === 'number') out.push(kv('GM, empty canoe', `${f(c.gm_empty_in, 2)} in${gate(c.gm_empty_in, st.gm_empty_min_in)}`, 'Metacentric height with no crew aboard.'));
+  const names = ((result && result.params && result.params.load_case) || []).map(lc => lc.name);
+  const per = Array.isArray(c.gm_cases_in) ? c.gm_cases_in : [];
+  if (per.length) per.forEach((g, i) => out.push(kv(`GM, ${esc(names[i] || 'case ' + (i + 1))}`, `${f(g, 2)} in${gate(g, gmGate)}`, 'Metacentric height of this load case, worst seat sample.')));
+  else out.push(kv('GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'}${gate(c.gm_in, gmGate)}`, 'Metacentric height (stability), worst load case.'));
+  return out.join('');
+}
 function showWinner() {
   const box = $('winner');
   if (!result) { box.innerHTML = '<span class="muted">No result yet.</span>'; return; }
@@ -1476,7 +1492,7 @@ function showWinner() {
     ${kv('Depth', `${f(c.depth_in, 2)} in`)}
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
     ${typeof c.drag_n === 'number' ? kv('Drag', dragTxt(c.drag_n)) : ''}
-    ${kv('GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>${gmBelow ? ' <span class="t-error">below gate</span>' : ''}`, 'Metacentric height (stability).')}
+    ${gmRows(c, f)}
     ${kv('Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`)}
     ${pocketRow(c)}
     ${kv('D/C search', `${f(v.dc, 3)}`)}
@@ -1589,7 +1605,8 @@ function reportHtml(canoeImg, charts) {
     c.zones ? ['Dense mix', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' (' + esc(c.dense_mix) + ')' : ''}; ` + c.zones.dense.map((q, n) => `${n + 1}: x ${inch(q.x0_in)}-${inch(q.x1_in)}, z ${inch(q.z0_in)}-${inch(q.z1_in)}`).join('; ')] : null,
     result.zones ? ['Two-mix saving', result.zones.single_mix_lb == null ? 'no single-mix wall passes' : `${f(result.zones.saved_lb || 0, 1)} lb vs single mix ${f(result.zones.single_mix_lb, 1)} lb`] : null,
     ['Hull weight', `${f(c.hull_weight_lb, 1)} lb`], typeof c.drag_n === 'number' ? ['Drag', `${dragTxt(c.drag_n)} at ${f(p.objective && p.objective.speed_mps, 1)} m/s`] : null,
-    ['GM', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">gate &ge; ${f(gmGate, 2)}</span>`],
+    typeof c.gm_empty_in === 'number' ? ['GM, empty canoe', `${f(c.gm_empty_in, 2)} in${p.stability && p.stability.gm_empty_min_in != null ? ` <span class="muted">gate &ge; ${f(p.stability.gm_empty_min_in, 2)}</span>` : ''}`] : null,
+    ['GM, loaded', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">worst case, gate &ge; ${f(gmGate, 2)}</span>${Array.isArray(c.gm_cases_in) && c.gm_cases_in.length ? ' (' + c.gm_cases_in.map((g, i) => `${esc((p.load_case[i] || {}).name || i + 1)} ${f(g, 2)}`).join(', ') + ')' : ''}`],
     ['Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`], pocket ? ['Air pocket', pocket] : null,
     ['D/C search', f(v.dc, 3)], ['D/C verify', `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`],
     win.dc_extrapolated != null ? ['D/C extrapolated', f(win.dc_extrapolated, 4)] : null,

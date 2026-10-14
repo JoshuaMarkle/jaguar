@@ -99,7 +99,8 @@ mold = "male"             # "male": pass 1 is the inside (knee) face; "female": 
 
 [stability]
 crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)
-gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself). GM is very sensitive to crew_cg_in (assumed)
+gm_min_in = 0.25          # min GM of EVERY load case (> 0 = rights itself). GM is very sensitive to crew_cg_in (assumed)
+gm_empty_min_in = 6.0     # min GM of the empty canoe (no crew); optional. off1 designs: 6.4 to 11.5 in (placeholder: set yours)
 
 [flotation]               # optional: ASCE swamped flotation gate (omit = no gate)
 air_pocket_max_in = 36.0  # max sealed air pocket length at each end (bow and stern)

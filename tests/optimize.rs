@@ -551,3 +551,34 @@ fn keel_fillet_keeps_length_and_reaches_the_export() {
     p.hull.keel_fillet_radius_in = Some(0.0);
     assert!(p.validate().is_err());
 }
+
+/// GM per load case and of the empty canoe: every candidate carries one GM per case (their
+/// minimum is gm_in) and the empty canoe's; stability.gm_empty_min_in gates the empty one.
+#[test]
+fn gm_per_load_case_and_empty_canoe_gate() {
+    let (mut p, h) = example();
+    p.search.thickness_in = [0.375, 0.5, 0.125];
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    p.stability.gm_empty_min_in = None;
+    let free = optimize::run(&p, &h).unwrap();
+    for c in free.candidates.iter().filter(|c| c.verdict.is_some()) {
+        assert_eq!(c.gm_cases_in.len(), p.load_cases.len());
+        let m = c.gm_cases_in.iter().cloned().fold(f64::INFINITY, f64::min);
+        assert_eq!(Some(m), c.gm_in);
+        // Empty, the canoe is far stiffer than with kneeling paddlers aboard.
+        assert!(c.gm_empty_in.unwrap() > c.gm_in.unwrap());
+    }
+    let w = free.winner.as_ref().unwrap();
+    let ge = w.candidate.gm_empty_in.unwrap();
+    assert!((w.empty.gm_in.unwrap() - ge).abs() < 0.05 * ge, "verify-grid empty GM matches");
+    // A gate under every design's empty GM changes nothing; one above all of them rejects all.
+    let lo = free.candidates.iter().filter_map(|c| c.gm_empty_in).fold(f64::INFINITY, f64::min);
+    p.stability.gm_empty_min_in = Some(lo - 0.01);
+    let same = optimize::run(&p, &h).unwrap();
+    assert_eq!(same.winner.unwrap().candidate.hull_weight_lb, w.candidate.hull_weight_lb);
+    p.stability.gm_empty_min_in = Some(100.0);
+    let none = optimize::run(&p, &h).unwrap();
+    assert!(none.winner.is_none());
+    let text = jaguar::report::summary_lines(&none).join("\n");
+    assert!(text.contains("empty-canoe GM"), "{text}");
+}
