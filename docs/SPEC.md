@@ -217,11 +217,15 @@ geometry the rules leave to the site marked as assumptions.
   (`resistance::turn`), both tabulated. Integrated in distance on v^2 (RK4, 0.25 m).
   The drag table runs to 6 m/s; a faster canoe is an error, not an extrapolation.
 * **Output** per event: time, distance, straight and turning distance and time, each segment
-  (radius, turn angle, entry / min / exit speed, drift), the path, and the time sensitivities
+  (radius, turn angle, entry / min / exit speed, drift), the path, speed along it, and the time sensitivities
   S = d ln t / d ln D for straight and turning drag. `weighted_time_s` = sum of event weight x
   time. `recommended`: `straight_weight` = sum w t S_straight / sum w t (S_straight + S_turn),
   `displacements` (same shares grouped by crew), `turn_radius_in` (turn-time weighted radius):
   values to put in `[objective]`.
+* Web UI: the Race tab races the last winner with the form's `[race]` (`POST /api/race`, or
+  `result.race` after a race-objective run): plan view of each event's path and buoys, speed
+  along the path with turns shaded, the event table and the recommended weightings. The form
+  carries `[race]` through but does not edit it (edit canoe.toml).
 * `--measured "EVENT=SECONDS"` first fits `paddler_power_w` (bisection) so that event takes the
   measured time. Calibrate before trusting absolute times; the weightings depend on it less.
 * Neglected: wind, current, yaw acceleration, stroke pulsation, heel. Drag is the rank-only

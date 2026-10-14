@@ -53,9 +53,8 @@ T62 (`objective.kind = "race"`) is done: the shape search minimises weighted rac
 planned for the midpoint shape, the winner re-raced on its own (`examples/shape_race.toml`,
 44 s on 22 threads; docs/HULLS.md). On a laptop with fewer cores it will be slower: if it matters,
 share straight-resistance tables between crews of similar weight (draft interpolation).
-- **C5 (T63). Web race tab**: run `jaguar race` on the last winner from the UI, draw each event's
-  path and speed along it, the table and the recommended weightings (docs/DESIGN.md). Today the
-  form offers objective "race" and carries `[race]` through unchanged, but cannot edit it.
+T63 (web Race tab, `POST /api/race`) is done. Open: editing `[race]` courses and events in the
+form (today they come from canoe.toml).
 - **C6 (T64). LRFD factors as inputs**: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`
   (today hard-coded 1.2 / 0.9 / 1.6 in `params.rs`).
 
@@ -87,7 +86,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Kupfer combined shear + moment | done (T45); turning hoop stress `[turning]` (T59) |
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | declined 2026-10-13 |
-| Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective); web tab C5 |
+| Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective, T63 web tab) |
 | LRFD factors as inputs (1.2 / 1.6 blanks) | open (C6) |
 
 ## How to take a task

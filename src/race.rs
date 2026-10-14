@@ -416,10 +416,27 @@ pub struct SegmentRun {
 
 /// Run `segs` from a standing start; drags scaled by (straight, turn) for sensitivities.
 fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64), ds: f64) -> Result<Vec<SegmentRun>> {
+    simulate_traced(boat, segs, scale, ds, None)
+}
+
+/// [`simulate`], also pushing (distance along the path m, speed m/s) to `trace`
+/// about every metre and at every segment end.
+fn simulate_traced(
+    boat: &Boat,
+    segs: &[Segment],
+    scale: (f64, f64),
+    ds: f64,
+    mut trace: Option<&mut Vec<[f64; 2]>>,
+) -> Result<Vec<SegmentRun>> {
     let v_max = SPEEDS as f64 * SPEED_STEP;
     let m_eff = boat.mass_kg * (1.0 + ADDED_MASS);
     let mut u: f64 = 0.0; // v^2
     let mut out = Vec::with_capacity(segs.len());
+    let (mut s0, mut last) = (0.0, f64::NEG_INFINITY);
+    if let Some(tr) = trace.as_deref_mut() {
+        tr.push([0.0, 0.0]);
+        last = 0.0;
+    }
     for sg in segs {
         let (ct, drift) = match sg.radius_m {
             Some(r) => boat.turn_coeff(r)?,
@@ -435,7 +452,7 @@ fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64), ds: f64) -> Result
         let entry = u.sqrt();
         let (mut t, mut vmin) = (0.0, entry);
         let mut k1 = f(u);
-        for _ in 0..n {
+        for j in 0..n {
             let k2 = f(u + 0.5 * h * k1);
             let k3 = f(u + 0.5 * h * k2);
             let k4 = f(u + h * k3);
@@ -456,7 +473,16 @@ fn simulate(boat: &Boat, segs: &[Segment], scale: (f64, f64), ds: f64) -> Result
             };
             (u, k1) = (u1, k1n);
             vmin = vmin.min(u.sqrt());
+            let at = s0 + h * (j + 1) as f64;
+            if let Some(tr) = trace.as_deref_mut()
+                && at > last
+                && (at - last >= 1.0 || j + 1 == n)
+            {
+                tr.push([at, u.sqrt()]);
+                last = at;
+            }
         }
+        s0 += sg.length_m;
         out.push(SegmentRun {
             mark: sg.mark,
             radius_m: sg.radius_m,
@@ -634,6 +660,8 @@ pub struct EventResult {
     pub segments: Vec<SegmentRun>,
     /// Centreline every ~1 m, (x, y) m, for drawing.
     pub path_m: Vec<[f64; 2]>,
+    /// (distance along the path m, speed m/s) about every metre and at segment ends.
+    pub speed_m: Vec<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -666,7 +694,8 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         .with_context(|| format!("race event '{}'", e.name))?;
     let x = optimal_path(&boat, course, rp).with_context(|| format!("race event '{}'", e.name))?;
     let (segs, _) = build_path(course, rp, &x).context("path")?;
-    let runs = simulate(&boat, &segs, (1.0, 1.0), DS_M)?;
+    let mut speed_m = Vec::new();
+    let runs = simulate_traced(&boat, &segs, (1.0, 1.0), DS_M, Some(&mut speed_m))?;
     let t = total_time(&runs);
     let d: f64 = 0.01;
     let sens = |sc: (f64, f64), sc2: (f64, f64)| -> Result<f64> {
@@ -708,6 +737,7 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         start_y_m: x.0[0],
         segments: runs,
         path_m,
+        speed_m,
     })
 }
 
@@ -944,6 +974,25 @@ mod tests {
         assert!(heavy > t && replanned <= heavy + 1e-3, "{heavy} {replanned}");
         // Second order: the held path costs < 0.2% here.
         assert!(heavy / replanned - 1.0 < 2e-3, "{heavy} vs {replanned}");
+    }
+
+    #[test]
+    fn speed_trace_follows_the_run() {
+        let rp = params();
+        let r = run_event(&off1(), 100.0, &rp, &rp.events[0]).unwrap();
+        let sp = &r.speed_m;
+        assert_eq!(sp[0], [0.0, 0.0]);
+        assert!(sp.windows(2).all(|w| w[1][0] > w[0][0] && w[1][0] - w[0][0] <= 1.0 + DS_M + 1e-9));
+        assert!((sp.last().unwrap()[0] - r.distance_m).abs() < 1e-9);
+        // Segment end speeds are in the trace at the segment ends.
+        let mut at = 0.0;
+        for sg in &r.segments {
+            at += sg.length_m;
+            if sg.length_m > 0.0 {
+                let p = sp.iter().find(|p| (p[0] - at).abs() < 1e-9).expect("segment end sampled");
+                assert!((p[1] - sg.exit_mps).abs() < 1e-12);
+            }
+        }
     }
 
     #[test]

@@ -47,6 +47,10 @@
 //! * `GET  /api/export?format=step|stl` -> the last run's winner as a file download
 //!   (Content-Disposition attachment; STEP AP214 solid or binary STL, inches, see
 //!   `export.rs`). 404 if no result yet, 409 if that result has no winner, 400 bad format.
+//! * `POST /api/race`      body = canoe.toml text (the form; its `[race]` section, else 400).
+//!   Races the last result's winner (`race::run`, docs/SPEC.md "Race simulator") and returns
+//!   the jaguar-race/1 JSON. Synchronous (a few seconds; other requests wait). 404 if no
+//!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //!
 //! Any panic or Err inside a run must land as state "error" with a message,
 //! never kill the server.
@@ -181,10 +185,11 @@ impl App {
                 None => err_reply(404, "no result yet"),
             },
             ("POST", "/api/run") => self.start_run(body),
+            ("POST", "/api/race") => self.race(body),
             (
                 _,
                 "/" | "/index.html" | "/api/params" | "/api/prefs" | "/api/hulls" | "/api/hull"
-                | "/api/status" | "/api/mix" | "/api/result" | "/api/run" | "/api/export",
+                | "/api/status" | "/api/mix" | "/api/result" | "/api/run" | "/api/export" | "/api/race",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
         }
@@ -357,6 +362,37 @@ impl App {
                 "candidates": new,
             }),
         )
+    }
+
+    /// `POST /api/race`: race the last winner with the posted params' `[race]`.
+    fn race(&self, body: &str) -> Reply {
+        let params = match Params::parse(body, &self.base_dir) {
+            Ok(p) => p,
+            Err(e) => return err_reply(400, format!("{e:#}")),
+        };
+        let Some(rp) = params.race else {
+            return err_reply(400, "no [race] section in the params (add one to canoe.toml)");
+        };
+        let (state, result) = {
+            let s = self.lock();
+            (s.state, s.result.clone())
+        };
+        if state == "running" {
+            return err_reply(409, "a run is going: race its winner when it is done");
+        }
+        let Some(result) = result else {
+            return err_reply(404, "no result yet: run first");
+        };
+        let input = match report::race_input(&result) {
+            Ok(i) => i,
+            Err(e) => return err_reply(409, format!("{e:#}")),
+        };
+        match crate::race::run(&input.hull, input.hull_lb, input.depth_in, input.flare_deg, &rp)
+            .and_then(|r| Ok(serde_json::to_string(&r)?))
+        {
+            Ok(s) => (200, "application/json", s),
+            Err(e) => err_reply(422, format!("{e:#}")),
+        }
     }
 
     fn start_run(&self, body: &str) -> Reply {
@@ -815,6 +851,34 @@ mod tests {
         assert!(body.contains("error"));
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/run", &a.toml_text.clone()).0, 409);
+    }
+
+    #[test]
+    fn race_needs_params_and_a_winner() {
+        let a = app();
+        let mut params = Params::parse(&a.toml_text, &a.base_dir).unwrap();
+        let mut rp = params.race.clone().expect("example has [race]");
+        rp.events.retain(|e| e.name == "Symposium men's 200 m sprint");
+        rp.events[0].weight = 1.0;
+        params.race = Some(rp);
+        let body = toml::to_string(&params).unwrap();
+        assert_eq!(a.handle("POST", "/api/race", "bogus = 1").0, 400);
+        assert_eq!(a.handle("POST", "/api/race", &body).0, 404, "no result yet");
+        let mut no_race = params.clone();
+        no_race.race = None;
+        let (st, _, msg) = a.handle("POST", "/api/race", &toml::to_string(&no_race).unwrap());
+        assert!(st == 400 && msg.contains("no [race]"), "{st} {msg}");
+        let result = crate::run(&params, &|_| {}).unwrap();
+        a.lock().result = Some(serde_json::to_string(&result).unwrap());
+        let (st, ct, body) = a.handle("POST", "/api/race", &body);
+        assert_eq!((st, ct), (200, "application/json"), "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["format"], crate::race::RACE_FORMAT);
+        assert_eq!(v["events"].as_array().unwrap().len(), 1);
+        assert!(v["events"][0]["speed_m"].as_array().unwrap().len() > 100);
+        a.lock().state = "running";
+        assert_eq!(a.handle("POST", "/api/race", &toml::to_string(&params).unwrap()).0, 409);
+        assert_eq!(a.handle("GET", "/api/race", "").0, 405);
     }
 
     #[test]

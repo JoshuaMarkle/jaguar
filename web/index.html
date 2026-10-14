@@ -686,23 +686,26 @@ function bulkhead(group, x, zs) {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C along hull'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall/density map'], ['xsec', 'Cross-sections'], ['shape', 'Shape search'], ['race', 'Race']];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
   thickness: ['thickness', 'in', k => k.thickness_in], density: ['density', 'pcf', k => k.density_pcf], depth: ['depth', 'in', k => k.depth_in],
   freeboard: ['freeboard', 'in', k => k.verdict ? k.verdict.freeboard_in : null], gm: ['GM', 'in', k => k.gm_in], drag: ['drag', 'lb', k => typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null],
-  length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in]};
+  length: ['length', 'in', k => k.length_in], beam: ['beam', 'in', k => k.beam_in],
+  race: ['race time', 's', k => typeof k.race_s === 'number' ? k.race_s : null]};
+const defaultX = () => objKind === 'drag' ? 'drag' : objKind === 'race' ? 'race' : 'weight';
 const axLabel = (l, u) => u === '-' ? l : `${l}, ${u}`;
 const axSel = { x: null, y: 'dc' };
 function buildTabs() {
   $('tabs').innerHTML = TABS.map(([id, l]) => `<button type="button" data-tab="${id}" class="${id === tab ? 'on' : ''}">${l}</button>`).join('');
   for (const b of $('tabs').children) b.onclick = () => { tab = b.dataset.tab; buildTabs(); drawPlot(); };
   const opts = v => Object.entries(AXES).map(([k, [l, u]]) => `<option value="${k}" ${k === v ? 'selected' : ''}>${axLabel(l, u)}</option>`).join('');
-  const xa = axSel.x || (objKind === 'drag' ? 'drag' : 'weight');
+  const xa = axSel.x || defaultX();
   $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
     <span class="hint" style="margin-left:auto">green = passes, grey = fails, red cross = analysis error, blue ring = winner</span>`
-    : CASE_TABS.includes(tab) ? casePills() : '';
+    : CASE_TABS.includes(tab) ? casePills() : tab === 'race' ? raceCtl() : '';
+  if (tab === 'race') raceWire();
   if (CASE_TABS.includes(tab)) for (const b of $('plotctl').querySelectorAll('button[data-case]')) b.onclick = () => { const n = b.dataset.case; caseHidden.has(n) ? caseHidden.delete(n) : caseHidden.add(n); buildTabs(); drawPlot(); };
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
@@ -787,11 +790,11 @@ function drawPlot() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
-  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape })[tab](ctx, W, H);
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, shape: plotShape, race: plotRace })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
   if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
-  const xk = axSel.x || (objKind === 'drag' ? 'drag' : 'weight'), yk = axSel.y;
+  const xk = axSel.x || defaultX(), yk = axSel.y;
   const [xl, xu, xf] = AXES[xk], [yl, yu, yf] = AXES[yk];
   const pts = cands.map(k => [xf(k), yf(k), k]).filter(p => typeof p[0] === 'number' && typeof p[1] === 'number' && isFinite(p[0]) && isFinite(p[1]));
   if (!pts.length) return msg(ctx, W, H, `No candidates have both ${xl} and ${yl}.`);
@@ -960,11 +963,11 @@ function plotXsec(ctx, W, H) {
 function plotShape(ctx, W, H) {
   const sh = cands.filter(k => k.shape);
   if (!sh.length) return msg(ctx, W, H, 'Run a shape search first (Hull: Optimize hull shape).');
-  const score = k => objKind === 'drag' ? (typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null) : k.hull_weight_lb;
+  const score = k => objKind === 'drag' ? (typeof k.drag_n === 'number' ? k.drag_n / N_PER_LBF : null) : objKind === 'race' ? k.race_s : k.hull_weight_lb;
   let best = Infinity; const bx = [], by = [];
   sh.forEach((k, i) => { if (k.passes && typeof score(k) === 'number' && score(k) < best) best = score(k); if (isFinite(best)) { bx.push(i + 1); by.push(best); } });
   const hw = (W - 40) / 2, r1 = { l: 72, t: 12, w: hw - 72, h: H - 52 }, r2 = { l: hw + 92, t: 12, w: hw - 72, h: H - 52 };
-  const ul = objKind === 'drag' ? 'best drag, lb' : 'best hull weight, lb';
+  const ul = objKind === 'drag' ? 'best drag, lb' : objKind === 'race' ? 'best weighted race time, s' : 'best hull weight, lb';
   if (bx.length) { const a = axes(ctx, r1, [1, Math.max(2, sh.length)], range2(by), 'shape evaluation #', ul); line(ctx, a, bx, by, C.ink); legend(ctx, r1.l + 10, r1.t + 16, [[C.ink, 'best passing so far']]); }
   else { ctx.strokeStyle = C.hair; ctx.strokeRect(r1.l + 0.5, r1.t + 0.5, r1.w, r1.h); ctx.fillStyle = C.faint; ctx.fillText('No passing shape yet.', r1.l + 10, r1.t + 20); }
   const a2 = axes(ctx, r2, range2(sh.map(k => k.length_in)), range2(sh.map(k => k.beam_in)), 'length, in', 'beam, in');
@@ -972,6 +975,80 @@ function plotShape(ctx, W, H) {
   for (const k of sh) if (k.passes) marker(ctx, a2.px(k.length_in), a2.py(k.beam_in), k, 3);
   const w = winC(); if (w) ring(ctx, a2.px(w.length_in), a2.py(w.beam_in));
   ctx.fillStyle = C.muted; ctx.font = font(11); ctx.fillText('green = passes, grey = fails, red cross = error, ring = winner', r2.l + 8, r2.t + 16);
+}
+
+// ---------- race tab: POST /api/race races the last winner over the form's [race] (src/race.rs) ----------
+// A race-objective run already carries result.race; the button re-races with the current form.
+let raceRes = null, raceEv = 0, raceBusy = false, raceErr = '';
+function raceCtl() {
+  const evs = raceRes ? raceRes.events : [];
+  const sel = evs.length ? `<span class="muted">event</span><select id="raceev">${evs.map((e, i) => `<option value="${i}" ${i === raceEv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>` : '';
+  return `<button type="button" class="btn" id="racego" ${raceBusy || !(result && result.winner) ? 'disabled' : ''}>${raceBusy ? 'Racing...' : 'Race winner'}</button>${sel}
+    <span class="hint" style="margin-left:auto">courses, crews and paddler power from [race]; times need calibration (jaguar race --measured)</span>`;
+}
+function raceWire() {
+  const go = $('racego'); if (go) go.onclick = raceGo;
+  const ev = $('raceev'); if (ev) ev.onchange = e => { raceEv = Number(e.target.value); drawPlot(); };
+}
+async function raceGo() {
+  let text;
+  try { text = formToml(); } catch (e) { raceErr = 'form: ' + e.message; drawPlot(); return; }
+  raceBusy = true; raceErr = ''; buildTabs(); drawPlot();
+  try {
+    const r = await fetch('/api/race', { method: 'POST', body: text });
+    const v = await r.json();
+    if (r.ok) { raceRes = v; raceEv = Math.min(raceEv, v.events.length - 1); } else raceErr = `race failed (${r.status}): ${v.error || ''}`;
+  } catch (e) { raceErr = 'race failed: ' + e.message; }
+  raceBusy = false; buildTabs(); drawPlot();
+}
+function plotRace(ctx, W, H) {
+  if (!raceRes) return msg(ctx, W, H, raceBusy ? 'Racing the winner over every [race] event...' : raceErr
+    || (result && result.winner ? 'Press "Race winner" to race it over the [race] courses.' : 'Run an optimization first, then race its winner.'));
+  const e = raceRes.events[raceEv], course = raceRes.params.course.find(c => c.name === e.course);
+  const lw = Math.max(320, W * 0.6), half = raceRes.params.lane_width_m / 2, clr = raceRes.params.buoy_clearance_m;
+  const r1 = { l: 64, t: 30, w: lw - 84, h: (H - 70) * 0.5 }, r2 = { l: 64, t: r1.t + r1.h + 44, w: lw - 84, h: (H - 70) * 0.5 - 44 };
+  // Plan view: lane edges, buoys with their clearance circle, the path.
+  const xs = e.path_m.map(p => p[0]).concat(course.marks.map(m => m.x_m), [0]);
+  const a = axes(ctx, r1, range2(xs, 0.02), [-half - 0.5, half + 0.5], 'x, m (start line x = 0)', 'y, m');
+  for (const y of [-half, half]) hline(ctx, r1.l, r1.l + r1.w, a.py(y), C.faint, [4, 4]);
+  for (const m of course.marks) {
+    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(a.px(m.x_m), a.py(m.y_m), 3, 0, 7); ctx.fill();
+    ctx.strokeStyle = C.hair; ctx.beginPath(); ctx.ellipse(a.px(m.x_m), a.py(m.y_m), Math.abs(a.px(clr) - a.px(0)), Math.abs(a.py(clr) - a.py(0)), 0, 0, 7); ctx.stroke();
+  }
+  line(ctx, a, e.path_m.map(p => p[0]), e.path_m.map(p => p[1]), C.ink);
+  legend(ctx, r1.l + 10, r1.t - 8, [[C.ink, `${e.name}: path`], [C.faint, 'lane edge', [4, 4]]]);
+  // Speed along the path; turns (arcs) shaded.
+  const sx = e.speed_m.map(p => p[0]), sv = e.speed_m.map(p => p[1]);
+  const a2 = axes(ctx, r2, [0, e.distance_m], [0, Math.max(...sv) * 1.1], 'distance along the path, m', 'speed, m/s');
+  let at = 0; ctx.fillStyle = 'rgba(20,20,20,0.06)';
+  for (const sg of e.segments) { if (sg.radius_m != null) ctx.fillRect(a2.px(at), r2.t, a2.px(at + sg.length_m) - a2.px(at), r2.h); at += sg.length_m; }
+  line(ctx, a2, sx, sv, C.ink);
+  legend(ctx, r2.l + 10, r2.t + 16, [[C.ink, 'speed'], [C.faint, 'shaded = turning (arc)']]);
+  // Table: every event, then the weightings for [objective].
+  // Rows stop at the bottom edge (the turn list is the first to go on a short pane).
+  let x = lw + 8, y = 24; const row = (t, w = 450, col = C.ink) => { if (y > H - 6) return; ctx.font = font(11, w); ctx.fillStyle = col; ctx.fillText(t, x, y); y += 16; };
+  row(`${raceRes.hull} at ${raceRes.hull_lb.toFixed(1)} lb: weighted time ${raceRes.weighted_time_s.toFixed(1)} s`, 652);
+  // One row per event: name, then right-aligned columns (straight / turning as metres / seconds).
+  const cols = [['time s', k => k.time_s.toFixed(1)], ['straight m / s', k => `${k.straight_m.toFixed(0)} / ${k.straight_s.toFixed(0)}`],
+    ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0)]];
+  const cw = 78, nameW = Math.max(120, W - x - 12 - cw * cols.length);
+  const cells = (name, vals, w, col) => {
+    ctx.font = font(11, w); ctx.fillStyle = col; ctx.textAlign = 'left';
+    let n = name; while (n.length > 4 && ctx.measureText(n).width > nameW - 6) n = n.slice(0, -2);
+    ctx.fillText(n === name ? n : n + '...', x, y); ctx.textAlign = 'right';
+    vals.forEach((v, j) => ctx.fillText(v, x + nameW + cw * (j + 1), y)); ctx.textAlign = 'left'; y += 16;
+  };
+  cells('event', cols.map(c => c[0]), 450, C.muted);
+  raceRes.events.forEach((k, i) => cells(k.name, cols.map(c => c[1](k)), i === raceEv ? 652 : 450, i === raceEv ? C.accent : C.ink));
+  y += 6; const rec = raceRes.recommended;
+  row('Recommended [objective] (from time sensitivity)', 652);
+  row(`straight_weight = ${rec.straight_weight.toFixed(3)}    turn_radius_in = ${rec.turn_radius_in.toFixed(0)}`);
+  const ds = rec.displacements.map(d => `${d.crew_lb.toFixed(0)} lb: ${d.weight.toFixed(3)}`);
+  for (let i = 0; i < ds.length; i += 3) row((i ? '' : 'displacements  ') + ds.slice(i, i + 3).join('   '), 450, C.muted);
+  y += 6;
+  const tn = e.segments.filter(sg => sg.radius_m != null);
+  row(`${e.name}: ${tn.length} turn${tn.length === 1 ? '' : 's'}`, 652);
+  for (const sg of tn.slice(0, 12)) row(`R ${sg.radius_m.toFixed(1)} m  ${sg.angle_deg.toFixed(0)} deg  ${sg.entry_mps.toFixed(2)} -> ${sg.min_mps.toFixed(2)} m/s`, 450, C.muted);
 }
 
 // ---------- result panel ----------
@@ -1456,6 +1533,7 @@ async function loadResult() {
     if (p.gates) { dcGate = p.gates.dc_search; fbGate = p.gates.freeboard_min_in; }
     if (p.stability) gmGate = p.stability.gm_min_in;
     if (p.objective) objKind = p.objective.kind;
+    raceRes = result.race || null; raceErr = ''; raceEv = 0;
     if (result.winner_hull) {
       const wc = result.winner && result.winner.candidate;
       setHull(result.winner_hull, 'Winner hull: ' + (result.winner_hull.name || '') + (wc ? `, ${wc.depth_in.toFixed(1)} in depth` : ''));
