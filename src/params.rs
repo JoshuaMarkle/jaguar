@@ -491,6 +491,16 @@ impl Punching {
     /// Several meshes: the one farthest from the knee face (the tension face under
     /// the knee) sets d, assuming it is strong in both directions. 3 passes,
     /// meshes after 1 and 2: d = 2t/3 on either mold.
+    /// Casting passes the wall is built in: `layers`, or 2 with no layer fields (the documented
+    /// default); None with an explicit `d_over_t` (no pass count given).
+    pub fn layer_count(&self) -> Option<u32> {
+        match (self.d_over_t, self.layers) {
+            (Some(_), _) => None,
+            (None, Some(n)) => Some(n),
+            (None, None) => Some(2),
+        }
+    }
+
     pub fn d_over_t(&self) -> Result<f64> {
         let layer_fields = self.layers.is_some() || self.mesh_after_layer.is_some() || self.mold.is_some();
         if let Some(r) = self.d_over_t {

@@ -478,6 +478,7 @@ mod tests {
             stations: 161,
             girth: 41,
             pocket_in: None,
+            layers: None,
         };
         parse_stl(&to_stl(&build_mesh(&off1(), &spec).unwrap(), "off1")).unwrap()
     }

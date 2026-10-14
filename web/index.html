@@ -293,7 +293,7 @@ const PUNCH = [
   ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
   ['knee_spacing_in', 'Knee spacing', 'in', 'Distance between the centres of the two knees. If the knees are close, their punching zones overlap and are checked together.', 'any', 0],
   ['pad_in', 'Knee pad', 'in', 'Thickness of the knee pad. A pad spreads the load over a bigger area (rules allow at most 0.5 in).', 'any', 0],
-  ['layers', 'Casting passes', '-', 'Number of equal-thickness layers the wall is cast in. The mesh goes between two of them.', 1, 2]];
+  ['layers', 'Casting passes', '-', 'Number of equal-thickness layers the wall is cast in. The mesh goes between two of them. The air pocket bulkheads in the STEP/STL export are one layer thick (wall thickness / passes).', 1, 2]];
 const PUNCH_INT = ['layers'];
 const MESH_T = 'Pass each mesh is laid after (1 = after the first), less than the number of passes. Several meshes: list them, e.g. "1, 2". Punching uses the mesh farthest from the knee face.';
 // [title, note shown muted next to it]

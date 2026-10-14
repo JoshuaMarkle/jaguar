@@ -274,10 +274,12 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   within 0.1% on off1 at t = 0.375 (the analysis thin shell is about 1.6% heavy amidships, the
   solid ends make up the difference).
 * **Air pockets**: when the winner has `air_pocket_in` (`[flotation]`), the wall gets a solid
-  bulkhead t thick inboard of each sealed pocket, from x0 + l to x0 + l + t and from xn - l - t to
-  xn - l (x0, xn the hull's ends, l = `air_pocket_in`), fused into the same single solid so the mold
-  shop sees where the foam/sealed volume goes. The bulkheads are not in the analysis weight
-  (2 t x interior area, 17 in^3 on the examples/canoe.toml winner). `--no-pockets` leaves them out. A
+  bulkhead one casting layer thick inboard of each sealed pocket: b = t / `punching.layers` (2 when
+  no layer fields are given; t with an explicit `d_over_t`, which gives no pass count), so a 3/8 in
+  wall cast in 3 layers gets 1/8 in bulkheads. They run from x0 + l to x0 + l + b and from
+  xn - l - b to xn - l (x0, xn the hull's ends, l = `air_pocket_in`), fused into the same single
+  solid so the mold shop sees where the foam/sealed volume goes. The bulkheads are not in the
+  analysis weight (2 b x interior area, about 8.5 in^3 on the examples/canoe.toml winner, 2 layers). `--no-pockets` leaves them out. A
   pocket shorter than the solid end at the export's station spacing is an error (use more
   `--stations`, or `--no-pockets`).
 * A flat bottom (lowest offset at the keel height) keeps its chine corner.

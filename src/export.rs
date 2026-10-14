@@ -15,8 +15,9 @@
 //!   solid end. A rim closes the sheer. `None`: the outer mold surface only, as an open shell.
 //! * `pocket_in = Some(l)` (with a wall): the sealed bow/stern air pockets of the swamped-flotation
 //!   gate (`flotation.rs`: from each tip of the analysis grid, x0 and xn, inward l, interior up to
-//!   the mold depth). A solid bulkhead t thick closes the interior from x0 + l to x0 + l + t and
-//!   from xn - l - t to xn - l, fused into the wall (one solid). Rows are inserted at those four x,
+//!   the mold depth). A solid bulkhead one casting layer thick (b = t / `layers`, or t when the
+//!   pass count is unknown) closes the interior from x0 + l to x0 + l + b and from xn - l - b to
+//!   xn - l, fused into the wall (one solid). Rows are inserted at those four x,
 //!   linear between the neighbouring resampled stations. Err if a bulkhead would fall in the
 //!   solid end or the pockets overlap.
 //! * Coincident vertices are welded, zero-area and mirrored-duplicate facets removed, so a solid
@@ -45,8 +46,19 @@ pub struct ExportSpec {
     /// Points around the full girth, sheer to sheer (odd, so one lies on the keel centreline).
     pub girth: usize,
     /// Swamped-flotation air pocket length at EACH end, in (result `air_pocket_in`). With a
-    /// wall, a bulkhead t thick closes the hull interior inboard of each pocket. `None` or 0: none.
+    /// wall, a bulkhead one casting layer thick closes the hull interior inboard of each pocket.
+    /// `None` or 0: none.
     pub pocket_in: Option<f64>,
+    /// Casting passes of the wall (`punching.layers`): the bulkheads are t / layers thick, one
+    /// pass. None = the whole wall thickness t.
+    pub layers: Option<u32>,
+}
+
+impl ExportSpec {
+    /// Air pocket bulkhead thickness, in: one casting layer of the wall (None without a wall).
+    pub fn bulkhead_in(&self) -> Option<f64> {
+        self.thickness_in.map(|t| t / f64::from(self.layers.unwrap_or(1).max(1)))
+    }
 }
 
 /// Triangle mesh, inches. `closed` = watertight solid.
@@ -287,14 +299,14 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     }
     // Air pocket bulkheads: rows at the four bulkhead faces (bow inner/outer, stern inner/outer).
     let mut cuts: Option<[usize; 4]> = None;
-    if let (Some(t), Some(l)) = (spec.thickness_in, spec.pocket_in) {
+    if let (Some(b), Some(l)) = (spec.bulkhead_in(), spec.pocket_in) {
         ensure!(l.is_finite() && l >= 0.0, "air pocket length must be >= 0, got {l}");
         if l > 0.0 {
             let (x0, xn) = (grid.x[0], *grid.x.last().unwrap());
-            let xs = [x0 + l, x0 + l + t, xn - l - t, xn - l];
+            let xs = [x0 + l, x0 + l + b, xn - l - b, xn - l];
             ensure!(
                 xs[1] < xs[2],
-                "air pockets of {l} in plus t = {t} in bulkheads overlap on a {:.1} in hull",
+                "air pockets of {l} in plus {b} in bulkheads overlap on a {:.1} in hull",
                 xn - x0
             );
             for x in xs {
@@ -747,8 +759,9 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
 }
 
 /// Hull and export spec from a `jaguar-result/1` JSON: the winner's hull (generated shape, or
-/// params.hull.file), thickness, depth, the run's flare and the winner's air pocket length (if
-/// `[flotation]` sized one). Err if there is no winner.
+/// params.hull.file), thickness, depth, the run's flare, the winner's air pocket length (if
+/// `[flotation]` sized one) and the run's casting passes (`punching.layers`, for the bulkheads).
+/// Err if there is no winner.
 pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, ExportSpec)> {
     let v: serde_json::Value = serde_json::from_str(text).context("parsing result JSON")?;
     ensure!(v["format"] == crate::optimize::RESULT_FORMAT, "not a jaguar-result/1 file");
@@ -771,6 +784,9 @@ pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, E
         stations,
         girth,
         pocket_in: c["air_pocket_in"].as_f64(),
+        layers: serde_json::from_value::<crate::params::Punching>(v["params"]["punching"].clone())
+            .ok()
+            .and_then(|p| p.layer_count()),
     };
     Ok((hull, spec))
 }
@@ -811,6 +827,7 @@ mod tests {
             stations: 41,
             girth: 21,
             pocket_in: None,
+            layers: None,
         };
         let m = build_mesh(&off1(), &spec).unwrap();
         assert!(!m.closed);
@@ -830,6 +847,7 @@ mod tests {
             stations: 41,
             girth: 21,
             pocket_in: None,
+            layers: None,
         };
         assert!(build_mesh(&h, &ExportSpec { girth: 20, ..ok.clone() }).is_err());
         assert!(build_mesh(&h, &ExportSpec { depth_in: 0.0, ..ok.clone() }).is_err());

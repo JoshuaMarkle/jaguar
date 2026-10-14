@@ -381,6 +381,7 @@ fn main() -> Result<()> {
                         stations,
                         girth,
                         pocket_in: None,
+                        layers: None,
                     },
                 )
             };
@@ -420,8 +421,14 @@ fn main() -> Result<()> {
                 hi[2] - lo[2],
                 if mesh.closed { format!(", wall volume {:.0} in^3", mesh.volume()) } else { String::new() }
             );
-            if let Some(l) = pockets {
-                println!("air pocket bulkheads at {l:.1} in from each tip (--no-pockets to leave out)");
+            if let (Some(l), Some(b)) = (pockets, spec.bulkhead_in()) {
+                let one = match spec.layers {
+                    Some(n) => format!("one of {n} casting layers"),
+                    None => "the whole wall: punching gives no layer count".into(),
+                };
+                println!(
+                    "air pocket bulkheads at {l:.1} in from each tip, {b:.3} in thick ({one}; --no-pockets to leave out)"
+                );
             }
         }
         Cmd::Race { result, params, out, measured } => {

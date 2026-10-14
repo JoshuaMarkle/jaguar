@@ -42,6 +42,7 @@ fn spec(depth: f64, t: Option<f64>) -> ExportSpec {
         stations: 81,
         girth: 41,
         pocket_in: None,
+        layers: None,
     }
 }
 
@@ -303,6 +304,28 @@ fn box_pocket_bulkheads_are_fused_t_thick_at_the_pocket_ends() {
 }
 
 #[test]
+fn bulkheads_are_one_casting_layer_thick() {
+    // 3 layers of a 3/8 in wall: 1/8 in bulkheads, at [20, 20.125] and [79.875, 80].
+    let h = boxy(100.0, 10.0, 6.0);
+    let s = ExportSpec { girth: 23, layers: Some(3), ..spec(12.0, Some(0.375)) };
+    assert_eq!(s.bulkhead_in(), Some(0.125));
+    let plain = build_mesh(&h, &s).unwrap();
+    let m = build_mesh(&h, &pockets(s, 20.0)).unwrap();
+    assert!(m.closed && watertight(&m));
+    // Inner U 19.25 x 11.625 = 223.78 in^2, two bulkheads 1/8 in thick.
+    let inner = 2.0 * (10.0 - 0.375) * (12.0 - 0.375);
+    assert!(
+        (m.volume() - plain.volume() - 2.0 * inner * 0.125).abs() < 1e-6,
+        "{}",
+        m.volume() - plain.volume()
+    );
+    for x in [20.125, 79.875] {
+        assert!(at_x(&m, x).iter().any(|v| v[1].abs() < 1e-9 && (v[2] - 12.0).abs() < 1e-9), "face at {x}");
+    }
+    assert!(at_x(&m, 20.375).is_empty(), "not a full wall thick");
+}
+
+#[test]
 fn off1_pockets_stay_a_valid_solid() {
     let h = off1();
     let s = spec(12.0, Some(0.375));
@@ -349,6 +372,16 @@ fn from_result_takes_the_winner_air_pocket() {
     };
     let (_, s) = jaguar::export::from_result(&doc(20.0.into()), 41, 21).unwrap();
     assert_eq!(s.pocket_in, Some(20.0));
+    // No [punching] in this bare document: whole-wall bulkheads.
+    assert_eq!((s.layers, s.bulkhead_in()), (None, Some(0.5)));
+    // A real run's punching passes: examples/canoe.toml casts in 2 layers.
+    let p = jaguar::params::Params::load(std::path::Path::new("examples/canoe.toml")).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&doc(20.0.into())).unwrap();
+    v["params"]["punching"] = serde_json::to_value(&p.punching).unwrap();
+    v["params"]["punching"]["layers"] = 3.into();
+    v["params"]["punching"]["mesh_after_layer"] = 1.into();
+    let (_, s) = jaguar::export::from_result(&v.to_string(), 41, 21).unwrap();
+    assert_eq!((s.layers, s.bulkhead_in()), (Some(3), Some(0.5 / 3.0)));
     let (_, s) = jaguar::export::from_result(&doc(serde_json::Value::Null), 41, 21).unwrap();
     assert_eq!(s.pocket_in, None);
 }

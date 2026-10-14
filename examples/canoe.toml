@@ -88,7 +88,7 @@ knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on
 knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
 knee_spacing_in = 8.0     # centre-to-centre knee spacing
 pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
-layers = 2                # equal casting passes (mesh fits between two)
+layers = 2                # equal casting passes (mesh fits between two); air pocket bulkheads are one pass, t / layers
 mesh_after_layer = 1      # mesh laid after this pass (1..layers-1); two meshes: [1, 2]
 mold = "male"             # "male": pass 1 is the inside (knee) face; "female": pass 1 is the outside
                           # d = knee face to mesh: male k/layers * t, female (layers-k)/layers * t.

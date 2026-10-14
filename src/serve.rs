@@ -1002,6 +1002,7 @@ mod tests {
             stations: 161,
             girth: 41,
             pocket_in: None,
+            layers: None,
         };
         let stl = export::to_stl(&export::build_mesh(&hull, &spec).unwrap(), "off1");
         let (st, _, body) = a.import_mesh("name=My%20Canoe.stl&units=in", &stl);
