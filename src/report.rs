@@ -97,10 +97,15 @@ fn feet(inches: f64) -> String {
 }
 
 fn hull_line(c: &Candidate) -> String {
-    let mut s =
-        format!("        hull  L {:.1} in ({})  beam {:.1} in", c.length_in, feet(c.length_in), c.beam_in);
+    let mut s = format!(
+        "        hull  L {:.1} in ({})  beam {:.1} in overall",
+        c.length_in,
+        feet(c.length_in),
+        c.beam_in
+    );
     if let Some(sh) = &c.shape {
-        s.push_str(&format!("  draft {:.1} in", sh.draft_in));
+        // shape_search.beam_in bounds the waterline beam; flared topsides are wider above it.
+        s.push_str(&format!(" ({:.1} at the waterline)  draft {:.1} in", sh.beam_in, sh.draft_in));
     }
     if c.flare_deg != 0.0 {
         s.push_str(&format!("  flare {:.1} deg", c.flare_deg));
@@ -282,6 +287,9 @@ pub fn zone_lines(z: &crate::section::ZoneLayout, dense_mix: Option<&str>) -> Ve
 
 /// What two mixes bought over the single-mix pick.
 pub fn saving_line(z: &crate::optimize::ZoneSearch, zoned_winner: bool, weight: f64) -> String {
+    if let Some(n) = &z.note {
+        return format!("        two mixes: not searched: {n}");
+    }
     match (z.single_mix_lb, zoned_winner) {
         (None, _) => "        two mixes: no single-mix wall passes; this design needs both mixes".into(),
         (Some(_), false) => {
@@ -898,7 +906,7 @@ mod tests {
         let s = l.join("\n");
         assert!(s.contains("strength: final split ="));
         assert!(s.contains("NOTE density 70 pcf"));
-        assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in  draft 5.9 in"));
+        assert!(s.contains("hull  L 240.0 in (20 ft 0 in)  beam 20.7 in overall ("), "{s}");
         assert!(s.contains("loaded 4.30 in (min"));
         assert!(s.contains("drag 5.19 lb (23.1 N) at"));
         assert!(s.contains("race 104.2 s weighted"));

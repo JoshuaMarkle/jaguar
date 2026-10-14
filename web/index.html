@@ -279,7 +279,7 @@ const FIELDS = {
   search: [
     ['thickness_in', 'Wall thickness', 'in', 'Wall thickness range to search: min, max, step (inclusive).'],
     ['density_pcf', 'Mix density', 'pcf', 'Concrete density range to search: min, max, step (inclusive). Denser is stronger but heavier.'],
-    ['depth_in', 'Mold depth', 'in', 'Gunwale height (hull depth) range to search: min, max, step (inclusive). Deeper is stiffer and has more freeboard.']],
+    ['depth_in', 'Mold depth (gunwale height)', 'in', 'Gunwale height above the keel (hull depth) to search: min, max, step (inclusive), e.g. 10, 16, 0.5. Deeper is stiffer and has more freeboard but is heavier.']],
   gates: [
     ['dc_search', 'D/C gate (search)', '-', 'Demand/capacity a candidate must stay under on the search grid. Must be <= the verify gate.', 'any', 0],
     ['dc_verify', 'D/C gate (verify)', '-', 'D/C the winner must stay under when re-run at 2n-1 stations. At most 1.0.', 'any', 0],
@@ -289,7 +289,7 @@ const FIELDS = {
 // Shape search bounds: [key, label, unit, tooltip, default [min, max]]. Meanings from hullgen.rs ShapeParams.
 const SHAPE = [
   ['length_in', 'Length', 'in', 'Overall hull length. Longer = faster and stiffer to paddle straight, but heavier.', [216, 264]],
-  ['beam_in', 'Beam', 'in', 'Maximum width at the design waterline. Wider = more stable, more drag.', [18, 30]],
+  ['beam_in', 'Waterline beam', 'in', 'Maximum width at the design waterline (this is what the bounds limit). With side flare the canoe is wider above the waterline: the result shows both. Wider = more stable, more drag.', [18, 30]],
   ['draft_in', 'Design draft', 'in', 'Depth of the design waterline of the generated hull table (not the mold depth).', [4, 8]],
   ['fore_wp', 'Bow waterplane', '-', 'Bow waterline shape exponent. Larger = finer, more hollow bow; 0 = full width all the way to the stem (blunt).', [0.3, 1.6]],
   ['section', 'Section shape', '-', 'Cross-section exponent. Small (~0.1) = boxy, near-vertical sides and a flat bottom; 0.5 = rounded (elliptic); 1 = V-ish.', [0.2, 0.8]],
@@ -1440,8 +1440,14 @@ function pocketRow(c) {
   return kv('Air pocket', `${typeof c.air_pocket_in === 'number' ? c.air_pocket_in.toFixed(1) + ' in each end' : 'not computed'}${max}`, t);
 }
 // What two mixes saved over the single-mix pick of the same run (result.zones).
+// " (max of the search range)" when the winning depth sits on an end of search.depth_in.
+function depthEdge(win) {
+  const a = (win.search_space || []).find(x => x.name === 'depth_in');
+  return a && a.at_bound ? ` <span class="t-error">at the ${a.at_bound} of the search range: widen it</span>` : '';
+}
 function savingRow(c) {
   const z = result && result.zones; if (!z) return '';
+  if (z.note) return kv('Two-mix saving', `<span class="t-error">not searched</span> <span class="muted">${esc(z.note)}</span>`, 'The two-mix search had no light/dense pair to place.');
   const t = 'Weight of this design against the lightest single-mix design that passes in the same run (what a run without [zones] picks).';
   if (z.single_mix_lb == null) return kv('Two-mix saving', 'no single-mix wall passes', t);
   const s = z.saved_lb || 0;
@@ -1479,7 +1485,8 @@ function showWinner() {
       <button type="button" class="btn soft" id="exportpdf" title="Report of this run: canoe picture and winner stats first, then search space, mix data, inputs and every chart. Opens the print dialog: choose Save as PDF.">Export PDF</button>
     </div>
     ${kv('Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`)}
-    ${kv('Beam', `${f(c.beam_in, 1)} in`)}
+    ${kv('Beam overall', `${f(c.beam_in, 1)} in`, 'Widest point of the canoe, gunwale included (flared sides are wider than the waterline).')}
+    ${sh ? kv('Beam at waterline', `${f(sh.beam_in, 1)} in <span class="muted">searched, bounds ${f(((result.params.shape_search || {}).beam_in || [])[0], 0)} to ${f(((result.params.shape_search || {}).beam_in || [])[1], 0)}</span>`, 'The shape-search beam: width at the design waterline, the value the beam bounds limit.') : ''}
     ${sh ? kv('Design draft', `${f(sh.draft_in, 2)} in`) : ''}
     ${kv('Thickness', `${f(c.thickness_in, 3)} in`)}
     ${kv(c.zones ? 'Light density' : 'Density', `${f(c.density_pcf, 1)} pcf`)}
@@ -1489,7 +1496,7 @@ function showWinner() {
     ${c.zones ? `<div class="group">Dense rectangles <span class="hint">x from the bow, z above the keel, in</span></div>` + c.zones.dense.map((q, n) =>
       kv(`${n + 1}`, `x ${inch(q.x0_in)} to ${inch(q.x1_in)}, z ${inch(q.z0_in)} to ${inch(q.z1_in)}`, 'Dense mix over this length, from this height to that one, the whole girth on both sides.')).join('') : ''}
     ${kv('Side flare', `${f(flareDeg(), 1)} deg`)}
-    ${kv('Depth', `${f(c.depth_in, 2)} in`)}
+    ${kv('Mold depth', `${f(c.depth_in, 2)} in${depthEdge(win)}`, 'Gunwale height above the keel, from Search > Search ranges > Mold depth.')}
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
     ${typeof c.drag_n === 'number' ? kv('Drag', dragTxt(c.drag_n)) : ''}
     ${gmRows(c, f)}
@@ -1599,7 +1606,7 @@ function reportHtml(canoeImg, charts) {
   const pocket = typeof c.air_pocket_in === 'number' ? `${f(c.air_pocket_in, 1)} in each end` : null;
   const stats = [
     ['Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`],
-    ['Beam', `${f(c.beam_in, 1)} in`], sh ? ['Design draft', `${f(sh.draft_in, 2)} in`] : null,
+    ['Beam overall', `${f(c.beam_in, 1)} in`], sh ? ['Beam at waterline', `${f(sh.beam_in, 1)} in`] : null, sh ? ['Design draft', `${f(sh.draft_in, 2)} in`] : null,
     ['Wall thickness', `${f(c.thickness_in, 3)} in`], ['Mold depth', `${f(c.depth_in, 2)} in`], ['Side flare', `${f(flareDeg(), 1)} deg`],
     ['Mix density', `${f(c.density_pcf, 1)} pcf${c.mix ? ' (' + esc(c.mix) + ')' : ''}`], prov ? ['Mix source', provTxt] : null,
     c.zones ? ['Dense mix', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' (' + esc(c.dense_mix) + ')' : ''}; ` + c.zones.dense.map((q, n) => `${n + 1}: x ${inch(q.x0_in)}-${inch(q.x1_in)}, z ${inch(q.z0_in)}-${inch(q.z1_in)}`).join('; ')] : null,

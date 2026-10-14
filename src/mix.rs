@@ -89,6 +89,10 @@ pub struct TestedMix {
 /// A density within this of a tested mix's mean density counts as tested, pcf.
 pub const TESTED_TOL_PCF: f64 = 0.05;
 
+/// Rows grouped as one tested mix (replicates) must agree on density within this, pcf;
+/// farther apart they are different mixes, and their mean density is no mix that was tested.
+pub const REPLICATE_SPREAD_PCF: f64 = 3.0;
+
 /// Whether a design density has lab data behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -347,6 +351,28 @@ impl StrengthFit {
     /// Weak-fit warnings: one per fitted property (split, and each measured
     /// one) with fewer than 5 points or rms scatter above 15% of the mean, and
     /// one per line with a negative slope.
+    /// Tested mixes whose rows differ in density by more than [`REPLICATE_SPREAD_PCF`]: one
+    /// message per mix naming its rows. Empty when every group is consistent.
+    pub fn replicate_problems(&self) -> Vec<String> {
+        let mut out = vec![];
+        for m in self.tested_mixes() {
+            let rows: Vec<&MixPoint> = self.points.iter().filter(|p| p.group == m.name).collect();
+            let lo = rows.iter().map(|p| p.density_pcf).fold(f64::INFINITY, f64::min);
+            let hi = rows.iter().map(|p| p.density_pcf).fold(f64::NEG_INFINITY, f64::max);
+            if hi - lo > REPLICATE_SPREAD_PCF {
+                let list: Vec<String> =
+                    rows.iter().map(|p| format!("{} {:.2} pcf", p.mix, p.density_pcf)).collect();
+                out.push(format!(
+                    "tested mix {}: rows {} differ by {:.1} pcf (replicates of one mix agree within {REPLICATE_SPREAD_PCF} pcf); if they are different mixes give them different names (e.g. M2, M3) or a mix_id column",
+                    m.name,
+                    list.join(", "),
+                    hi - lo
+                ));
+            }
+        }
+        out
+    }
+
     pub fn weak_fit_warnings(&self) -> Vec<String> {
         let split: Vec<f64> = self.points.iter().map(|p| p.final_psi).collect();
         let mut fits = vec![("strength", split, self.rms_residual_psi)];
@@ -356,7 +382,8 @@ impl StrengthFit {
                 fits.push((prop.label(), ys, f.rms_residual_psi));
             }
         }
-        let mut out = vec![];
+        let mut out: Vec<String> =
+            self.replicate_problems().into_iter().map(|m| format!("WARNING {m}")).collect();
         for (name, f) in self.active_fits() {
             if f.slope_psi_per_pcf < 0.0 {
                 out.push(format!(

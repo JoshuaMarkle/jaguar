@@ -207,7 +207,7 @@ mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
 mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's
-`zones` has combinations (`walls`), skipped (`heavier`, `punching`), `checked` (placed), `capped`,
+`zones` has combinations (`walls`; with none, `note` says why, e.g. no dense mix heavier than a light one), skipped (`heavier`, `punching`), `checked` (placed), `capped`,
 `single_mix_lb` (the single-mix pick, null if none passes) and `saved_lb` (single_mix_lb - winner
 weight; 0 when the winner is single-mix). Zoned candidates follow the single-mix ones. Zoned D/C(x)
 and stresses are the governing mix's; `inertia_in4` is transformed. The terminal lists the
@@ -232,7 +232,7 @@ KG), strength fit values, and per check the station, section values (M, V, A, zb
 or punching intermediates (d_load, depth, b0, P, v_u, v_c) with capacity and D/C; recomputed by
 the checks' own code so each demand and capacity equals that case's verdict (or `error`). The terminal prints one line per case under the winner (seats bow to stern as
 knee@lb, source, variance, D/C), the mix provenance
-line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam, shape, weight, GM, drag, race_s and the
+line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam (overall, gunwale included; a shape run's `shape.beam_in` is the waterline beam its bounds limit), shape, weight, GM, drag, race_s and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.

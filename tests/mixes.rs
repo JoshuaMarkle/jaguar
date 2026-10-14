@@ -90,3 +90,57 @@ fn measured_fit_limits_density_range() {
         }
     }
 }
+
+/// A small tested-mix run on `csv` (written to a temp file): canoe_mixes.toml, 12 in deep.
+fn tested_run(csv: &str, tag: &str, zones: bool) -> anyhow::Result<optimize::RunResult> {
+    let path = std::env::temp_dir().join(format!("jaguar_mix_{tag}_{}.csv", std::process::id()));
+    std::fs::write(&path, csv).unwrap();
+    let mut p = Params::load(Path::new("examples/canoe_mixes.toml")).unwrap();
+    p.material.mix_data = path.clone();
+    p.search.depth_in = [12.0, 12.0, 1.0];
+    p.zones = zones.then_some(jaguar::params::Zones {
+        dense_pcf: [50.0, 70.0, 1.0],
+        increment_in: 0.125,
+        max_checks: 400,
+    });
+    let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
+    let r = optimize::run(&p, &h);
+    let _ = std::fs::remove_file(&path);
+    r
+}
+
+const HDR: &str = "mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final\n";
+
+#[test]
+fn replicates_far_apart_in_density_are_refused_not_averaged() {
+    // The rows the team entered: "M2 A" and "M2 B" group as one mix, 8.5 pcf apart.
+    let csv = format!("{HDR}M2 B,7,54.860,145,0.6\nM2 A,,63.35,282.67,1.0\n");
+    let e = tested_run(&csv, "far", false).unwrap_err().to_string();
+    assert!(e.contains("tested mix M2") && e.contains("differ by 8.5 pcf") && e.contains("mix_id"), "{e}");
+    // Named as two mixes they are two tested densities, each its own; zones can pair them.
+    let csv = format!("{HDR}M2 B,7,54.860,145,0.6\nM3,,63.35,282.67,1.0\n");
+    let r = tested_run(&csv, "two", true).unwrap();
+    let names: Vec<_> = r.strength.tested_mixes().iter().map(|m| (m.name.clone(), m.density_pcf)).collect();
+    assert_eq!(names, vec![("M2".to_string(), 54.86), ("M3".to_string(), 63.35)]);
+    let z = r.zones.unwrap();
+    assert!(z.walls > 0 && z.note.is_none(), "{z:?}");
+    // Replicates within 3 pcf (the original M2 A / M2 B, 1.5 apart) are still one mix.
+    let csv = format!("{HDR}M2 A,7,56.408,143,0.6\nM2 B,7,54.860,145,0.6\nfinal target,,60.0,300,1.0\n");
+    assert!(tested_run(&csv, "near", false).is_ok());
+}
+
+#[test]
+fn two_mix_search_says_why_when_there_is_nothing_to_pair() {
+    // One tested mix (two replicates): nothing heavier to pair it with.
+    let csv = format!(
+        "{HDR}M3 A,,62.0,280,1.0
+M3 B,,63.35,282.67,1.0
+"
+    );
+    let r = tested_run(&csv, "one", true).unwrap();
+    let z = r.zones.as_ref().unwrap();
+    assert_eq!(z.walls, 0);
+    assert!(z.note.as_deref().is_some_and(|n| n.contains("no dense mix heavier")), "{z:?}");
+    let text = jaguar::report::summary_lines(&r).join("\n");
+    assert!(r.winner.is_none() || text.contains("two mixes: not searched"), "{text}");
+}

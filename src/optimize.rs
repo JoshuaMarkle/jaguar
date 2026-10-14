@@ -795,6 +795,9 @@ pub struct ZoneSearch {
     pub single_mix_lb: Option<f64>,
     /// single_mix_lb - winner weight (0 when the winner is single-mix). None without both.
     pub saved_lb: Option<f64>,
+    /// Why nothing was placed when there was no combination to try.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 pub const RESULT_FORMAT: &str = "jaguar-result/1";
@@ -855,6 +858,10 @@ pub fn density_axis(params: &Params, fit: &StrengthFit) -> Result<Vec<(f64, Stre
             Ok(densities(params, fit)?.into_iter().map(|r| (r, fit.clone(), None)).collect())
         }
         StrengthModel::TestedMixes => {
+            // Averaging different mixes into one would be a mix nobody tested.
+            if let Some(p) = fit.replicate_problems().first() {
+                anyhow::bail!("{p}");
+            }
             let m = fit.tested_mixes();
             anyhow::ensure!(!m.is_empty(), "no tested mixes in the mix data");
             Ok(m.iter().map(|x| (x.density_pcf, fit.for_mix(x), Some(x.name.clone()))).collect())
@@ -1290,6 +1297,7 @@ fn zoned_search(
         capped: false,
         single_mix_lb: None,
         saved_lb: None,
+        note: None,
     };
     let mut tries = Vec::new();
     for (pi, &(gi, ti)) in sp.pairs.iter().enumerate() {
@@ -1308,6 +1316,23 @@ fn zoned_search(
                 tries.push(ZoneTry { pi, ri, di, light_lb: light_v * l.0 });
             }
         }
+    }
+    if stats.walls == 0 {
+        let list = |a: &[(f64, StrengthFit, Option<String>)]| {
+            a.iter()
+                .map(|(r, _, m)| m.as_ref().map_or(format!("{r:.1}"), |m| format!("{m} {r:.1}")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        stats.note = Some(if sp.axis.iter().all(|l| sp.dense.iter().all(|d| d.0 <= l.0)) {
+            format!(
+                "no dense mix heavier than a light one: light (search.density_pcf) {} pcf, dense (zones.dense_pcf) {} pcf",
+                list(sp.axis),
+                list(sp.dense)
+            )
+        } else {
+            "no wall (thickness, depth, flare) had buildable topsides and resolved seats".into()
+        });
     }
     tries.sort_by(|a, b| a.light_lb.total_cmp(&b.light_lb));
     let mut best = lightest;

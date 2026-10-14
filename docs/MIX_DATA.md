@@ -12,7 +12,7 @@ does not matter, extra columns are ignored):
 
 | column | meaning |
 |---|---|
-| `mix` | name of the mix / cylinder, free text. A trailing replicate token (one letter or a number after a space) is stripped to get the tested mix: `M2 A`, `M2 B` -> `M2` |
+| `mix` | name of the mix / cylinder, free text. A trailing replicate token (one letter or a number after a space) is stripped to get the tested mix: `M2 A`, `M2 B` -> `M2`. Replicates must agree on density within 3 pcf; rows of one group farther apart are refused with `strength_model = "tested_mixes"` (their mean would be a mix nobody tested) and warned about otherwise: give different mixes different names or a `mix_id` |
 | `mix_id` | optional; when present and non-empty it overrides the grouping above |
 | `cured_days` | age at the break (informational) |
 | `density_pcf` | wet density of the cylinder, pcf (the raw sheet's "Wet Density" column; the "final target" row's 60 pcf is also in that column). Hull weight uses the same density, so if your mold-day concrete is lighter once dry, reported weights are conservative. |
