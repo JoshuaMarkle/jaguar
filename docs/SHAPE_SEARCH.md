@@ -71,7 +71,7 @@ above the waterline, not the generator, so searching it would need a second oute
   >= about 1), so the search moves there; full ends need gunwales too wide for
   `hull.gunwale_max_flare_deg`. The gunwale is wider than the waterline and `beam_in` caps the
   overall beam, so the waterline beam ends up narrower. `examples/shape_gunwale.toml` (200
-  samples): 88.2 lb, 216 in, R 430 in, 24.4 in overall (21.9 at the waterline), vs 86.8 lb
+  samples): 87.9 lb, 216 in, R 430 in, 24.4 in overall (21.9 at the waterline), vs 84.8 lb
   without it.
 * `kind = "race"` (needs `[race]`, src/race.rs): score = weighted race time over the `[race]`
   events, so wall weight, displacement, straight and turning drag are weighed by how they move

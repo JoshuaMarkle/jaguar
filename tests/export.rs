@@ -117,7 +117,27 @@ fn step_is_wellformed_inch_and_deterministic() {
     assert!(a.starts_with("ISO-10303-21;") && a.trim_end().ends_with("END-ISO-10303-21;"));
     assert!(a.contains("AUTOMOTIVE_DESIGN") && a.contains("CONVERSION_BASED_UNIT('INCH'"));
     assert!(a.contains("MANIFOLD_SOLID_BREP") && a.contains("CLOSED_SHELL"));
-    assert_eq!(a.matches("ADVANCED_FACE(").count(), m.tris.len());
+    // Smooth faces: the outer hull and inner wall are cubic B-spline surfaces (two halves each),
+    // the top and the two bulkheads closing the hollow are planes; no facets.
+    assert_eq!(a.matches("B_SPLINE_SURFACE_WITH_KNOTS(").count(), 4);
+    assert_eq!(a.matches("ADVANCED_FACE(").count(), 7);
+    assert_eq!(a.matches("PLANE(").count(), 3);
+    assert!(a.contains("B_SPLINE_CURVE_WITH_KNOTS('',3,") && !a.contains("LINE("));
+    // Every edge is shared by exactly two faces (once each way): watertight by construction.
+    let ids = |l: &str| -> Vec<String> {
+        l.split('#').skip(1).map(|r| r.chars().take_while(char::is_ascii_digit).collect()).collect()
+    };
+    let mut uses: HashMap<String, (usize, usize)> = HashMap::new();
+    for l in a.lines().filter(|l| l.contains("=ORIENTED_EDGE(")) {
+        let e = ids(l.split_once('=').unwrap().1).pop().unwrap();
+        let u = uses.entry(e).or_default();
+        if l.contains(".T.)") { u.0 += 1 } else { u.1 += 1 }
+    }
+    assert_eq!(uses.len(), a.matches("=EDGE_CURVE(").count());
+    assert!(uses.values().all(|&u| u == (1, 1)), "{uses:?}");
+    // Without the structured nets the facets are written, one face each.
+    let facets = to_step(&Mesh { brep: None, ..m.clone() }, "off1");
+    assert_eq!(facets.matches("ADVANCED_FACE(").count(), m.tris.len());
     // every #ref points to a defined entity
     let defined: std::collections::HashSet<&str> =
         a.lines().filter_map(|l| l.strip_prefix('#')?.split('=').next()).collect();
@@ -130,6 +150,7 @@ fn step_is_wellformed_inch_and_deterministic() {
     }
     let open = to_step(&build_mesh(&h, &spec(12.0, None)).unwrap(), "off1");
     assert!(open.contains("OPEN_SHELL") && open.contains("SHELL_BASED_SURFACE_MODEL"));
+    assert_eq!(open.matches("B_SPLINE_SURFACE_WITH_KNOTS(").count(), 2);
 }
 
 #[test]
@@ -268,6 +289,90 @@ fn keel_line_is_smooth() {
     }
 }
 
+/// off1 as the run builds it with a stem radius (the default 4 in, or `r`).
+fn off1_stem(r: f64) -> Hull {
+    let mut hp = jaguar::params::Params::load(Path::new("examples/canoe.toml")).unwrap().hull;
+    hp.stem_radius_in = r;
+    hp.doubly_symmetric = false;
+    hp.templates = None;
+    off1().prepared(&hp).unwrap()
+}
+
+#[test]
+fn keel_is_smooth_to_the_stems() {
+    // Before the smooth-keel loft the table was blended at fixed heights between stations: near
+    // the ends (where the keel rises) the keel sat flat for a station spacing, then stepped up
+    // to 0.4 in (0.8 in on a shape-search hull); a 4 in stem radius then folded the sections
+    // near the keel. Now the keel is the monotone cubic through the station keels, the stem arc
+    // tangent to it, over the whole length.
+    for r in [0.0, 4.0] {
+        let h = if r > 0.0 { off1_stem(r) } else { off1() };
+        let xt = h.stem.as_ref().map_or(0.0, |s| s.bow.unwrap()[2]);
+        let k = keel_line(&build_mesh(&h, &spec(12.0, Some(0.375))).unwrap());
+        // One low point, monotone down to it from the bow and up after it to the stern.
+        let lo = k.iter().enumerate().min_by(|a, b| a.1.1.total_cmp(&b.1.1)).unwrap().0;
+        assert!(k[..=lo].windows(2).all(|w| w[1].1 <= w[0].1 + 1e-9), "r {r}: sawtooth before the low point");
+        assert!(k[lo..].windows(2).all(|w| w[1].1 >= w[0].1 - 1e-9), "r {r}: sawtooth after the low point");
+        // No steps: away from the stem arc the slope changes by little from one station to
+        // the next (a step is a flat run then a jump).
+        let worst = k
+            .windows(3)
+            .filter(|w| w[0].0 > xt + 1.0 && w[2].0 < h.length - xt - 1.0)
+            .map(|w| ((w[2].1 - w[1].1) / (w[2].0 - w[1].0) - (w[1].1 - w[0].1) / (w[1].0 - w[0].0)).abs())
+            .fold(0.0, f64::max);
+        assert!(worst < 0.1, "r {r}: keel slope jumps by {worst} between stations");
+    }
+}
+
+#[test]
+fn sections_never_fold() {
+    // Every exported girth (outer hull and inner wall) narrows going down from the sheer to the
+    // keel: no wing sticking out near the keel. off1 with and without a stem radius, beamy, and
+    // a generated (shape search) hull with rocker.
+    let shape = jaguar::hullgen::generate(
+        &jaguar::hullgen::ShapeParams {
+            length_in: 216.0,
+            beam_in: 19.6,
+            draft_in: 6.6,
+            fore_wp: 0.48,
+            section: 0.55,
+            fore_rocker: 0.56,
+            aft_wp: 0.38,
+            aft_rocker: 0.59,
+            fore_len_frac: 0.43,
+            aft_len_frac: 0.43,
+            gunwale_radius_in: None,
+            metrics: None,
+        },
+        41,
+        21,
+        "gen",
+    )
+    .unwrap();
+    let beamy = Hull::load(Path::new("examples/beamy_hull.json")).unwrap();
+    let mut hp = jaguar::params::Params::load(Path::new("examples/canoe.toml")).unwrap().hull;
+    hp.templates = None;
+    hp.doubly_symmetric = false;
+    for (name, h) in [
+        ("off1", off1()),
+        ("off1 r4", off1_stem(4.0)),
+        ("beamy r4", beamy.prepared(&hp).unwrap()),
+        ("shape r4", shape.prepared(&hp).unwrap()),
+    ] {
+        let b = build_mesh(&h, &spec(12.0, Some(0.375))).unwrap().brep.expect("B-spline nets");
+        // The outer girths strictly; the inner wall within 0.05 in (its offset is scaled for the
+        // surface's tilt along x, point by point, so near a tapering tip it can bulge a little
+        // at a knuckle; the wing a fold makes was about 1 in).
+        for (side, rows, tol) in [("outer", &b.outer, 1e-9), ("inner", b.inner.as_ref().unwrap(), 0.05)] {
+            for (x, g) in rows.iter() {
+                for w in g.windows(2) {
+                    assert!(w[1].0 <= w[0].0 + tol, "{name} {side} folds at x {x}: {:?}", g);
+                }
+            }
+        }
+    }
+}
+
 fn pockets(s: ExportSpec, l: f64) -> ExportSpec {
     ExportSpec { pocket_in: Some(l), ..s }
 }
@@ -302,7 +407,7 @@ fn box_pockets_are_sealed_voids_under_a_cover_and_behind_a_bulkhead() {
     assert_eq!(comp.iter().max(), Some(&2));
     let mut vols = [0.0; 3];
     for (t, &k) in m.tris.iter().zip(&comp) {
-        let one = Mesh { verts: m.verts.clone(), tris: vec![*t], closed: false };
+        let one = Mesh { verts: m.verts.clone(), tris: vec![*t], closed: false, brep: None };
         vols[k] += one.volume();
     }
     let mut v = vols.to_vec();

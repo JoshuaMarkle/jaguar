@@ -296,9 +296,10 @@ pub struct HullParams {
     pub templates: Option<usize>,
     /// Side-view stem radius, in (default 4): the bottom of the bow and stern stems, where the
     /// stem meets the keel line, rounded on an arc tangent to both (`Hull::filleted`), so the
-    /// bottom has no point. The top of the stem, the plan-view entry and the sections stay as
-    /// they are; the arc may run above the design waterline (a mold shallower than its top is
-    /// rejected). 0 = sharp. Applied after `templates`. Old name `keel_fillet_radius_in`.
+    /// bottom has no point. Over the arc the sections are stretched onto it (same shape, still
+    /// pointed, waterlines still pointed); the top of the stem and the gunwale stay. The arc may
+    /// run above the design waterline (a mold shallower than its top is rejected). 0 = sharp.
+    /// Applied after `templates`. Old name `keel_fillet_radius_in`.
     #[serde(default = "stem_radius", alias = "keel_fillet_radius_in")]
     pub stem_radius_in: f64,
     /// With a gunwale outline: steepest outward side lean allowed anywhere

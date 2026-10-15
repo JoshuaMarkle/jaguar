@@ -46,8 +46,9 @@ Unknown keys are errors, so a typo never becomes a silent default.
   "half_breadth": [[...], ...]          // [station][waterline], in, >= 0
 }
 ```
-Optional `"stem"`: written by JAGUAR on a prepared hull whose stem radius runs above the table
-(radius, each end's [stem x, arc top], the uncut top waterline; Physics 0). Hull files leave it out.
+Optional `"stem"`: written by JAGUAR on a prepared hull with a stem radius (radius, and per end
+[stem x, arc top, x where the arc meets the keel], from that end's tip; Physics 0). Hull files
+leave it out.
 A dense rectangular offset table is what every hull tool (Michlet, CAD section cuts, spreadsheets)
 can produce, needs only linear interpolation, and the browser can mesh it directly.
 
@@ -68,27 +69,35 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    outline and the export treat both ends alike, so the built canoe stays symmetric.
    **Stem radius** (`hull.stem_radius_in = r`, default 4 in, 0 = sharp, applied after templates;
    old name `keel_fillet_radius_in` still reads): in side view, the corner where the stem meets
-   the keel line at the bow and at the stern (the forefoot) is cut on an arc of radius r tangent to
-   the stem (the last station without breadth) and resting on the keel line within 2 r
-   (`Hull::filleted`). Each waterline the arc shortens keeps its plan shape at the tip: it is
-   shifted aft to the arc, the shift blended out over 4 r with zero slope at the tip, so the entry
-   angle is unchanged. The top of the stem, length overall, draft and everything beyond 5 r from the
-   ends are unchanged; concrete is only removed; plan view and sections are not rounded. An arc
-   taller than the hull table (its top above the design draft; off1's stem foot is at z 4.0, so
-   r 4 reaches z 8.0) goes on into the topsides: the prepared hull carries the arcs and the uncut
-   top waterline (`stem` in the hull JSON, kept in result.json's `winner_hull`), every topsides
-   row up to the arc top is built from the uncut waterline (flared or ruled to the gunwale
-   outline, which is fitted to the uncut waterline) and then cut the same way, and the grid gets
-   a row every r/8 up the arc. A mold shallower than the arc top fails that candidate with the
-   reason (a shape search goes on). Weight, displacement, freeboard, GM, D/C, flotation, drag
-   and the export all use the cut hull; the export takes the keel along the arc from the grid
-   where the table has no breadth. The table is refined (waterlines every r/8 over each arc,
-   stations every r/8 within 5 r of each end) and the STEP/STL export keeps those stations.
-   off1 at r 4 vs sharp: 98.32 vs 98.39 lb; the cut takes more displaced volume than concrete off
-   the ends, so it floats about 0.01 in lower (freeboard 6.66 vs 6.67 in, GM 1.061 vs 1.063 in),
-   drag 32.2 vs 32.0 N, punching D/C unchanged; run 0.34 vs 0.30 s. Shape search
-   (shape_opt.toml): 86.8 vs 86.3 lb, 33 s vs 27 s.
-1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
+   the keel line at the bow and at the stern (the forefoot) is rounded on an arc of radius r
+   tangent to the stem (the last station without breadth) and resting on the keel line K(x)
+   (Physics 1) within 2 r: centre height zc = max over the keel there of K + sqrt(r^2 - dx^2), the
+   arc meeting K (tangent) where that maximum is (`Hull::filleted`, `forefoot`). From the stem to
+   that point the keel line is the arc K'(x), vertical at the stem; there each column of the grid
+   is its uncut surface (table loft, then the topsides) stretched from K .. D onto K' .. D,
+   z -> K + (z - K')(D - K)/(D - K') (`Grid::cut_stem`): every section keeps its shape and its
+   pointed bottom, every waterline stays pointed, the top of the stem, the gunwale, length overall
+   and everything aft of the arc are unchanged, concrete is only removed, nothing folds. The hull
+   table itself is kept; the arcs ride along in the hull JSON as `stem` (kept in result.json's
+   `winner_hull`). An arc may reach above the design waterline (off1: stem foot about z 4.3, r 4
+   reaches z 8.3), where the grid gets a row every r/8; a mold shallower than the arc top fails
+   that candidate with the reason (a shape search goes on). Weight, displacement, freeboard, GM,
+   D/C, flotation and drag all read the cut grid; the export draws it (24 more stations over each
+   arc, closest at the stem). off1 at r 4 vs sharp: 98.18 vs 98.24 lb, freeboard 6.666 vs 6.667 in, GM 1.070 vs 1.071 in,
+   drag 31.81 N both, punching D/C 0.904 both.
+1. **Grid**: resample to `hull.stations` evenly spaced x on the table's loft (`hull::Loft`): each
+   station with breadth has a keel height (the parabola z = k + c y^2 through its two lowest
+   offsets, kept between the last zero waterline and the first non-zero one); the keel line K(x)
+   is the monotone cubic (Fritsch-Carlson PCHIP: interior slopes the weighted harmonic mean of the
+   neighbouring secants, 0 at an extremum; end slopes the end secants) through them, continued
+   straight with the end slopes to the stems and kept within the table (C1, no steps). A section
+   is its offsets, linear between waterlines, and below its lowest offset a straight line down to
+   its keel. Between stations a and b (fraction t, T the table top) the half-breadth at z >= K(x)
+   is (1 - t) Y_a(K_a + s (T - K_a)) + t Y_b(K_b + s (T - K_b)), s = (z - K)/(T - K): sections
+   stretched between the keel line and the top, so the keel follows K(x) instead of stepping from
+   waterline to waterline, and the table top is the plain linear blend. 0 below K. (Up to
+   2026-10-15 the table was blended at fixed heights: the keel sat at the lower station's height
+   for a whole interval and then stepped, up to 0.4 in on off1.) Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`
    = [min, max] searched as a shape variable): in top view the gunwale runs straight from the bow
@@ -282,14 +291,21 @@ GM within 0.05 in, which is enough to cross off1's GM gate at 0.25).
 the winner's hull (generated or `hull.file`), wall thickness, mold depth and flare; from a hull.json
 the outer mold surface to `--depth` (add `--thickness` for the solid wall). Same surface as the
 analysis grid, both sides mirrored, each station's girth resampled to `--girth` points.
-* **STEP** (AP214): a closed `MANIFOLD_SOLID_BREP` of planar triangular faces for a wall, or an
-  `OPEN_SHELL` surface model for the mold surface. Verified: opens as one valid solid in
-  OpenCASCADE (gmsh 4.15, the kernel FreeCAD uses) with matching volume and bounding box, also
-  with air pocket bulkheads (off1 and barge winners).
+* **STEP** (AP214): a closed `MANIFOLD_SOLID_BREP` (`BREP_WITH_VOIDS` with air pockets) for a
+  wall, or an `OPEN_SHELL` surface model for the mold surface, of smooth faces: the outer hull,
+  the inner wall and each pocket's void wall are cubic B-spline surfaces (a starboard and a port
+  half each, clamped uniform knots, control net = the exported stations x girth points), the
+  top at the mold depth (gunwale, rim and solid ends, one face with the opening as its hole), the
+  bulkheads closing the hollow, the pocket lids and caps are planes. Neighbouring faces share
+  their boundary curves (the same B-spline curve: the keel, the stem lines, the sheers, the end
+  sections), so the solid is watertight by construction. Verified in OpenCASCADE 7.x (OCP):
+  valid (BRepCheck), closed shells with no free edges, no self-intersection
+  (BOPAlgo_ArgumentAnalyzer), volume within 0.25% of the mesh (the B-spline is smoothed through
+  its control net). A hull whose ends are not stem lines, or whose inner wall does not reach the
+  mold depth at the sheer, is written as planar facets instead.
 * **STL** (binary): the same triangles, watertight for a wall.
-* The keel line is smooth along x: its height at each table station is fitted below the lowest
-  non-zero waterline (parabolic section through the two lowest offsets), then interpolated with a
-  monotone cubic, not snapped to waterlines.
+* The keel line is the loft's K(x) (Physics 1), with the stem arcs: smooth (C1) from stem to stem,
+  never snapped to waterlines, and nothing on the centreline below it.
 * The inner face is the mold line offset inward by t, point for point (mitred), with the offset
   stretched where the hull tapers along x so the wall is t thick normal to the surface (off1 at
   t = 0.375: within 1% over the middle 80% of the length). At the bow and stern, where that offset

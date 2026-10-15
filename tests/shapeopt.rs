@@ -304,9 +304,9 @@ fn templates_are_what_the_search_analyses() {
 fn stem_radius_taller_than_the_mold_rejects_the_design_not_the_run() {
     let mut p = small(false);
     p.hull.stem_radius_in = 12.0;
-    p.search.depth_in = [11.0, 13.0, 2.0];
+    p.search.depth_in = [9.0, 11.0, 2.0];
     let r = jaguar::run(&p, &|_| {}).expect("the run finishes");
-    assert!(r.winner.is_none(), "no 11..13 in mold fits a 12 in arc on top of the stem foot");
+    assert!(r.winner.is_none(), "no 9..11 in mold fits a 12 in arc on top of the stem foot");
     assert!(!r.candidates.is_empty());
     assert!(
         r.candidates
@@ -314,6 +314,7 @@ fn stem_radius_taller_than_the_mold_rejects_the_design_not_the_run() {
             .all(|c| !c.passes && c.error.as_deref().is_some_and(|e| e.contains("stem radius 12 in")))
     );
     p.hull.stem_radius_in = 4.0;
+    p.search.depth_in = [11.0, 15.0, 2.0];
     let r = jaguar::run(&p, &|_| {}).expect("the run finishes");
     let (w, wh) = (r.winner.as_ref().expect("a 4 in arc fits"), r.winner_hull.as_ref().unwrap());
     assert!(wh.name.ends_with("-f4"), "the winner carries the radius: {}", wh.name);

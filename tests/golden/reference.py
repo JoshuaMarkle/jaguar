@@ -52,12 +52,92 @@ def read_hull(off1, out):
     return L, T, y
 
 
+def station_keel(col, z):
+    """Keel height of one offsets column: the parabola z = k + c y^2 through its two lowest
+    non-zero offsets, kept between the last zero waterline and the first non-zero one."""
+    nonzero = np.flatnonzero(col > 1e-9)
+    if nonzero.size == 0:
+        return None
+    f = nonzero[0]
+    if f == 0:
+        return z[0]
+    k = z[f - 1]
+    if f + 1 < col.size and col[f + 1] > col[f] + 1e-9:
+        a, b = col[f] ** 2, col[f + 1] ** 2
+        k = (z[f] * b - z[f + 1] * a) / (b - a)
+    return float(np.clip(k, z[f - 1], z[f]))
+
+
+def keel_line(xk, zk, x, lo, hi):
+    """Monotone cubic Hermite (Fritsch-Carlson) through the station keels, continued as straight
+    lines with the end slopes beyond them, kept within [lo, hi] (the table's waterlines).
+    Interior slope: weighted harmonic mean of the two secants (0 if they differ in sign);
+    end slopes: the end secants."""
+    xk, zk = np.asarray(xk, float), np.asarray(zk, float)
+    if xk.size == 1:
+        return np.full_like(np.asarray(x, float), zk[0])
+    h, d = np.diff(xk), np.diff(zk) / np.diff(xk)
+    m = np.empty_like(zk)
+    m[0], m[-1] = d[0], d[-1]
+    for i in range(1, xk.size - 1):
+        if d[i - 1] * d[i] > 0:
+            w1, w2 = 2 * h[i] + h[i - 1], h[i] + 2 * h[i - 1]
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i])
+        else:
+            m[i] = 0.0
+    x = np.asarray(x, float)
+    xq = np.clip(x, xk[0], xk[-1])
+    i = np.clip(np.searchsorted(xk, xq, side="right") - 1, 0, xk.size - 2)
+    s = (xq - xk[i]) / h[i]
+    k = (zk[i] * (2 * s**3 - 3 * s**2 + 1) + h[i] * m[i] * (s**3 - 2 * s**2 + s)
+         + zk[i + 1] * (3 * s**2 - 2 * s**3) + h[i] * m[i + 1] * (s**3 - s**2))
+    k = np.where(x < xk[0], zk[0] + m[0] * (x - xk[0]), k)
+    k = np.where(x > xk[-1], zk[-1] + m[-1] * (x - xk[-1]), k)
+    return np.clip(k, lo, hi)
+
+
+def station_profile(col, z, k, zq):
+    """Half-breadth of one station at height zq: its offsets, linear between waterlines, and a
+    straight line from the lowest offset down to the keel k (0 below it)."""
+    if k is None:
+        return 0.0
+    f = int(np.flatnonzero(col > 1e-9)[0])
+    if f > 0:
+        if zq <= k:
+            return 0.0
+        if zq < z[f]:
+            return col[f] * (zq - k) / (z[f] - k) if z[f] > k else col[f]
+    return float(np.interp(zq, z, col))
+
+
 def build(L, T, y, depth, n):
-    """Resample to n stations and extrude the DWL offsets up to the gunwale."""
+    """Resample to n stations (SPEC Physics 1: between stations each section is stretched
+    between the smooth keel line and the table top, then blended) and extrude the DWL offsets
+    up to the gunwale."""
     x0 = np.linspace(0, L, y.shape[0])
-    x = np.linspace(0, L, n)
-    y = np.column_stack([np.interp(x, x0, y[:, k]) for k in range(y.shape[1])])
     z = np.linspace(0, T, y.shape[1])
+    keels = [station_keel(y[j], z) for j in range(len(x0))]
+    xk = [x0[j] for j in range(len(x0)) if keels[j] is not None]
+    zk = [k for k in keels if k is not None]
+    K0 = keel_line(xk, zk, x0, z[0], T)             # keel line at the table stations
+    x = np.linspace(0, L, n)
+    K = keel_line(xk, zk, x, z[0], T)
+    out = np.zeros((n, z.size))
+    for i, xi in enumerate(x):
+        j = int(np.clip(np.searchsorted(x0, xi, side="right"), 1, len(x0) - 1))
+        t = float(np.clip((xi - x0[j - 1]) / (x0[j] - x0[j - 1]), 0, 1))
+        for q, zq in enumerate(z):
+            if zq < K[i]:
+                continue
+            if T - K[i] > 1e-9:
+                s = min(max((zq - K[i]) / (T - K[i]), 0.0), 1.0)
+                za, zb = K0[j - 1] + s * (T - K0[j - 1]), K0[j] + s * (T - K0[j])
+            else:
+                za = zb = zq
+            ya = station_profile(y[j - 1], z, keels[j - 1], za)
+            yb = station_profile(y[j], z, keels[j], zb)
+            out[i, q] = ya if t <= 0 else yb if t >= 1 else ya * (1 - t) + yb * t
+    y = out
     if depth > T:
         zf = np.linspace(T + 0.1, depth, 10)
         y = np.hstack([y, np.tile(y[:, -1:], (1, len(zf)))])
@@ -261,6 +341,11 @@ def regen(off1="tests/golden/michlet/off1.mlt", out="tests/golden/michlet/out.ml
             c["outputs"] = fn(c["inputs"])
         json.dump(d, open(path, "w"), indent=1)
         open(path, "a").write("\n")
+    path = "tests/golden/grid_v0.json"
+    g = json.load(open(path))
+    _, _, y = build(L, T, y0, g["depth"], g["stations"])
+    g.update(nz=int(y.shape[1]), sum=float(y.sum()), sumsq=float((y * y).sum()), row80=[float(v) for v in y[80]])
+    json.dump(g, open(path, "w"))
 
 
 def main():

@@ -52,7 +52,9 @@ fn example_finds_verified_winner() {
     // Strength from data/mix_tests.csv; knee punching (ACI 318-19 22.6.5.2,
     // demand on b0*d, two knees with a 60/40 split) governs and needs 58 pcf.
     assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 58.0, 12.0));
-    assert!((c.hull_weight_lb / 98.39 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
+    // 98.39 lb on the old fixed-height table blend; 98.24 on the smooth-keel loft (no hull
+    // between stations below the keel line).
+    assert!((c.hull_weight_lb / 98.24 - 1.0).abs() < 1e-3, "{}", c.hull_weight_lb);
     let v = c.verdict.as_ref().unwrap();
     assert!((v.dc - 0.904).abs() < 2e-3, "{}", v.dc);
     assert_eq!(v.governing_check, "punching");
@@ -536,7 +538,7 @@ fn stem_radius_keeps_length_and_reaches_the_export() {
     let plain = jaguar::run(&p, &|_| {}).unwrap();
     let (a, b) = (plain.winner.as_ref().unwrap(), r.winner.as_ref().unwrap());
     let wh = r.winner_hull.as_ref().unwrap();
-    assert!(wh.x.len() > h.x.len() && wh.name.ends_with("-f4"));
+    assert!(wh.x == h.x && wh.name.ends_with("-f4"), "the table is kept; the arcs ride along");
     assert!(wh.stem.as_ref().is_some_and(|s| s.top_in() > h.draft_design), "the arc runs above the table");
     assert!(plain.winner_hull.as_ref().unwrap().stem.is_none());
     assert_eq!(a.candidate.length_in, b.candidate.length_in);
@@ -546,11 +548,11 @@ fn stem_radius_keeps_length_and_reaches_the_export() {
         assert_eq!(key(c0), key(c1));
         assert!(c1.hull_weight_lb < c0.hull_weight_lb, "the stem arc only removes concrete");
         assert!(c1.hull_weight_lb > c0.hull_weight_lb * 0.97, "and only a little");
-        // The float and the checks see the cut ends. The arc takes more displaced volume than
-        // concrete off the ends, so the canoe floats a little lower; GM moves; the knee punching
-        // D/C (local) stays, the hull-girder checks recompute.
+        // The float and the checks see the cut ends: freeboard and GM move (by little: the arc
+        // takes about 0.05 lb of concrete and as little displaced volume off off1); the knee
+        // punching D/C (local) stays, the hull-girder checks recompute.
         if let (Some(v0), Some(v1)) = (&c0.verdict, &c1.verdict) {
-            assert!(v1.freeboard_in < v0.freeboard_in && v1.freeboard_in > v0.freeboard_in - 0.05);
+            assert!(v1.freeboard_in != v0.freeboard_in && (v1.freeboard_in - v0.freeboard_in).abs() < 0.05);
             assert!(c1.gm_in != c0.gm_in);
             let other = |v: &jaguar::check::Verdict| {
                 serde_json::to_string(&v.checks.iter().filter(|c| c.name != "punching").collect::<Vec<_>>())

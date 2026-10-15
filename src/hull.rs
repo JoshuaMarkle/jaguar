@@ -38,32 +38,38 @@ pub struct Hull {
     pub z: Vec<f64>,
     /// `half_breadth[station][waterline]`, in, all finite and >= 0.
     pub half_breadth: Vec<Vec<f64>>,
-    /// Stem radius arcs that run above the table ([`Hull::filleted`]): the topsides between
-    /// the table top and the top of the arc are cut like the waterlines below it. Absent on
-    /// hull files and when every arc ends inside the table.
+    /// Side-view stem radius arcs ([`Hull::filleted`]): the keel line over each arc and the
+    /// sections stretched onto it, applied when the grid is built. Absent on hull files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stem: Option<StemArcs>,
 }
 
-/// The part of the side-view stem radius above the table of a [`Hull`] (see [`Hull::filleted`]).
+/// The side-view stem radius of a [`Hull`] (see [`Hull::filleted`]).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StemArcs {
     /// Arc radius, in.
     pub radius_in: f64,
-    /// Bow arc: [stem x from the bow tip, arc centre height], in. None = no arc there.
-    pub bow: Option<[f64; 2]>,
+    /// Bow arc: [stem x, arc centre height, x where the arc meets the keel line], x from the
+    /// bow tip, in. None = no arc there.
+    pub bow: Option<[f64; 3]>,
     /// Stern arc, x measured in from the stern tip.
-    pub stern: Option<[f64; 2]>,
-    /// The table's top waterline before the radius was cut, at the table's stations: the
-    /// topsides are built from it and then cut.
-    pub top_waterline: Vec<f64>,
+    pub stern: Option<[f64; 3]>,
 }
 
 impl StemArcs {
-    /// Highest point of the arcs (their centre height), in.
+    /// Highest point of the arcs (their centre height, on the stem), in.
     pub fn top_in(&self) -> f64 {
         [self.bow, self.stern].iter().flatten().map(|e| e[1]).fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    /// Lowest point of the arcs (where they meet the keel), in.
+    pub fn bottom_in(&self) -> f64 {
+        [self.bow, self.stern]
+            .iter()
+            .flatten()
+            .map(|e| e[1] - (self.radius_in.powi(2) - (e[2] - e[0] - self.radius_in).powi(2)).max(0.0).sqrt())
+            .fold(f64::INFINITY, f64::min)
     }
 }
 
@@ -95,138 +101,47 @@ impl Hull {
     }
 
     /// The hull with a side-view radius `r`, in, at the forefoot of the bow and of the stern (the
-    /// corner where the stem meets the keel line), so the bottom has no point. The profile corner
-    /// is cut on an arc tangent to the stem and to the keel; every waterline the arc shortens
-    /// keeps its plan shape at the tip (shifted aft, the shift blended out over 4 r), so the entry
-    /// angle stays as sharp. Length overall, draft and sections away from the ends are unchanged;
-    /// concrete is only removed. The table is refined to resolve the arc (waterlines every r/8
-    /// over it, stations every r/8 within 5 r of each end). An arc taller than the table goes on
-    /// into the topsides (`stem`, cut by [`Grid::build_topsides`]; a mold shallower than the arc
-    /// is then unbuildable). Err past `FILLET_MAX_STATIONS` stations.
+    /// corner where the stem meets the keel line), so the bottom has no point. The profile is
+    /// rounded on an arc tangent to the stem and to the keel line ([`forefoot`]); from the stem to
+    /// where the arc meets the keel, the keel line is the arc and every section, from the keel up
+    /// to the mold depth, is stretched onto it ([`Grid::build_topsides`]): sections keep their
+    /// shape and pointed bottom, waterlines stay pointed, the top of the stem, the gunwale and
+    /// everything aft of the arc are unchanged, concrete is only removed. The table itself is
+    /// kept; the arcs are recorded in `stem`. An arc may reach above the design waterline; a mold
+    /// shallower than its top is unbuildable.
     pub fn filleted(&self, r: f64) -> Result<Hull> {
         ensure!(r.is_finite() && r > 0.0, "stem radius must be > 0, got {r}");
         ensure!(self.stem.is_none(), "hull {} already has a stem radius", self.name);
+        let loft = self.loft();
+        let bow = forefoot(&loft, r, true);
+        // A mirror table (doubly symmetric, to 1e-9 in) gets the bow's arc at the stern too, so
+        // float noise in the stern's own fit cannot make the ends differ.
         let n = self.x.len();
-        let (xa, xb, ztop) = (self.x[0], self.x[n - 1], self.z[self.z.len() - 1]);
-        // Bow in its own coordinates, stern mirrored (x measured in from the stern tip).
-        let mirrored: Vec<f64> = self.x.iter().rev().map(|v| xb - v).collect();
-        let rows_rev: Vec<Vec<f64>> = self.half_breadth.iter().rev().cloned().collect();
-        let ends =
-            [forefoot(&self.x, &self.z, &self.half_breadth, r), forefoot(&mirrored, &self.z, &rows_rev, r)];
-        let h = 0.125 * r;
-        let blend = 4.0 * r;
-        let mut z = self.z.clone();
-        for (_, zc) in ends.iter().flatten() {
-            let (lo, hi) = ((zc - r).max(self.z[0]), zc.min(ztop));
-            if hi > lo {
-                z.extend(linspace(lo, hi, ((hi - lo) / h).ceil() as usize + 1));
-            }
-        }
-        z.sort_by(f64::total_cmp);
-        z.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
-        let mut x = self.x.clone();
-        for (k, end) in ends.iter().enumerate() {
-            if let Some((xe, _)) = end {
-                let m = ((r + blend) / h).ceil() as usize;
-                for i in 0..=m {
-                    let d = xe + i as f64 * h;
-                    x.push(if k == 0 { xa + d } else { xb - d }.clamp(xa, xb));
-                }
-            }
-        }
-        x.sort_by(f64::total_cmp);
-        x.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-        ensure!(
-            x.len() <= FILLET_MAX_STATIONS,
-            "forefoot radius of {r} in needs {} stations (max {FILLET_MAX_STATIONS}): use a larger radius",
-            x.len()
-        );
-        // Source waterline at height zz (linear between the table's waterlines), at its stations.
-        let column = |zz: f64| -> Vec<f64> {
-            let k = self.z.partition_point(|&v| v <= zz).clamp(1, self.z.len() - 1);
-            let t = ((zz - self.z[k - 1]) / (self.z[k] - self.z[k - 1])).clamp(0.0, 1.0);
-            self.half_breadth.iter().map(|row| row[k - 1] * (1.0 - t) + row[k] * t).collect()
-        };
-        let lerp = |c: &[f64], xi: f64| -> f64 {
-            let j = self.x.partition_point(|&v| v <= xi).clamp(1, n - 1);
-            let t = ((xi - self.x[j - 1]) / (self.x[j] - self.x[j - 1])).clamp(0.0, 1.0);
-            c[j - 1] * (1.0 - t) + c[j] * t
-        };
-        let mut rows = vec![vec![0.0; z.len()]; x.len()];
-        for (k, &zz) in z.iter().enumerate() {
-            let c = column(zz);
-            let crev: Vec<f64> = c.iter().rev().copied().collect();
-            let sb = arc_shift(ends[0], r, zz, &self.x, &c);
-            let ss = arc_shift(ends[1], r, zz, &mirrored, &crev);
-            for (i, &xi) in x.iter().enumerate() {
-                let bow = xi - xa <= xb - xi;
-                let (d, sh) = if bow { (xi - xa, sb) } else { (xb - xi, ss) };
-                rows[i][k] = match arc_source(d, sh, blend) {
-                    None => 0.0,
-                    Some(src) => lerp(&c, if bow { xa + src } else { xb - src }),
-                };
-            }
-        }
-        let above = ends.iter().flatten().any(|e| e.1 > ztop + 1e-9);
-        let top = column(ztop);
-        let stem = above.then(|| StemArcs {
-            radius_in: r,
-            bow: ends[0].map(|(a, b)| [a, b]),
-            stern: ends[1].map(|(a, b)| [a, b]),
-            top_waterline: x.iter().map(|&xi| lerp(&top, xi)).collect(),
+        let mirror = (0..n).all(|i| {
+            (self.x[i] + self.x[n - 1 - i] - self.length).abs() < 1e-9
+                && self.half_breadth[i]
+                    .iter()
+                    .zip(&self.half_breadth[n - 1 - i])
+                    .all(|(a, b)| (a - b).abs() < 1e-9)
         });
+        let ends = [bow, if mirror { bow } else { forefoot(&loft, r, false) }];
         let h = Hull {
             name: format!("{}-f{r}", self.name),
             source: format!("{}, stem radius r = {r} in (side view)", self.source),
-            x,
-            z,
-            half_breadth: rows,
-            stem,
+            stem: ends.iter().any(Option::is_some).then_some(StemArcs {
+                radius_in: r,
+                bow: ends[0],
+                stern: ends[1],
+            }),
             ..self.clone()
         };
         h.validate()?;
         Ok(h)
     }
 
-    /// Half-breadth at `x` of the topsides row at height `z` (above the table), given `row`,
-    /// that row as built from the uncut top waterline ([`Hull::top_uncut`]): with a stem radius
-    /// above the table the row is cut and shifted aft like the waterlines below (`filleted`).
-    pub fn stem_cut(&self, x: f64, z: f64, row: impl Fn(f64) -> f64) -> f64 {
-        let Some(st) = &self.stem else { return row(x) };
-        let n = self.x.len();
-        let (xa, xb) = (self.x[0], self.x[n - 1]);
-        let bow = x - xa <= xb - x;
-        let (end, d) = if bow { (st.bow, x - xa) } else { (st.stern, xb - x) };
-        // The row's tip from this end: where the uncut top waterline starts.
-        let tip = if bow {
-            st.top_waterline.iter().position(|v| *v > 0.0).map(|j| self.x[j.saturating_sub(1)] - xa)
-        } else {
-            st.top_waterline.iter().rposition(|v| *v > 0.0).map(|j| xb - self.x[(j + 1).min(n - 1)])
-        };
-        let r = st.radius_in;
-        let sh = match (end, tip) {
-            (Some([xe, zc]), Some(tip)) if z >= zc - r - 1e-12 && z <= zc => {
-                let arc = xe + r - (r * r - (z - zc) * (z - zc)).max(0.0).sqrt();
-                (arc > tip + 1e-12).then_some((tip, arc - tip))
-            }
-            _ => None,
-        };
-        match arc_source(d, sh, 4.0 * r) {
-            None => 0.0,
-            Some(src) => row(if bow { xa + src } else { xb - src }),
-        }
-    }
-
-    /// The uncut top waterline at `x` (the table's top row when no stem arc runs above it).
-    pub fn top_uncut(&self, x: f64) -> f64 {
-        match &self.stem {
-            Some(st) => {
-                let j = self.x.partition_point(|&v| v <= x).clamp(1, self.x.len() - 1);
-                let t = ((x - self.x[j - 1]) / (self.x[j] - self.x[j - 1])).clamp(0.0, 1.0);
-                st.top_waterline[j - 1] * (1.0 - t) + st.top_waterline[j] * t
-            }
-            None => interp_col(&self.x, &self.half_breadth, self.z.len() - 1, x),
-        }
+    /// The surface between the stations ([`Loft`]: smooth keel).
+    pub fn loft(&self) -> Loft<'_> {
+        Loft::new(self)
     }
 
     /// The hull made fore-aft symmetric (doubly symmetric with port/starboard): each station
@@ -245,13 +160,12 @@ impl Hull {
         if n % 2 == 1 {
             x[n / 2] = 0.5 * (x0 + x1);
         }
+        let loft = self.loft();
         let half: Vec<Vec<f64>> = (0..n)
             .map(|i| {
-                (0..self.z.len())
-                    .map(|k| {
-                        0.5 * (interp_col(&self.x, &self.half_breadth, k, x[i])
-                            + interp_col(&self.x, &self.half_breadth, k, x[n - 1 - i]))
-                    })
+                self.z
+                    .iter()
+                    .map(|&zk| 0.5 * (loft.breadth(x[i], zk) + loft.breadth(x[n - 1 - i], zk)))
                     .collect()
             })
             .collect();
@@ -264,20 +178,19 @@ impl Hull {
         }
     }
 
-    /// The hull as `n` cross-section templates with a straight (ruled) loft
-    /// between neighbours: the exact sections of this hull at `n` stations,
-    /// cosine-spaced (closer at the ends, where the shape changes fastest), tips
-    /// included. A jaguar-hull/1 table interpolates linearly between stations,
-    /// so the result is exactly the mold built from those templates.
+    /// The hull as `n` cross-section templates lofted between neighbours: the exact
+    /// sections of this hull at `n` stations, cosine-spaced (closer at the ends, where
+    /// the shape changes fastest), tips included. Between templates the table's [`Loft`]
+    /// applies: waterlines straight where the keel is level, the keel a smooth batten
+    /// through the templates' keels where it rises.
     pub fn templated(&self, n: usize) -> Hull {
         let (x0, x1) = (self.x[0], self.x[self.x.len() - 1]);
         let x: Vec<f64> = (0..n)
             .map(|i| x0 + (x1 - x0) * 0.5 * (1.0 - (std::f64::consts::PI * i as f64 / (n - 1) as f64).cos()))
             .collect();
-        let half_breadth = x
-            .iter()
-            .map(|&xi| (0..self.z.len()).map(|k| interp_col(&self.x, &self.half_breadth, k, xi)).collect())
-            .collect();
+        let loft = self.loft();
+        let half_breadth =
+            x.iter().map(|&xi| self.z.iter().map(|&zk| loft.breadth(xi, zk)).collect()).collect();
         Hull {
             name: format!("{}-t{n}", self.name),
             source: format!("{} as {n} cross-section templates, straight between", self.source),
@@ -311,14 +224,9 @@ impl Hull {
         );
         if let Some(st) = &self.stem {
             ensure!(st.radius_in.is_finite() && st.radius_in > 0.0, "stem.radius_in must be > 0");
-            ensure!(st.top_waterline.len() == self.x.len(), "stem.top_waterline len != x.len()");
             ensure!(
-                st.top_waterline.iter().all(|v| v.is_finite() && *v >= 0.0),
-                "stem.top_waterline has a negative or non-finite value"
-            );
-            ensure!(
-                [st.bow, st.stern].iter().flatten().flatten().all(|v| v.is_finite()),
-                "stem arc has a non-finite value"
+                [st.bow, st.stern].iter().flatten().all(|e| e.iter().all(|v| v.is_finite()) && e[2] >= e[0]),
+                "stem arc has a non-finite value or ends before the stem"
             );
         }
         Ok(())
@@ -580,74 +488,100 @@ impl Grid {
     /// [`Grid::build_topsides`] at the given stations `xs` (increasing) instead of `n` even ones.
     pub fn build_topsides_at(hull: &Hull, depth: f64, xs: &[f64], ts: Topsides) -> (Grid, Option<String>) {
         let mut g = Self::build_flared_at(hull, depth, xs, ts.flare_deg);
-        if let Some(st) = &hull.stem
-            && st.top_in() > depth + 1e-9
-        {
-            let why = format!(
+        let dd = hull.draft_design;
+        let mut why = hull.stem.as_ref().filter(|st| st.top_in() > depth + 1e-9).map(|st| {
+            format!(
                 "stem radius {} in: the arc reaches z = {:.2} in, above the mold depth {depth} in; \
                  use a smaller stem_radius_in or a deeper mold",
                 st.radius_in,
                 st.top_in()
-            );
-            return (g, Some(why));
-        }
-        let Some(r) = ts.gunwale_radius_in else { return (g, None) };
-        let dd = hull.draft_design;
-        if depth <= dd {
-            let why =
-                format!("gunwale outline: mold depth {depth} in must be above the design draft {dd:.2} in");
-            return (g, Some(why));
-        }
-        // The outline is fitted to the uncut top waterline (a stem radius only cuts the ends).
-        let uncut = hull.stem.as_ref().map(|st| {
-            let mut h = hull.clone();
-            for (row, &t) in h.half_breadth.iter_mut().zip(&st.top_waterline) {
-                *row.last_mut().unwrap() = t;
-            }
-            h.stem = None;
-            h
+            )
         });
-        let base = uncut.as_ref().unwrap_or(hull);
-        let gw = match Gunwale::of_hull(base, depth, ts.flare_deg, r) {
-            Ok(gw) => gw,
-            Err(e) => return (g, Some(e)),
+        let loft = hull.loft();
+        let mut gunwale = None;
+        if let Some(r) = ts.gunwale_radius_in {
+            if depth <= dd {
+                why.get_or_insert(format!(
+                    "gunwale outline: mold depth {depth} in must be above the design draft {dd:.2} in"
+                ));
+            } else {
+                match Gunwale::of_hull(hull, depth, ts.flare_deg, r) {
+                    Err(e) => {
+                        why.get_or_insert(e);
+                    }
+                    Ok(gw) => {
+                        // Concave outline vs piecewise-linear waterline: the table stations decide.
+                        // `of_hull` already widened the outline to enclose; this guards it.
+                        let worst = gw.deficit(hull, 0.0);
+                        let nz = g.z.len();
+                        for i in 0..g.x.len() {
+                            let (yw, yg) = (loft.breadth(g.x[i], dd), gw.half_breadth(g.x[i]));
+                            for k in (0..nz).filter(|&k| g.z[k] > dd) {
+                                g.y[i * nz + k] = yw + (yg - yw) * (g.z[k] - dd) / (depth - dd);
+                            }
+                        }
+                        let (lean_x, lean) = gw.max_lean(hull, depth);
+                        if worst.1 > 1e-6 {
+                            why.get_or_insert(format!(
+                                "gunwale R {r:.0} in sits {:.2} in inside the waterline at x = {:.1} in (sides would lean in)",
+                                worst.1, worst.0
+                            ));
+                        } else if lean > ts.gunwale_max_flare_deg {
+                            why.get_or_insert(format!(
+                                "gunwale R {r:.0} in needs the side to lean out {lean:.1} deg at x = {lean_x:.1} in \
+                                 (gunwale_max_flare_deg {}): the waterline ends are too full for a straight entry from the tips; \
+                                 try another radius or a deeper mold",
+                                ts.gunwale_max_flare_deg
+                            ));
+                        }
+                        gunwale = Some(gw);
+                    }
+                }
+            }
+        }
+        // The surface before the stem radius, at any height: the loft, then these topsides.
+        let flare = ts.flare_deg.to_radians().tan();
+        let uncut = |x: f64, z: f64| -> f64 {
+            if z <= dd {
+                return loft.breadth(x, z);
+            }
+            let t = loft.breadth(x, dd);
+            match &gunwale {
+                Some(gw) => t + (gw.half_breadth(x) - t) * (z - dd) / (depth - dd),
+                None if t > 0.0 => t + (z - dd) * flare,
+                None => t,
+            }
         };
-        let nw = hull.z.len();
-        // Concave outline vs piecewise-linear waterline: the table stations decide.
-        // `of_hull` already widened the outline to enclose; this guards it.
-        let worst = gw.deficit(base, 0.0);
-        let (nz, nx) = (g.z.len(), g.x.len());
-        for i in 0..nx {
-            let (yw, yg) = (g.y[i * nz + nw - 1], gw.half_breadth(g.x[i]));
-            for k in nw..nz {
-                let f = (g.z[k] - dd) / (depth - dd);
-                g.y[i * nz + k] = if hull.stem.is_none() {
-                    yw + (yg - yw) * f
+        g.cut_stem(&loft, uncut);
+        (g, why)
+    }
+
+    /// The stem radius ([`Hull::filleted`]): where the keel line is the arc, each column is the
+    /// uncut surface stretched from its keel K(x) .. depth onto the arc K'(x) .. depth, z ->
+    /// K + (z - K') (depth - K) / (depth - K'), and nothing below K'. Columns aft of the arcs
+    /// (K' = K) are untouched.
+    fn cut_stem(&mut self, loft: &Loft, uncut: impl Fn(f64, f64) -> f64) {
+        if loft.hull.stem.is_none() {
+            return;
+        }
+        let (nz, top) = (self.z.len(), self.depth);
+        for i in 0..self.x.len() {
+            let x = self.x[i];
+            let (Some(k), Some(kc)) = (loft.table_keel(x), loft.keel(x)) else { continue };
+            // Where the arc meets the keel the two agree to rounding: no cut (decided the same
+            // at both ends of a symmetric hull).
+            if kc <= k + 1e-9 {
+                continue;
+            }
+            for j in 0..nz {
+                let z = self.z[j];
+                self.y[i * nz + j] = if z < kc || top - kc <= 1e-9 {
+                    0.0
                 } else {
-                    hull.stem_cut(g.x[i], g.z[k], |x| {
-                        let yw = hull.top_uncut(x);
-                        yw + (gw.half_breadth(x) - yw) * f
-                    })
+                    uncut(x, k + (z - kc) * (top - k) / (top - kc))
                 };
             }
         }
-        let (lean_x, lean) = gw.max_lean(base, depth);
-        let why = if worst.1 > 1e-6 {
-            Some(format!(
-                "gunwale R {r:.0} in sits {:.2} in inside the waterline at x = {:.1} in (sides would lean in)",
-                worst.1, worst.0
-            ))
-        } else if lean > ts.gunwale_max_flare_deg {
-            Some(format!(
-                "gunwale R {r:.0} in needs the side to lean out {lean:.1} deg at x = {lean_x:.1} in \
-                 (gunwale_max_flare_deg {}): the waterline ends are too full for a straight entry from the tips; \
-                 try another radius or a deeper mold",
-                ts.gunwale_max_flare_deg
-            ))
-        } else {
-            None
-        };
-        (g, why)
     }
 
     /// Resample `hull` to `n` stations and extrude the top waterline up to
@@ -670,35 +604,35 @@ impl Grid {
         let flare = flare_deg.to_radians().tan();
         let x = xs.to_vec();
         let n = x.len();
+        let dd = hull.draft_design;
         let mut z = hull.z.clone();
-        let extrude = depth > hull.draft_design;
-        if extrude {
-            z.extend(linspace(hull.draft_design + 0.1, depth, TOPSIDE_LINES));
-            // A stem radius above the table: rows every r/8 up its arc, so the arc is resolved.
-            if let Some(st) = &hull.stem {
-                let (h, lo, hi) = (0.125 * st.radius_in, hull.draft_design, st.top_in().min(depth));
-                if hi > lo + h {
-                    z.extend(linspace(lo + h, hi, ((hi - lo) / h).ceil() as usize));
-                }
-                z.sort_by(f64::total_cmp);
-                z.dedup_by(|a, b| (*a - *b).abs() < 1e-3);
+        if depth > dd {
+            z.extend(linspace(dd + 0.1, depth, TOPSIDE_LINES));
+        }
+        // A stem radius above the table: rows every r/8 up its arcs there, so they are resolved
+        // (the table's own waterlines resolve them below).
+        if let Some(st) = &hull.stem {
+            let (h, lo, hi) = (0.125 * st.radius_in, st.bottom_in().max(dd), st.top_in().min(depth.max(dd)));
+            if hi > lo + h {
+                z.extend(linspace(lo, hi, ((hi - lo) / h).ceil() as usize + 1));
             }
+            z.sort_by(f64::total_cmp);
+            // Near-duplicates go, but the table top stays a row (the topsides start from it).
+            z.dedup_by(|a, b| (*a - *b).abs() < 1e-3 && (*a != dd || *b == dd));
         }
         let nz = z.len();
-        let nw = hull.z.len();
+        let loft = hull.loft();
         let mut y = vec![0.0; n * nz];
         for (i, &xi) in x.iter().enumerate() {
-            for k in 0..nw {
-                y[i * nz + k] = interp_col(&hull.x, &hull.half_breadth, k, xi);
-            }
-            let top = y[i * nz + nw - 1];
-            for k in nw..nz {
-                let rise = z[k] - hull.draft_design;
-                let flared = |t: f64| if t > 0.0 { t + rise * flare } else { t };
-                y[i * nz + k] = if hull.stem.is_none() {
-                    flared(top)
+            let c = loft.col(xi);
+            let top = loft.at(&c, dd);
+            for k in 0..nz {
+                y[i * nz + k] = if z[k] <= dd {
+                    loft.at(&c, z[k])
+                } else if top > 0.0 {
+                    top + (z[k] - dd) * flare
                 } else {
-                    hull.stem_cut(xi, z[k], |x| flared(hull.top_uncut(x)))
+                    top
                 };
             }
         }
@@ -713,71 +647,230 @@ pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
     (0..n).map(|i| a + (b - a) * i as f64 / (n - 1) as f64).collect()
 }
 
-/// Largest station count a filleted table may reach (guards a tiny radius on a long hull).
-const FILLET_MAX_STATIONS: usize = 6000;
-
-/// Forefoot arc of an end (x from that end's tip): (stem x, arc centre height). The stem is the
-/// last station with no breadth before the first one with some; the keel profile is the table's
-/// (linear between stations, so between stations j-1 and j it is station j's lowest breadth
-/// row). The arc is the radius-`r` circle tangent to the stem (centre r aft of it) sitting on
-/// the keel within 2 r: centre height = max over the keel there of keel + sqrt(r^2 - dx^2).
-/// None when the end has breadth at its tip station (no stem crease) or no breadth at all.
-/// Shift of the waterline at height `zz` for a forefoot arc `end` ([`forefoot`]) of radius
-/// `r`: (tip, shift) in that end's coordinates, or None where the arc does not cut it. `col` is
-/// the waterline at the stations `xs`.
-fn arc_shift(end: Option<(f64, f64)>, r: f64, zz: f64, xs: &[f64], col: &[f64]) -> Option<(f64, f64)> {
-    let (xe, zc) = end?;
-    if zz < zc - r - 1e-12 || zz > zc {
-        return None;
+/// Keel height of one station column (half-breadths `y` at waterlines `z`), not snapped to a
+/// waterline: below the lowest non-zero offset the section is taken as `z = zk + c y^2` through
+/// the two lowest non-zero offsets, clamped between the last zero waterline and the first non-zero
+/// one. A flat bottom (offset at the first waterline) keeps `z[0]`. `None` if all zero.
+pub fn column_keel(y: &[f64], z: &[f64]) -> Option<f64> {
+    let first = y.iter().position(|&v| v > 1e-9)?;
+    if first == 0 {
+        return Some(z[0]);
     }
-    let j = col.iter().position(|v| *v > 0.0)?;
-    let tip = xs[j.saturating_sub(1)];
-    let arc = xe + r - (r * r - (zz - zc) * (zz - zc)).max(0.0).sqrt();
-    (arc > tip + 1e-12).then_some((tip, arc - tip))
+    let (y1, z1) = (y[first], z[first]);
+    let fit = y.get(first + 1).filter(|&&y2| y2 > y1 + 1e-9).map(|&y2| {
+        let z2 = z[first + 1];
+        (z1 * y2 * y2 - z2 * y1 * y1) / (y2 * y2 - y1 * y1)
+    });
+    Some(fit.unwrap_or(z[first - 1]).clamp(z[first - 1], z1))
 }
 
-/// Where a cut waterline at distance `d` from its end takes its breadth from (distance along
-/// the uncut one): shifted by s at the tip, the shift blended out over `blend` (smoothstep,
-/// zero slope at both ends). None = forward of the arc (no breadth).
-fn arc_source(d: f64, sh: Option<(f64, f64)>, blend: f64) -> Option<f64> {
-    let Some((tip, s)) = sh else { return Some(d) };
-    let u = (d - tip - s) / blend;
-    if u < 0.0 {
-        return None;
+/// Slopes of the monotone cubic (Fritsch-Carlson PCHIP) through `(xs, ys)`: interior slopes the
+/// weighted harmonic mean of the neighbouring secants (0 at a local extremum), end slopes the
+/// end secants. No overshoot, C1.
+fn pchip_slopes(xs: &[f64], ys: &[f64]) -> Vec<f64> {
+    let n = xs.len();
+    if n < 2 {
+        return vec![0.0; n];
     }
-    let w = if u >= 1.0 { 1.0 } else { u * u * (3.0 - 2.0 * u) };
-    Some(d - s * (1.0 - w))
-}
-
-fn forefoot(xs: &[f64], z: &[f64], rows: &[Vec<f64>], r: f64) -> Option<(f64, f64)> {
-    let keel = |row: &[f64]| row.iter().position(|v| *v > 0.0).map(|k| z[k.saturating_sub(1)]);
-    let j0 = rows.iter().position(|row| keel(row).is_some())?;
-    if j0 == 0 {
-        return None;
-    }
-    let xe = xs[j0 - 1];
-    let c = xe + r;
-    let mut zc = f64::NEG_INFINITY;
-    for j in j0..xs.len() {
-        let (lo, hi) = (xs[j - 1].max(xe), xs[j].min(xe + 2.0 * r));
-        if lo >= hi {
-            if xs[j - 1] >= xe + 2.0 * r {
-                break;
-            }
-            continue;
+    let h: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+    let d: Vec<f64> = (0..n - 1).map(|i| (ys[i + 1] - ys[i]) / h[i]).collect();
+    let mut m = vec![0.0; n];
+    m[0] = d[0];
+    m[n - 1] = d[n - 2];
+    for i in 1..n - 1 {
+        if d[i - 1] * d[i] > 0.0 {
+            let (w1, w2) = (2.0 * h[i] + h[i - 1], h[i] + 2.0 * h[i - 1]);
+            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
         }
-        let Some(kz) = keel(&rows[j]) else { continue };
-        // Closest point of (lo, hi] to the centre's x.
-        let dx = if c < lo {
-            lo - c
-        } else if c > hi {
-            c - hi
-        } else {
-            0.0
-        };
-        zc = zc.max(kz + (r * r - dx * dx).max(0.0).sqrt());
     }
-    zc.is_finite().then_some((xe, zc))
+    m
+}
+
+/// The PCHIP of [`pchip_slopes`] at `x`; outside `xs` the straight line on with the end slope
+/// (so the curve stays C1 through the end points).
+fn pchip_eval(xs: &[f64], ys: &[f64], m: &[f64], x: f64) -> f64 {
+    let n = xs.len();
+    if n == 1 {
+        return ys[0];
+    }
+    if x < xs[0] {
+        return ys[0] + m[0] * (x - xs[0]);
+    }
+    if x > xs[n - 1] {
+        return ys[n - 1] + m[n - 1] * (x - xs[n - 1]);
+    }
+    let i = xs.partition_point(|&v| v <= x).clamp(1, n - 1) - 1;
+    let h = xs[i + 1] - xs[i];
+    let t = (x - xs[i]) / h;
+    let (t2, t3) = (t * t, t * t * t);
+    ys[i] * (2.0 * t3 - 3.0 * t2 + 1.0)
+        + h * m[i] * (t3 - 2.0 * t2 + t)
+        + ys[i + 1] * (-2.0 * t3 + 3.0 * t2)
+        + h * m[i + 1] * (t3 - t2)
+}
+
+/// The hull surface between its stations: a loft with a smooth keel.
+///
+/// Every station with breadth has a keel height ([`column_keel`]); the keel line K(x) is the
+/// monotone cubic through them (C1, no overshoot), continued straight with its end slope to the
+/// stems, kept within the table (0 .. T). A station's
+/// section is its offsets, linear between waterlines, and below its lowest offset a straight line
+/// down to its keel. Between stations a and b (fraction t) the half-breadth at height z is
+///
+///   s = (z - K(x)) / (T - K(x)),  y = (1 - t) Y_a(K_a + s (T - K_a)) + t Y_b(K_b + s (T - K_b)),
+///
+/// T the table top, K_a = K(x_a): each section is stretched between its keel and the top, so
+/// the keel runs along K(x) instead of stepping from one waterline to the next, and the table
+/// top (s = 1) is the plain linear blend. At the stations it is the table. 0 below K(x).
+pub struct Loft<'a> {
+    hull: &'a Hull,
+    /// Per station: keel height (None = no breadth) and its lowest non-zero waterline.
+    keel: Vec<Option<(f64, usize)>>,
+    kx: Vec<f64>,
+    kz: Vec<f64>,
+    km: Vec<f64>,
+    /// K at each station (the keel line there, also at stations without breadth).
+    kst: Vec<f64>,
+}
+
+/// One column of a [`Loft`] at some x: its station interval, blend and keel heights, so many
+/// heights are read without redoing them ([`Loft::at`]).
+pub struct LoftCol {
+    j: usize,
+    t: f64,
+    k: Option<f64>,
+    ka: f64,
+    kb: f64,
+}
+
+impl<'a> Loft<'a> {
+    pub fn new(hull: &'a Hull) -> Loft<'a> {
+        let keel: Vec<Option<(f64, usize)>> = hull
+            .half_breadth
+            .iter()
+            .map(|row| {
+                let k = column_keel(row, &hull.z)?;
+                Some((k, row.iter().position(|&v| v > 1e-9).unwrap_or(0)))
+            })
+            .collect();
+        let (kx, kz): (Vec<f64>, Vec<f64>) =
+            hull.x.iter().zip(&keel).filter_map(|(&x, k)| Some((x, (*k)?.0))).unzip();
+        let km = pchip_slopes(&kx, &kz);
+        let mut loft = Loft { hull, keel, kx, kz, km, kst: vec![] };
+        loft.kst = hull.x.iter().map(|&x| loft.table_keel(x).unwrap_or(0.0)).collect();
+        loft
+    }
+
+    /// K(x), the table's keel line (through the station keels; beyond the end ones on straight
+    /// to the stem with the end slope), kept within the table. None when no station has breadth.
+    fn table_keel(&self, x: f64) -> Option<f64> {
+        let (lo, hi) = (self.hull.z[0], self.hull.z[self.hull.z.len() - 1]);
+        (!self.kx.is_empty()).then(|| pchip_eval(&self.kx, &self.kz, &self.km, x).clamp(lo, hi))
+    }
+
+    /// Keel height at `x`: K(x), and over a stem radius ([`Hull::filleted`]) its arc, from the
+    /// stem to where the arc meets K (tangent there and vertical at the stem; it may run above
+    /// the table, where the table itself has no breadth).
+    pub fn keel(&self, x: f64) -> Option<f64> {
+        let k = self.table_keel(x)?;
+        let Some(st) = &self.hull.stem else { return Some(k) };
+        let (xa, xb) = (self.hull.x[0], self.hull.x[self.hull.x.len() - 1]);
+        let bow = x - xa <= xb - x;
+        let (end, d) = if bow { (st.bow, x - xa) } else { (st.stern, xb - x) };
+        let r = st.radius_in;
+        Some(match end {
+            Some([xe, zc, xt]) if d >= xe - 1e-12 && d <= xt => {
+                let u = d - xe - r;
+                k.max(zc - (r * r - u * u).max(0.0).sqrt())
+            }
+            _ => k,
+        })
+    }
+
+    /// Section of station `j` at height `z` (0 below its keel).
+    fn station(&self, j: usize, z: f64) -> f64 {
+        let Some((k, f)) = self.keel[j] else { return 0.0 };
+        let (row, zt) = (&self.hull.half_breadth[j], &self.hull.z);
+        if f > 0 {
+            if z <= k {
+                return 0.0;
+            }
+            if z < zt[f] {
+                return if zt[f] > k { row[f] * (z - k) / (zt[f] - k) } else { row[f] };
+            }
+        }
+        let n = zt.len();
+        let i = zt.partition_point(|&v| v <= z).clamp(1, n - 1);
+        let t = ((z - zt[i - 1]) / (zt[i] - zt[i - 1])).clamp(0.0, 1.0);
+        row[i - 1] * (1.0 - t) + row[i] * t
+    }
+
+    /// Half-breadth at (x, z), z up to the table top (see [`Loft`]).
+    pub fn breadth(&self, x: f64, z: f64) -> f64 {
+        self.at(&self.col(x), z)
+    }
+
+    /// The column at `x`, for [`Loft::at`].
+    pub fn col(&self, x: f64) -> LoftCol {
+        let (xs, n) = (&self.hull.x, self.hull.x.len());
+        let j = xs.partition_point(|&v| v <= x).clamp(1, n - 1);
+        let t = ((x - xs[j - 1]) / (xs[j] - xs[j - 1])).clamp(0.0, 1.0);
+        LoftCol { j, t, k: self.table_keel(x), ka: self.kst[j - 1], kb: self.kst[j] }
+    }
+
+    /// Half-breadth of column `c` at height `z` (same as [`Loft::breadth`]).
+    pub fn at(&self, c: &LoftCol, z: f64) -> f64 {
+        let (j, t, ka, kb) = (c.j, c.t, c.ka, c.kb);
+        let Some(k) = c.k else { return 0.0 };
+        if z < k {
+            return 0.0;
+        }
+        let top = self.hull.z[self.hull.z.len() - 1];
+        let (za, zb) = if top - k > 1e-9 {
+            let s = ((z - k) / (top - k)).clamp(0.0, 1.0);
+            (ka + s * (top - ka), kb + s * (top - kb))
+        } else {
+            (z, z)
+        };
+        let (ya, yb) = (self.station(j - 1, za), self.station(j, zb));
+        if t <= 0.0 {
+            ya
+        } else if t >= 1.0 {
+            yb
+        } else {
+            ya * (1.0 - t) + yb * t
+        }
+    }
+}
+
+/// Forefoot arc of an end (distances from that end's tip): [stem x, arc centre height, x where it
+/// meets the keel]. The stem is the last station with no breadth before the first one with
+/// some; the keel line is the loft's K(x). The arc is the radius-`r` circle tangent to the stem
+/// (centre r aft of it) sitting on the keel within 2 r: centre height = max over the keel there of
+/// K + sqrt(r^2 - dx^2), met where that maximum is (sampled every r/256 and at the stations).
+/// None when the end has breadth at its tip station (no stem crease) or no breadth at all.
+fn forefoot(loft: &Loft, r: f64, bow: bool) -> Option<[f64; 3]> {
+    let (xs, n) = (&loft.hull.x, loft.hull.x.len());
+    let order: Vec<usize> = if bow { (0..n).collect() } else { (0..n).rev().collect() };
+    let p = order.iter().position(|&j| loft.keel[j].is_some())?;
+    if p == 0 {
+        return None;
+    }
+    let d = |x: f64| if bow { x - xs[0] } else { xs[n - 1] - x };
+    let at = |dd: f64| if bow { xs[0] + dd } else { xs[n - 1] - dd };
+    let xe = d(xs[order[p - 1]]);
+    let c = xe + r;
+    let mut probe: Vec<f64> = (0..=512).map(|i| xe + 2.0 * r * i as f64 / 512.0).collect();
+    probe.extend(xs.iter().map(|&x| d(x)).filter(|&v| v >= xe && v <= xe + 2.0 * r));
+    probe.sort_by(f64::total_cmp);
+    let (xt, zc) = probe
+        .iter()
+        .filter_map(|&dd| {
+            let k = loft.table_keel(at(dd))?;
+            Some((dd, k + (r * r - (dd - c) * (dd - c)).max(0.0).sqrt()))
+        })
+        .fold((xe, f64::NEG_INFINITY), |a, b| if b.1 > a.1 { b } else { a });
+    zc.is_finite().then_some([xe, zc, xt])
 }
 
 /// Linear interpolation of column `k` of `table` (rows at `xs`) at `x`, clamped.
@@ -958,146 +1051,161 @@ mod tests {
         }
     }
 
-    /// Filleted half-breadth at (x, z), linear in the refined table.
-    fn at(h: &Hull, x: f64, z: f64) -> f64 {
-        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
-        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
-        interp_col(&h.x, &h.half_breadth, k - 1, x) * (1.0 - t) + interp_col(&h.x, &h.half_breadth, k, x) * t
+    /// Grid columns and their first row with breadth.
+    fn col(g: &Grid, i: usize) -> &[f64] {
+        g.row(i)
     }
 
-    /// First x with breadth on waterline z (the side profile's front), in the refined table.
-    fn front(h: &Hull, z: f64) -> f64 {
-        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
-        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
-        let i = h.half_breadth.iter().position(|row| row[k - 1] * (1.0 - t) + row[k] * t > 0.0).unwrap();
-        h.x[i.saturating_sub(1)]
+    /// Checks of a stem radius on grid `g` against the uncut grid `p` (same stations and rows):
+    /// nothing below the keel line, sections never narrower higher up (no fold), concrete only
+    /// removed, columns aft of the arcs and the gunwale untouched. Returns the arc columns seen.
+    fn stem_checks(h: &Hull, g: &Grid, p: &Grid) -> usize {
+        let loft = h.loft();
+        let st = h.stem.as_ref().unwrap();
+        let nz = g.nz();
+        assert_eq!((g.z.clone(), g.x.clone()), (p.z.clone(), p.x.clone()));
+        let mut cut = 0;
+        for i in 0..g.nx() {
+            let x = g.x[i];
+            let (y, y0) = (col(g, i), col(p, i));
+            let k = loft.keel(x).unwrap();
+            for j in 0..nz {
+                assert!(y[j] <= y0[j] + 1e-9, "concrete only removed: x {x} z {}", g.z[j]);
+                if g.z[j] < k - 1e-9 {
+                    assert_eq!(y[j], 0.0, "nothing below the keel: x {x} z {}", g.z[j]);
+                }
+                if j > 0 && y[j - 1] > 0.0 {
+                    assert!(
+                        y[j] >= y[j - 1] - 1e-9,
+                        "section folds at x {x} z {}: {} < {}",
+                        g.z[j],
+                        y[j],
+                        y[j - 1]
+                    );
+                }
+            }
+            assert_eq!(y[nz - 1], y0[nz - 1], "gunwale unchanged at x {x}");
+            let d = x.min(h.length - x);
+            let xt = [st.bow, st.stern].iter().flatten().map(|e| e[2]).fold(0.0, f64::max);
+            if d > xt + 1e-9 {
+                assert_eq!(y, y0, "untouched aft of the arc at x {x}");
+            } else if y != y0 {
+                cut += 1;
+            }
+        }
+        cut
     }
 
     #[test]
-    fn forefoot_gets_a_side_view_arc_and_keeps_the_entry() {
-        // Wedge waterlines (half-angle 10 deg) on a plumb stem at x = 0 and a flat keel: breadth
-        // from z = 2 up (the table's keel row is 1.75), a square forefoot corner.
-        let th = 10f64.to_radians();
-        let h = table(
-            60.0,
-            6.0,
-            31,
-            25,
-            |x, z| if z < 2.0 { 0.0 } else { (x.min(60.0 - x) * th.tan()).min(5.0) },
-        );
+    fn forefoot_gets_a_side_view_arc_and_keeps_sections_and_entry_pointed() {
+        // V sections (half-breadth = 2 (z - keel), capped at 5) under a keel that rises toward
+        // a plumb stem at x = 0 (keel 2 at x = 6, 1 amidships): a pointed forefoot corner.
+        let keel = |x: f64| 1.0 + (1.0 - x.min(60.0 - x) / 12.0).max(0.0);
+        let h = table(60.0, 6.0, 31, 49, |x, z| {
+            if x <= 0.0 || x >= 60.0 { 0.0 } else { (2.0 * (z - keel(x))).min(5.0) }
+        });
         let r = 1.0;
         let f = h.filleted(r).unwrap();
-        let (kz, zc) = (1.75, 1.75 + r);
-        // On the arc: a waterline 0.6 r below the centre starts 0.2 r aft of the stem; at the
-        // centre and above the stem is untouched; at the keel the arc reaches r aft.
-        assert!((front(&f, zc - 0.6 * r) - 0.2 * r).abs() <= 0.125 * r + 1e-9, "{}", front(&f, zc - 0.6 * r));
-        assert!(front(&f, zc + 0.5) < 1e-9 && front(&f, 5.0) < 1e-9);
-        // One refined waterline (r/8) above the keel the arc is 1 - sqrt(1 - (7/8)^2) = 0.52 r aft.
-        let low = kz + 0.125 * r;
-        let want = r - (r * r - (zc - low) * (zc - low)).sqrt();
-        assert!((front(&f, low) - want).abs() <= 0.125 * r + 1e-9, "{} vs {want}", front(&f, low));
-        // Entry angle kept: just behind the new tip the waterline opens at the same 10 deg.
-        let z = 2.25; // a refined waterline on the arc (tip 0.13 r aft)
-        let tip = front(&f, z) + 0.125 * r;
-        let slope = (at(&f, tip + 0.25 * r, z) - at(&f, tip + 0.125 * r, z)) / (0.125 * r);
-        assert!((slope - th.tan()).abs() < 0.02 * th.tan(), "slope {slope} vs {}", th.tan());
-        // Stern mirrors the bow; concrete only removed; untouched away from the ends.
-        assert!((front_stern(&f, zc - 0.6 * r) - (60.0 - 0.2 * r)).abs() <= 0.125 * r + 1e-9);
-        for (i, &x) in f.x.iter().enumerate() {
-            for (k, &zz) in f.z.iter().enumerate() {
-                assert!(f.half_breadth[i][k] <= at(&h, x, zz) + 1e-9, "x {x} z {zz}");
-            }
+        assert_eq!(f.half_breadth, h.half_breadth, "the table itself is kept");
+        let [xe, zc, xt] = f.stem.as_ref().unwrap().bow.unwrap();
+        assert_eq!(f.stem.as_ref().unwrap().stern.unwrap(), [xe, zc, xt], "stern mirrors the bow");
+        let loft = f.loft();
+        // The arc: vertical at the stem (its top on the stem at zc), tangent to the keel line where
+        // it meets it (same height and slope), the keel line beyond.
+        assert!((loft.keel(xe).unwrap() - zc).abs() < 1e-9 && xt > xe && xt < xe + 2.0 * r);
+        let (k, kc) = (|x: f64| loft.table_keel(x).unwrap(), |x: f64| loft.keel(x).unwrap());
+        assert!((kc(xt) - k(xt)).abs() < 1e-3, "{} vs {}", kc(xt), k(xt));
+        let e = 1e-4;
+        let slope = |f: &dyn Fn(f64) -> f64, x: f64| (f(x + e) - f(x - e)) / (2.0 * e);
+        assert!((slope(&kc, xt - 2.0 * e) - slope(&k, xt)).abs() < 0.05, "tangent where it meets the keel");
+        assert!(kc(xe + 0.01) < zc && zc - kc(xe + 0.01) < 0.2, "steep at the stem");
+        let ts = Topsides { flare_deg: 0.0, gunwale_radius_in: None, gunwale_max_flare_deg: 30.0 };
+        let xs = linspace(0.0, 60.0, 1201); // 0.05 in
+        let (g, why) = Grid::build_topsides_at(&f, 8.0, &xs, ts);
+        assert!(why.is_none(), "{why:?}");
+        // The same rows uncut (the flared extrusion before the stem radius).
+        let p = Grid::build_flared_at(&f, 8.0, &xs, 0.0);
+        assert!(stem_checks(&f, &g, &p) > 10);
+        // The profile is the arc: at every column the first row with breadth is at the keel line.
+        let nz = g.nz();
+        for i in (1..g.nx()).filter(|&i| g.x[i] <= xt) {
+            let c = col(&g, i);
+            let j = c.iter().position(|&v| v > 0.0).unwrap();
+            assert!(
+                g.z[j] >= kc(g.x[i]) - 1e-9 && (j == 0 || g.z[j - 1] < kc(g.x[i]) + 1e-9),
+                "x {}",
+                g.x[i]
+            );
         }
-        assert_eq!(at(&f, 30.0, 3.0), at(&h, 30.0, 3.0));
-        assert_eq!(at(&f, 10.0, 2.5), at(&h, 10.0, 2.5));
-        // An end with breadth at its tip has no stem crease: unchanged.
-        let open = table(60.0, 6.0, 31, 25, |_, _| 2.0);
-        let g = open.filleted(r).unwrap();
-        assert_eq!(at(&g, 0.0, 3.0), 2.0);
-    }
-
-    fn front_stern(h: &Hull, z: f64) -> f64 {
-        let k = h.z.partition_point(|&v| v <= z).clamp(1, h.z.len() - 1);
-        let t = ((z - h.z[k - 1]) / (h.z[k] - h.z[k - 1])).clamp(0.0, 1.0);
-        let i = h.half_breadth.iter().rposition(|row| row[k - 1] * (1.0 - t) + row[k] * t > 0.0).unwrap();
-        h.x[(i + 1).min(h.x.len() - 1)]
+        // Waterlines stay pointed: just aft of where a waterline starts it is still V-thin.
+        for j in (0..nz).filter(|&j| g.z[j] > zc - r && g.z[j] < zc) {
+            let i = (0..g.nx()).position(|i| g.y(i, j) > 0.0).unwrap();
+            assert!(g.y(i, j) < 0.2, "waterline z {} starts blunt: {}", g.z[j], g.y(i, j));
+        }
     }
 
     #[test]
-    fn forefoot_on_off1_keeps_length_and_entry() {
+    fn forefoot_on_off1_keeps_the_table_and_length() {
         let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
         let f = h.filleted(1.0).unwrap();
-        assert!(f.x.len() < 400, "{} stations", f.x.len());
+        assert_eq!((f.x.clone(), f.half_breadth.clone()), (h.x.clone(), h.half_breadth.clone()));
+        let st = f.stem.as_ref().unwrap();
+        assert!(st.top_in() <= h.draft_design, "a 1 in arc ends inside the table");
+        let g = Grid::build_topsides(
+            &f,
+            12.0,
+            161,
+            Topsides { flare_deg: 0.0, gunwale_radius_in: None, gunwale_max_flare_deg: 30.0 },
+        )
+        .0;
         // Same length overall: the stems' tops do not move.
-        let top = h.draft_design;
-        assert!(front(&f, top) < 1e-9 && (front_stern(&f, top) - h.length).abs() < 1e-9);
-        // The forefoot (stem foot at about z 4.0 at the bow) is cut back: just above it the
-        // waterline starts aft of the stem; concrete only removed.
-        let z = 4.1;
-        assert!(front(&f, z) > 0.3 && front(&h, z) < 1e-9, "{}", front(&f, z));
-        for (i, &x) in f.x.iter().enumerate() {
-            for (k, &z) in f.z.iter().enumerate() {
-                assert!(f.half_breadth[i][k] <= at(&h, x, z) + 1e-9, "x {x} z {z}");
-            }
-        }
-        assert!(f.stem.is_none(), "a 1 in arc ends inside the table");
-        assert!(h.filleted(0.0).is_err());
+        let nz = g.nz();
+        assert!(g.y(1, nz - 1) > 0.0 && g.y(g.nx() - 2, nz - 1) > 0.0);
+        assert!(h.filleted(0.0).is_err() && f.filleted(1.0).is_err());
     }
 
     #[test]
     fn stem_radius_taller_than_the_table_runs_on_into_the_topsides() {
-        // off1's stem is about 1.9 in tall above its forefoot (z 4.0 to the 5.91 in table top):
-        // a 4 in arc goes on above the design waterline, to z = 8, in the topsides.
+        // off1's stem foot is near z 4.1 and its table stops at 5.91 in: a 4 in arc goes on above
+        // the design waterline, to about z = 8, in the topsides.
         let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
         let r = 4.0;
         let f = h.filleted(r).unwrap();
-        let st = f.stem.as_ref().expect("the arc is taller than the table");
-        let [xe, zc] = st.bow.unwrap();
+        let st = f.stem.as_ref().unwrap();
+        let [xe, zc, xt] = st.bow.unwrap();
         let top = h.draft_design;
         assert!(zc > top + 1.0 && zc < 9.0, "{zc}");
-        let ts = Topsides { flare_deg: 3.0, gunwale_radius_in: None, gunwale_max_flare_deg: 30.0 };
-        let xs = linspace(0.0, h.length, 2401); // 0.1 in
-        let (g, why) = Grid::build_topsides_at(&f, 12.0, &xs, ts);
-        assert!(why.is_none(), "{why:?}");
-        let (p, _) = Grid::build_topsides_at(&h, 12.0, &xs, ts);
-        let nz = g.nz();
-        let front =
-            |k: usize| g.x[(0..g.nx()).position(|i| g.y[i * nz + k] > 0.0).unwrap().saturating_sub(1)];
-        let back =
-            |k: usize| g.x[((0..g.nx()).rposition(|i| g.y[i * nz + k] > 0.0).unwrap() + 1).min(g.nx() - 1)];
-        let [xs_e, _] = st.stern.unwrap();
-        let mut on_arc = 0;
-        for k in 0..nz {
-            let z = g.z[k];
-            if z > top && z <= zc {
-                // Topsides rows on the arc: the stem foot sits on it, bow and stern alike.
+        for flare in [0.0, 3.0] {
+            let ts = Topsides { flare_deg: flare, gunwale_radius_in: None, gunwale_max_flare_deg: 30.0 };
+            let xs = linspace(0.0, h.length, 2401); // 0.1 in
+            let (g, why) = Grid::build_topsides_at(&f, 12.0, &xs, ts);
+            assert!(why.is_none(), "{why:?}");
+            let p = Grid::build_flared_at(&f, 12.0, &xs, flare);
+            let nz = g.nz();
+            // Rows every r/8 up the arc (the uncut grid has the same rows without a cut).
+            let on_arc = g.z.iter().filter(|&&z| z > top && z <= zc).count();
+            assert!(on_arc >= ((zc - top) / (0.125 * r)) as usize, "{on_arc}");
+            assert!(stem_checks(&f, &g, &p) > 10);
+            // Every topsides row on the arc starts on it, bow and stern alike.
+            let front = |k: usize| g.x[(0..g.nx()).position(|i| g.y(i, k) > 0.0).unwrap().saturating_sub(1)];
+            let back =
+                |k: usize| g.x[((0..g.nx()).rposition(|i| g.y(i, k) > 0.0).unwrap() + 1).min(g.nx() - 1)];
+            for k in (0..nz).filter(|&k| g.z[k] > top && g.z[k] < zc) {
+                let z = g.z[k];
                 let want = xe + r - (r * r - (z - zc) * (z - zc)).max(0.0).sqrt();
                 assert!((front(k) - want).abs() <= 0.1 + 1e-9, "z {z}: {} vs {want}", front(k));
-                let want_s = h.length - (xs_e + r - (r * r - (z - zc) * (z - zc)).max(0.0).sqrt());
-                assert!((back(k) - want_s).abs() <= 0.1 + 1e-9, "stern z {z}: {} vs {want_s}", back(k));
-                on_arc += 1;
+                assert!((h.length - back(k) - want).abs() <= 0.1 + 1e-9, "stern z {z}");
             }
+            assert!(xt > xe && (front(nz - 1) - xe).abs() < 1e-9, "the top of the stem stays");
         }
-        assert!(on_arc >= ((zc - top) / (0.125 * r)) as usize, "rows every r/8 up the arc: {on_arc}");
-        // Above the arc the stem is plumb and where it was (same length, top of the stem kept).
-        assert!((front(nz - 1) - xe).abs() < 1e-9 && (back(nz - 1) - h.length).abs() < 0.1 + 1e-9);
-        // Concrete only removed, everywhere; untouched amidships.
-        for i in 0..g.nx() {
-            for (k, &z) in g.z.iter().enumerate() {
-                let kp = p.z.partition_point(|&v| v < z - 1e-9).min(p.nz() - 1);
-                if (p.z[kp] - z).abs() < 1e-9 {
-                    assert!(g.y[i * nz + k] <= p.y[i * p.nz() + kp] + 1e-9, "x {} z {z}", g.x[i]);
-                }
-            }
-        }
-        assert_eq!(g.y(1200, nz - 1), p.y(1200, p.nz() - 1));
         // A mold too shallow for the arc is unbuildable, with why; the grid stays real.
+        let ts = Topsides { flare_deg: 0.0, gunwale_radius_in: None, gunwale_max_flare_deg: 30.0 };
         let (_, why) = Grid::build_topsides(&f, zc - 0.5, 161, ts);
         assert!(why.as_deref().is_some_and(|w| w.contains("stem radius 4 in")), "{why:?}");
-        // The arc travels with the hull (result.json winner_hull): a JSON round trip keeps it.
+        // The arcs travel with the hull (result.json winner_hull): a JSON round trip keeps them.
         let back: Hull = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
         let bs = back.stem.as_ref().unwrap();
-        assert!((bs.top_in() - st.top_in()).abs() < 1e-9 && bs.top_waterline.len() == f.x.len());
+        assert!((bs.top_in() - st.top_in()).abs() < 1e-9);
         assert!(!serde_json::to_string(&h).unwrap().contains("stem"), "hull files carry no stem field");
     }
 
@@ -1111,11 +1219,11 @@ mod tests {
         // Cosine spacing: end gaps are the shortest, the middle gap the longest.
         let gaps: Vec<f64> = t.x.windows(2).map(|w| w[1] - w[0]).collect();
         assert!(gaps[0] < gaps[3] && (gaps[0] - gaps[7]).abs() < 1e-9);
-        // Each template is the source section at its station.
-        let nz = h.z.len();
+        // Each template is the source section at its station (the loft there).
+        let (nz, loft) = (h.z.len(), h.loft());
         for (i, &x) in t.x.iter().enumerate() {
             for k in 0..nz {
-                assert!((t.half_breadth[i][k] - interp_col(&h.x, &h.half_breadth, k, x)).abs() < 1e-12);
+                assert!((t.half_breadth[i][k] - loft.breadth(x, h.z[k])).abs() < 1e-12);
             }
         }
         // Between templates the loft is straight: the analysis grid interpolates linearly.

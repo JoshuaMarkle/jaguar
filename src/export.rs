@@ -1,8 +1,9 @@
-//! Canoe geometry export for CAD and the mold shop: STEP (ISO 10303-21, AP214 B-rep of planar faces) and
-//! binary STL. Below `report` in the layout: reads a [`Hull`], never feeds physics.
+//! Canoe geometry export for CAD and the mold shop: STEP (ISO 10303-21, AP214 B-rep of cubic
+//! B-spline surfaces and planes, [`Brep`]) and binary STL. Below `report` in the layout: reads a
+//! [`Hull`], never feeds physics.
 //!
-//! Geometry is the same surface the analysis uses ([`Grid::build_flared`]: offsets resampled
-//! along x, topsides extruded to the mold depth, flared by `flare_deg`), both sides mirrored.
+//! Geometry is the same surface the analysis uses ([`Grid::build_topsides`]: the table's
+//! smooth-keel loft, topsides to the mold depth, the stem radius), both sides mirrored.
 //!
 //! * Each station's half girth (sheer -> keel centreline) is resampled by arc length to a fixed
 //!   number of points, so the surface is a regular grid even where rocker lifts the keel.
@@ -69,6 +70,32 @@ pub struct Mesh {
     pub verts: Vec<[f64; 3]>,
     pub tris: Vec<[u32; 3]>,
     pub closed: bool,
+    /// The same surfaces as structured nets, for the B-spline STEP ([`to_step`]). None: STEP
+    /// falls back to the facets (a hull whose ends are not stem lines, or whose inner wall does
+    /// not reach the mold depth at the sheer).
+    pub brep: Option<Brep>,
+}
+
+/// One station of a structured net: x, and the starboard half girth from the sheer (first) to
+/// the keel centreline point (last, y = 0). The port side is its mirror.
+pub type NetRow = (f64, Vec<(f64, f64)>);
+
+/// An air pocket void: its lid height and rows.
+pub type VoidNet = (f64, Vec<NetRow>);
+
+/// The export's surfaces as structured nets ([`build_mesh`]), each a cubic B-spline surface in
+/// the STEP: the outer hull, the inner wall over the hollow run (closed by a planar bulkhead
+/// at each end of it) and each air pocket's void wall (under its lid, at `voids[k].0`). The top
+/// at `z_top` (gunwale, rim and solid ends) is one planar face.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Brep {
+    pub z_top: f64,
+    /// All stations; the first and last are the stem lines (all y = 0).
+    pub outer: Vec<NetRow>,
+    /// The hollow run (with a wall); its sheer points are at `z_top`.
+    pub inner: Option<Vec<NetRow>>,
+    /// (lid height, rows) per air pocket void.
+    pub voids: Vec<VoidNet>,
 }
 
 impl Mesh {
@@ -129,51 +156,6 @@ fn resample(p: &[(f64, f64)], n: usize) -> Vec<(f64, f64)> {
             (p[k - 1].0 + t * (p[k].0 - p[k - 1].0), p[k - 1].1 + t * (p[k].1 - p[k - 1].1))
         })
         .collect()
-}
-
-/// Keel height of one offsets column (half-breadths `y` at waterlines `z`), not snapped to a
-/// waterline: below the lowest non-zero offset the section is taken as `z = zk + c y^2` through
-/// the two lowest non-zero offsets, clamped between the last zero waterline and the first non-zero
-/// one. A flat bottom (offset at the first waterline) keeps `z[0]`. `None` if all zero.
-fn keel_z(y: &[f64], z: &[f64]) -> Option<f64> {
-    let first = y.iter().position(|&v| v > 1e-9)?;
-    if first == 0 {
-        return Some(z[0]);
-    }
-    let (y1, z1) = (y[first], z[first]);
-    let fit = y.get(first + 1).filter(|&&y2| y2 > y1 + 1e-9).map(|&y2| {
-        let z2 = z[first + 1];
-        (z1 * y2 * y2 - z2 * y1 * y1) / (y2 * y2 - y1 * y1)
-    });
-    Some(fit.unwrap_or(z[first - 1]).clamp(z[first - 1], z1))
-}
-
-/// Monotone cubic (Fritsch-Carlson PCHIP) through `(xs, ys)`, evaluated at `x` (clamped). Smooth
-/// keel line along x with no overshoot below the table keel.
-fn pchip(xs: &[f64], ys: &[f64], x: f64) -> f64 {
-    let n = xs.len();
-    if n == 1 {
-        return ys[0];
-    }
-    let h: Vec<f64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
-    let d: Vec<f64> = (0..n - 1).map(|i| (ys[i + 1] - ys[i]) / h[i]).collect();
-    let mut m = vec![0.0; n];
-    m[0] = d[0];
-    m[n - 1] = d[n - 2];
-    for i in 1..n - 1 {
-        if d[i - 1] * d[i] > 0.0 {
-            let (w1, w2) = (2.0 * h[i] + h[i - 1], h[i] + 2.0 * h[i - 1]);
-            m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]);
-        }
-    }
-    let x = x.clamp(xs[0], xs[n - 1]);
-    let i = xs.partition_point(|&v| v <= x).clamp(1, n - 1) - 1;
-    let t = (x - xs[i]) / h[i];
-    let (t2, t3) = (t * t, t * t * t);
-    ys[i] * (2.0 * t3 - 3.0 * t2 + 1.0)
-        + h[i] * m[i] * (t3 - 2.0 * t2 + t)
-        + ys[i + 1] * (-2.0 * t3 + 3.0 * t2)
-        + h[i] * m[i + 1] * (t3 - t2)
 }
 
 /// Starboard half girth of one station, sheer -> centreline keel point at height `zk`, consecutive duplicates removed. `None` if the
@@ -253,13 +235,27 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     // Table stations closer together than half the even spacing (the refined noses of a
     // filleted hull) are kept as well, so the noses survive; other tables export as before.
     let even = hull.length / (spec.stations - 1) as f64;
-    let fine: Vec<f64> = (0..hull.x.len())
+    let mut fine: Vec<f64> = (0..hull.x.len())
         .filter(|&i| {
             let gap = |a: usize, b: usize| (hull.x[b] - hull.x[a]) < 0.5 * even;
             (i > 0 && gap(i - 1, i)) || (i + 1 < hull.x.len() && gap(i, i + 1))
         })
         .map(|i| hull.x[i])
         .collect();
+    // A stem radius: 24 more stations over each arc (stem to where it meets the keel), closest
+    // at the stem where it turns vertical, so its profile is drawn round.
+    if let Some(st) = &hull.stem {
+        for (end, bow) in [(st.bow, true), (st.stern, false)] {
+            if let Some([xe, _, xt]) = end {
+                for k in 1..=24 {
+                    // (The last one exactly on the touch point: cos(pi/2) is not 0 in floats.)
+                    let c = if k == 24 { 0.0 } else { (std::f64::consts::FRAC_PI_2 * k as f64 / 24.0).cos() };
+                    let d = xe + (xt - xe) * (1.0 - c);
+                    fine.push(if bow { d } else { hull.length - d });
+                }
+            }
+        }
+    }
     let (grid, unbuildable) = if !fine.is_empty() {
         let mut xs = crate::hull::linspace(0.0, hull.length, spec.stations);
         xs.extend(&fine);
@@ -273,20 +269,11 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         anyhow::bail!("export: {why}");
     }
     let z_top = *grid.z.last().unwrap();
-    // Keel line: fitted at the table stations that have offsets, then a monotone cubic along x.
-    let (kx, kz): (Vec<f64>, Vec<f64>) =
-        hull.x.iter().zip(&hull.half_breadth).filter_map(|(&x, y)| Some((x, keel_z(y, &hull.z)?))).unzip();
-    ensure!(!kx.is_empty(), "hull has no offsets");
-    // A stem radius above the table: where the table has no offsets but the topsides do (the arc
-    // there), the keel is the grid's own (its rows follow the arc every r/8).
-    let keel = |i: usize| {
-        let x = grid.x[i];
-        let outside = x < kx[0] - 1e-9 || x > kx[kx.len() - 1] + 1e-9;
-        match keel_z(grid.row(i), &grid.z) {
-            Some(z) if hull.stem.is_some() && outside => z,
-            _ => pchip(&kx, &kz, x),
-        }
-    };
+    // Keel line: the hull loft's smooth keel (monotone cubic through the station keels, and the
+    // stem radius arc where it is higher), the same surface the grid rows come from.
+    let loft = hull.loft();
+    ensure!(loft.keel(0.0).is_some(), "hull has no offsets");
+    let keel = |i: usize| loft.keel(grid.x[i]).unwrap();
     let halves: Vec<Option<Vec<(f64, f64)>>> =
         (0..grid.nx()).map(|i| half_girth(grid.row(i), &grid.z, keel(i))).collect();
     let Some(first) = halves.iter().position(Option::is_some) else { bail!("hull has no offsets") };
@@ -297,14 +284,13 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     // Station range: one empty station at each end (the stem line) when there is one.
     let (i0, i1) = (first.saturating_sub(1), (last + 1).min(grid.nx() - 1));
     let mut rows: Vec<(f64, Vec<(f64, f64)>)> = vec![];
-    for i in i0..=i1 {
-        let half = match &halves[i] {
+    for (i, half) in halves.iter().enumerate().take(i1 + 1).skip(i0) {
+        let half = match half {
             Some(p) => resample(p, h),
             None => {
-                // Stem line: from the sheer down to the keel height of the neighbouring station.
-                let nb = halves[if i < first { first } else { last }].as_ref().unwrap();
-                let zk = nb.last().unwrap().1;
-                resample(&[(0.0, z_top), (0.0, zk)], h)
+                // Stem line: from the sheer down to the keel there (the neighbouring station's
+                // keel on a sharp forefoot, the top of the arc over a stem radius).
+                resample(&[(0.0, z_top), (0.0, keel(i).min(z_top))], h)
             }
         };
         rows.push((grid.x[i], half));
@@ -363,6 +349,8 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         }
     }
     let closed = spec.thickness_in.is_some();
+    let (mut inner_net, mut voids): (Option<Vec<NetRow>>, Vec<VoidNet>) = (None, vec![]);
+    let outer_net = rows.clone();
     if let Some(t) = spec.thickness_in {
         // Inner rows only where the offset wall is a proper U (no point clamped onto the
         // centreline); the narrow ends before/after are solid concrete.
@@ -440,6 +428,9 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         for r in (0..nr).filter(|&r| hollow_row(r)) {
             inner[r] = push_row(rows[r].0, &full(inner_half[r].as_ref().unwrap()));
         }
+        let hollow: Vec<usize> = (0..nr).filter(|&r| hollow_row(r)).collect();
+        inner_net = (hollow.windows(2).all(|w| w[1] == w[0] + 1))
+            .then(|| hollow.iter().map(|&r| (rows[r].0, inner_half[r].clone().unwrap())).collect());
         // Bulkheads: a planar face closing the inner U where a hollow run ends (fanned from its
         // top centre c). Then each row's top edge, starboard -> port, with its y for the strip.
         let mut side: Vec<Vec<(usize, f64)>> = vec![];
@@ -461,6 +452,7 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         // a flat lid at D - b (through a centre point per row) and a cap at each end.
         if let (Some(c), Some(b)) = (cuts, spec.bulkhead_in()) {
             let zc = z_top - b;
+            let mut void_rows: Vec<NetRow> = vec![];
             for (p0, p1) in [(ra, c[0]), (c[3], rb)] {
                 if p1 <= p0 {
                     continue;
@@ -488,7 +480,9 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
                     let g = push_row(rows[r].0, &full(&clip));
                     let cen = push_row(rows[r].0, &[(0.0, zc)]);
                     ring.push((g, cen));
+                    void_rows.push((rows[r].0, clip));
                 }
+                voids.push((zc, std::mem::take(&mut void_rows)));
                 for w in ring.windows(2) {
                     let ((ga, ca), (gb, cb)) = (w[0], w[1]);
                     for j in 0..m - 1 {
@@ -531,7 +525,16 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             }
         }
     }
-    let mut mesh = clean(Mesh { verts, tris, closed });
+    // The structured nets for the B-spline STEP, when they make the topology it writes: stem
+    // lines at both ends, an inner wall over one run of stations whose sheer is at the top.
+    let flat = |rows: &[NetRow], z: f64| rows.iter().all(|r| (r.1[0].1 - z).abs() < 1e-9);
+    let stems =
+        [&outer_net[0], &outer_net[outer_net.len() - 1]].iter().all(|r| r.1.iter().all(|p| p.0.abs() < 1e-9));
+    let brep_ok = stems
+        && (!closed || inner_net.as_ref().is_some_and(|n| n.len() >= 2 && flat(n, z_top)))
+        && voids.iter().all(|(zc, v)| v.len() >= 2 && flat(v, *zc));
+    let brep = brep_ok.then_some(Brep { z_top, outer: outer_net, inner: inner_net, voids });
+    let mut mesh = clean(Mesh { verts, tris, closed, brep });
     orient(&mut mesh)?;
     if closed {
         // Each shell on its own: the outer one (largest volume) encloses positive volume, the
@@ -716,7 +719,7 @@ fn clean(m: Mesh) -> Mesh {
             })
         })
         .collect();
-    Mesh { verts: out, tris, closed: m.closed }
+    Mesh { verts: out, tris, closed: m.closed, brep: m.brep }
 }
 
 /// Binary STL (80-byte header, little endian).
@@ -758,8 +761,228 @@ impl StepW {
     }
 }
 
-/// STEP AP214 (AUTOMOTIVE_DESIGN): MANIFOLD_SOLID_BREP of planar triangles (closed solid) or SHELL_BASED_SURFACE_MODEL
-/// (open surface), length unit inch.
+/// STEP number: 6 decimals, trailing zeros dropped (the same text for the same value, so a
+/// vertex and the curve end it sits on print identically).
+fn fnum(v: f64) -> String {
+    let r = format!("{v:.6}");
+    let r = r.trim_end_matches('0').to_string();
+    if r == "-0." { "0.".into() } else { r }
+}
+
+/// Clamped uniform knots for `n` control points: (degree min(3, n - 1), multiplicities, knots).
+fn clamped(n: usize) -> (usize, String, String) {
+    let p = 3.min(n - 1);
+    let spans = n - p;
+    let mut m = vec![p + 1];
+    m.extend(std::iter::repeat_n(1, spans - 1));
+    m.push(p + 1);
+    let join = |v: Vec<String>| v.join(",");
+    (p, join(m.iter().map(|v| v.to_string()).collect()), join((0..=spans).map(|k| format!("{k}.")).collect()))
+}
+
+/// B-rep writer over a [`StepW`]: B-spline surfaces and curves, shared vertices and edges.
+struct BrepW<'a> {
+    w: &'a mut StepW,
+    verts: HashMap<[i64; 3], usize>,
+}
+
+impl BrepW<'_> {
+    fn pt(&mut self, p: [f64; 3]) -> usize {
+        self.w.e(format!("CARTESIAN_POINT('',({},{},{}))", fnum(p[0]), fnum(p[1]), fnum(p[2])))
+    }
+    fn vertex(&mut self, p: [f64; 3]) -> usize {
+        let key = p.map(|c| (c * 1e6).round() as i64);
+        if let Some(&v) = self.verts.get(&key) {
+            return v;
+        }
+        let q = self.pt(p);
+        let v = self.w.e(format!("VERTEX_POINT('',#{q})"));
+        self.verts.insert(key, v);
+        v
+    }
+    /// Edge along the B-spline curve with control points `ctrl` (clamped: it runs from the first to the last).
+    fn edge(&mut self, ctrl: &[[f64; 3]]) -> usize {
+        let (p, m, k) = clamped(ctrl.len());
+        let ids: Vec<String> = ctrl.iter().map(|&c| format!("#{}", self.pt(c))).collect();
+        let c = self.w.e(format!(
+            "B_SPLINE_CURVE_WITH_KNOTS('',{p},({}),.UNSPECIFIED.,.F.,.F.,({m}),({k}),.UNSPECIFIED.)",
+            ids.join(",")
+        ));
+        let (a, b) = (self.vertex(ctrl[0]), self.vertex(ctrl[ctrl.len() - 1]));
+        self.w.e(format!("EDGE_CURVE('',#{a},#{b},#{c},.T.)"))
+    }
+    fn surface(&mut self, net: &[Vec<[f64; 3]>]) -> usize {
+        let (pu, mu, ku) = clamped(net.len());
+        let (pv, mv, kv) = clamped(net[0].len());
+        let rows: Vec<String> = net
+            .iter()
+            .map(|row| {
+                format!("({})", row.iter().map(|&c| format!("#{}", self.pt(c))).collect::<Vec<_>>().join(","))
+            })
+            .collect();
+        self.w.e(format!(
+            "B_SPLINE_SURFACE_WITH_KNOTS('',{pu},{pv},({}),.UNSPECIFIED.,.F.,.F.,.F.,({mu}),({mv}),({ku}),({kv}),.UNSPECIFIED.)",
+            rows.join(",")
+        ))
+    }
+    fn plane(&mut self, at: [f64; 3], normal: [f64; 3], refd: [f64; 3]) -> usize {
+        let o = self.pt(at);
+        let d = |v: [f64; 3]| format!("DIRECTION('',({},{},{}))", fnum(v[0]), fnum(v[1]), fnum(v[2]));
+        let n = self.w.e(d(normal));
+        let r = self.w.e(d(refd));
+        let a = self.w.e(format!("AXIS2_PLACEMENT_3D('',#{o},#{n},#{r})"));
+        self.w.e(format!("PLANE('',#{a})"))
+    }
+    /// Face on `surf` bounded by `loops` (the first the outer bound) of (edge, forward).
+    fn face(&mut self, surf: usize, loops: &[Vec<(usize, bool)>], same_sense: bool) -> usize {
+        let mut bounds = vec![];
+        for (i, l) in loops.iter().enumerate() {
+            let oe: Vec<String> = l
+                .iter()
+                .map(|&(e, f)| {
+                    format!(
+                        "#{}",
+                        self.w.e(format!("ORIENTED_EDGE('',*,*,#{e},{})", if f { ".T." } else { ".F." }))
+                    )
+                })
+                .collect();
+            let lp = self.w.e(format!("EDGE_LOOP('',({}))", oe.join(",")));
+            let kind = if i == 0 { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
+            bounds.push(format!("#{}", self.w.e(format!("{kind}('',#{lp},.T.)"))));
+        }
+        let s = if same_sense { ".T." } else { ".F." };
+        self.w.e(format!("ADVANCED_FACE('',({}),#{surf},{s})", bounds.join(",")))
+    }
+}
+
+/// A trough of two B-spline surfaces (starboard y >= 0 and its port mirror) over `rows`: their
+/// shared keel curve, sheer curves and end curves. `away` = the faces point away from the
+/// centreline axis at `axis_z` (outer hull, void walls); otherwise toward it (inner wall).
+/// `pinched`: the end rows are stem lines, one edge shared by both sides.
+struct Trough {
+    faces: [usize; 2],
+    /// Sheer (first girth point) curves, starboard and port, from the first row to the last.
+    sheer: [usize; 2],
+    /// End curves (sheer -> keel), [first row, last row] x [starboard, port].
+    ends: [[usize; 2]; 2],
+    /// Sheer points [first, last row] x [starboard, port].
+    top: [[[f64; 3]; 2]; 2],
+}
+
+fn trough(bw: &mut BrepW, rows: &[NetRow], axis_z: f64, away: bool, pinched: bool) -> Trough {
+    let net = |s: f64| -> Vec<Vec<[f64; 3]>> {
+        rows.iter().map(|(x, h)| h.iter().map(|&(y, z)| [*x, s * y, z]).collect()).collect()
+    };
+    let (ns, np) = (net(1.0), net(-1.0));
+    let col = |n: &Vec<Vec<[f64; 3]>>, j: usize| -> Vec<[f64; 3]> { n.iter().map(|r| r[j]).collect() };
+    let last = ns[0].len() - 1;
+    let keel = bw.edge(&col(&ns, last));
+    let sheer = [bw.edge(&col(&ns, 0)), bw.edge(&col(&np, 0))];
+    let mut ends = [[0; 2]; 2];
+    for (e, r) in [0, rows.len() - 1].into_iter().enumerate() {
+        let s = bw.edge(&ns[r]);
+        ends[e] = [s, if pinched { s } else { bw.edge(&np[r]) }];
+    }
+    let surf = [bw.surface(&ns), bw.surface(&np)];
+    // Loops for faces pointing away from the axis (CCW seen from outside); reversed otherwise.
+    let mut loops = [
+        vec![(sheer[0], true), (ends[1][0], true), (keel, false), (ends[0][0], false)],
+        vec![(ends[0][1], true), (keel, true), (ends[1][1], false), (sheer[1], false)],
+    ];
+    if !away {
+        for l in &mut loops {
+            l.reverse();
+            for e in l.iter_mut() {
+                e.1 = !e.1;
+            }
+        }
+    }
+    // Surface normal (d/du x d/dv over the control net) against the wanted side.
+    let faces = [0, 1].map(|k| {
+        let n = if k == 0 { &ns } else { &np };
+        let mut dot = 0.0;
+        for r in 1..n.len().saturating_sub(1) {
+            for j in 1..last {
+                let du = sub(n[r + 1][j], n[r - 1][j]);
+                let dv = sub(n[r][j + 1], n[r][j - 1]);
+                let out = [0.0, n[r][j][1], n[r][j][2] - axis_z];
+                dot += self::dot(cross(du, dv), out);
+            }
+        }
+        bw.face(surf[k], &[loops[k].clone()], (dot > 0.0) == away)
+    });
+    let top = [0, rows.len() - 1].map(|r| [ns[r][0], np[r][0]]);
+    Trough { faces, sheer, ends, top }
+}
+
+/// Planar face closing a trough end at row `e` (0 first, 1 last): its two end curves and the
+/// straight top edge `line` (starboard -> port sheer point). `outward` = +x or -x.
+fn end_cap(
+    bw: &mut BrepW,
+    t: &Trough,
+    e: usize,
+    line: usize,
+    outward: f64,
+    at: [f64; 3],
+    walls_away: bool,
+) -> usize {
+    let [s, p] = t.ends[e];
+    // Each end curve is used by its wall; the cap runs it the other way round, and closes the
+    // loop through the top line in whichever direction that leaves.
+    let lp = if (e == 0) == walls_away {
+        vec![(s, true), (p, false), (line, false)]
+    } else {
+        vec![(s, false), (line, true), (p, true)]
+    };
+    let pl = bw.plane(at, [outward, 0.0, 0.0], [0.0, 1.0, 0.0]);
+    bw.face(pl, &[lp], true)
+}
+
+/// Faces of the B-spline solid (or open surface): (outer shell faces, void shells' faces).
+fn brep_faces(w: &mut StepW, b: &Brep, closed: bool) -> (Vec<usize>, Vec<Vec<usize>>) {
+    let mut bw = BrepW { w, verts: HashMap::new() };
+    let zt = b.z_top;
+    let outer = trough(&mut bw, &b.outer, zt, true, true);
+    let mut faces = outer.faces.to_vec();
+    let mut voids = vec![];
+    if !closed {
+        return (faces, voids);
+    }
+    let x0 = b.outer[0].0;
+    let mut top_loops = vec![vec![(outer.sheer[1], true), (outer.sheer[0], false)]];
+    if let Some(inner) = &b.inner {
+        let t = trough(&mut bw, inner, zt, false, false);
+        let lines = [0, 1].map(|e| bw.edge(&[t.top[e][0], t.top[e][1]]));
+        top_loops.push(vec![(t.sheer[0], true), (lines[1], true), (t.sheer[1], false), (lines[0], false)]);
+        faces.extend(t.faces);
+        let (xa, xb) = (inner[0].0, inner[inner.len() - 1].0);
+        faces.push(end_cap(&mut bw, &t, 0, lines[0], 1.0, [xa, 0.0, zt], false));
+        faces.push(end_cap(&mut bw, &t, 1, lines[1], -1.0, [xb, 0.0, zt], false));
+    }
+    let top = bw.plane([x0, 0.0, zt], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    faces.push(bw.face(top, &top_loops, true));
+    for (zc, rows) in &b.voids {
+        let t = trough(&mut bw, rows, *zc, true, false);
+        let lines = [0, 1].map(|e| bw.edge(&[t.top[e][0], t.top[e][1]]));
+        let lid = bw.plane([rows[0].0, 0.0, *zc], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let mut f = t.faces.to_vec();
+        f.push(bw.face(
+            lid,
+            &[vec![(t.sheer[1], true), (lines[1], false), (t.sheer[0], false), (lines[0], true)]],
+            true,
+        ));
+        let (xa, xb) = (rows[0].0, rows[rows.len() - 1].0);
+        f.push(end_cap(&mut bw, &t, 0, lines[0], -1.0, [xa, 0.0, *zc], true));
+        f.push(end_cap(&mut bw, &t, 1, lines[1], 1.0, [xb, 0.0, *zc], true));
+        voids.push(f);
+    }
+    (faces, voids)
+}
+
+/// STEP AP214 (AUTOMOTIVE_DESIGN), length unit inch: a MANIFOLD_SOLID_BREP (BREP_WITH_VOIDS with
+/// air pockets) or, for the open mold surface, a SHELL_BASED_SURFACE_MODEL. With the structured
+/// nets (`mesh.brep`) the faces are cubic B-spline surfaces and planes sharing their boundary
+/// curves ([`Brep`]); otherwise the mesh's planar triangles.
 pub fn to_step(mesh: &Mesh, name: &str) -> String {
     let name = step_str(name);
     let mut s = String::new();
@@ -790,15 +1013,54 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
     let zd = w.e("DIRECTION('',(0.,0.,1.))");
     let xd = w.e("DIRECTION('',(1.,0.,0.))");
     let ax = w.e(format!("AXIS2_PLACEMENT_3D('',#{o},#{zd},#{xd})"));
-    let fnum = |v: f64| {
-        let r = format!("{v:.6}");
-        r.trim_end_matches('0').to_string()
-    };
     let pt = |v: [f64; 3]| format!("CARTESIAN_POINT('',({},{},{}))", fnum(v[0]), fnum(v[1]), fnum(v[2]));
     let dir = |v: [f64; 3]| {
         let l = norm(v).max(1e-300);
         format!("DIRECTION('',({},{},{}))", fnum(v[0] / l), fnum(v[1] / l), fnum(v[2] / l))
     };
+    let (outer_faces, void_faces) = match &mesh.brep {
+        Some(b) => brep_faces(&mut w, b, mesh.closed),
+        None => facet_faces(&mut w, mesh, pt, dir),
+    };
+    let list = |f: &[usize]| f.iter().map(|f| format!("#{f}")).collect::<Vec<_>>().join(",");
+    let rep = if mesh.closed {
+        let sh = w.e(format!("CLOSED_SHELL('',({}))", list(&outer_faces)));
+        let voids: Vec<String> = void_faces
+            .iter()
+            .map(|f| {
+                let v = w.e(format!("CLOSED_SHELL('',({}))", list(f)));
+                format!("#{}", w.e(format!("ORIENTED_CLOSED_SHELL('',*,#{v},.F.)")))
+            })
+            .collect();
+        let br = if voids.is_empty() {
+            w.e(format!("MANIFOLD_SOLID_BREP('{name}',#{sh})"))
+        } else {
+            w.e(format!("BREP_WITH_VOIDS('{name}',#{sh},({}))", voids.join(",")))
+        };
+        w.e(format!("ADVANCED_BREP_SHAPE_REPRESENTATION('{name}',(#{ax},#{br}),#{ctx})"))
+    } else {
+        let sh = w.e(format!("OPEN_SHELL('',({}))", list(&outer_faces)));
+        let sm = w.e(format!("SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))"));
+        w.e(format!("MANIFOLD_SURFACE_SHAPE_REPRESENTATION('{name}',(#{ax},#{sm}),#{ctx})"))
+    };
+    w.e(format!("SHAPE_DEFINITION_REPRESENTATION(#{pds},#{rep})"));
+    let d = w.d;
+    s.push_str("ISO-10303-21;\nHEADER;\n");
+    let _ = writeln!(s, "FILE_DESCRIPTION(('JAGUAR concrete canoe, units inch'),'2;1');");
+    let _ = writeln!(s, "FILE_NAME('{name}.step','2000-01-01T00:00:00',(''),(''),'JAGUAR','JAGUAR','');");
+    s.push_str("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n");
+    s.push_str(&d);
+    s.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
+    s
+}
+
+/// The mesh's triangles as planar faces: (outer shell faces, void shells' faces).
+fn facet_faces(
+    w: &mut StepW,
+    mesh: &Mesh,
+    pt: impl Fn([f64; 3]) -> String,
+    dir: impl Fn([f64; 3]) -> String,
+) -> (Vec<usize>, Vec<Vec<usize>>) {
     // Vertices.
     let vp: Vec<usize> = mesh
         .verts
@@ -860,37 +1122,9 @@ pub fn to_step(mesh: &Mesh, name: &str) -> String {
         let pl = w.e(format!("PLANE('',#{ap})"));
         faces[k].push(w.e(format!("ADVANCED_FACE('',(#{fb}),#{pl},.T.)")));
     }
-    let list = |k: usize| faces[k].iter().map(|f| format!("#{f}")).collect::<Vec<_>>().join(",");
-    let rep = if mesh.closed {
-        let outer = (0..nshell).find(|&k| shell_vol[k] > 0.0).unwrap_or(0);
-        let sh = w.e(format!("CLOSED_SHELL('',({}))", list(outer)));
-        let voids: Vec<String> = (0..nshell)
-            .filter(|&k| k != outer)
-            .map(|k| {
-                let v = w.e(format!("CLOSED_SHELL('',({}))", list(k)));
-                format!("#{}", w.e(format!("ORIENTED_CLOSED_SHELL('',*,#{v},.F.)")))
-            })
-            .collect();
-        let br = if voids.is_empty() {
-            w.e(format!("MANIFOLD_SOLID_BREP('{name}',#{sh})"))
-        } else {
-            w.e(format!("BREP_WITH_VOIDS('{name}',#{sh},({}))", voids.join(",")))
-        };
-        w.e(format!("ADVANCED_BREP_SHAPE_REPRESENTATION('{name}',(#{ax},#{br}),#{ctx})"))
-    } else {
-        let sh = w.e(format!("OPEN_SHELL('',({}))", list(0)));
-        let sm = w.e(format!("SHELL_BASED_SURFACE_MODEL('{name}',(#{sh}))"));
-        w.e(format!("MANIFOLD_SURFACE_SHAPE_REPRESENTATION('{name}',(#{ax},#{sm}),#{ctx})"))
-    };
-    w.e(format!("SHAPE_DEFINITION_REPRESENTATION(#{pds},#{rep})"));
-    let d = w.d;
-    s.push_str("ISO-10303-21;\nHEADER;\n");
-    let _ = writeln!(s, "FILE_DESCRIPTION(('JAGUAR concrete canoe, units inch'),'2;1');");
-    let _ = writeln!(s, "FILE_NAME('{name}.step','2000-01-01T00:00:00',(''),(''),'JAGUAR','JAGUAR','');");
-    s.push_str("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\nENDSEC;\nDATA;\n");
-    s.push_str(&d);
-    s.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
-    s
+    let outer = (0..nshell).find(|&k| shell_vol[k] > 0.0).unwrap_or(0);
+    let voids = (0..nshell).filter(|&k| k != outer).map(|k| faces[k].clone()).collect();
+    (faces[outer].clone(), voids)
 }
 
 /// Hull and export spec from a `jaguar-result/1` JSON: the winner's hull (generated shape, or

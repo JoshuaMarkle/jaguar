@@ -1055,7 +1055,9 @@ mod tests {
         // ~200 m out and back with one 180 deg turn.
         assert!(r.distance_m > 200.0 && r.distance_m < 215.0, "{}", r.distance_m);
         let turn = r.segments.iter().find(|s| s.radius_m.is_some()).unwrap();
-        assert!((turn.angle_deg.unwrap() - 180.0).abs() < 1.0, "{:?}", turn.angle_deg);
+        // 180 deg less the small angle between the converging legs (179.0 deg on the linear
+        // table interpolation, 178.9 on the smooth-keel loft: radius 5.97 -> 5.66 m).
+        assert!((turn.angle_deg.unwrap() - 180.0).abs() < 2.0, "{:?}", turn.angle_deg);
         assert!(r.time_s > 40.0 && r.time_s < 150.0, "{}", r.time_s);
         assert!(r.sens_straight > 0.0 && r.sens_turn > 0.0 && r.sens_straight + r.sens_turn < 1.0);
         // Path optimum: no other radius at the turn is faster.

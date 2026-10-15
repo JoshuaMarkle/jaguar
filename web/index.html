@@ -316,7 +316,7 @@ const SHAPE_OPT = [
   ['min_entry_angle_deg', 'Min entry angle', 'deg', 'Smallest allowed waterline entry half-angle at the bow (chord over the first 5% of length). Finer bows are rejected as unbuildable. Empty = no limit.', 'no limit'],
 ];
 const GME_T = 'Minimum metacentric height of the empty canoe (no crew aboard): how strongly it rights itself when it sits empty in the water, e.g. at the dock or launching. Empty = not gated (still computed and shown).';
-const FIL_T = 'Side-view radius at the bottom of the bow and stern stems, where the stem meets the keel, so the bottom has no point. The corner is cut on an arc tangent to stem and keel; the top of the stem, the length, the waterline entry and the sections stay as they are (each waterline it shortens keeps its shape at the tip, so the entry stays sharp). The arc may run above the design waterline; a mold shallower than its top is rejected. Weight, displacement, GM, D/C and the export use the cut hull. 0 = sharp. Empty = 4 in.';
+const FIL_T = 'Side-view radius at the bottom of the bow and stern stems, where the stem meets the keel, so the bottom has no point. The corner is cut on an arc tangent to stem and keel; over the arc each section is stretched onto it (same shape, still pointed, so the waterline entry stays sharp); the top of the stem, the gunwale and the length stay as they are. The arc may run above the design waterline; a mold shallower than its top is rejected. Weight, displacement, GM, D/C and the export use the cut hull. 0 = sharp. Empty = 4 in.';
 const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius, symmetry or gunwale outline). Then Run analyses that design; Race races it.';
 const TPL_T = 'Constructable mold: build the hull from this many cross-section templates (tips included, closer at the ends) with straight surfaces between them, as hot-wire foam or frames with straight battens produce. The analysis, export and 3D view use that loft; with shape search the optimizer tunes it. 9-11 cost about 1% race time (docs/HULLS.md). Empty = smooth hull.';
 const GW_T = 'Constructable gunwale: in top view the sides run straight from the bow, one circular arc of this radius through the middle, straight to the stern; each side is straight from the waterline up to it. The gunwale is the narrowest such outline that keeps the sides from leaning in (and at least the flare at midships). Empty = off. Full-ended hulls need a small radius; a radius that fits no outline rejects the design.';
@@ -788,16 +788,30 @@ function buildCanoe() {
   const nTop = 4;
   for (let k = 1; k <= nTop; k++) zs.push(hull.draft_design + (depth - hull.draft_design) * k / nTop);
   stemLevels(hull, zs, depth);
-  const nz = zs.length, nx = hull.x.length;
+  const nx = hull.x.length;
   const gw = gunwaleOf(hull, depth, flareDeg(), gunwaleR());
-  const hb = (i, k) => halfBreadth(hull, i, zs[k], flareDeg(), gw, depth);
+  // Stations: the table's and 240 even ones; each a half girth from the sheer down to the smooth
+  // keel line (as the export), so the keel is drawn smooth and nothing hangs below it. Of the
+  // empty tip stations only the one next to the hull is kept, as the stem line.
+  const L = loftOf(hull), lev = zs.filter((z, q) => q === 0 || z > zs[q - 1]);
+  let xs = [...hull.x, ...Array.from({ length: 241 }, (_, i) => hull.x[0] + (hull.x[nx - 1] - hull.x[0]) * i / 240)].sort((a, b) => a - b).filter((x, i, a) => !i || x - a[i - 1] > 1e-6);
+  if (hull.stem) for (const [end, bow] of [[hull.stem.bow, true], [hull.stem.stern, false]]) if (end) for (let k = 1; k <= 24; k++) {
+    const d = end[0] + (end[2] - end[0]) * (k === 24 ? 1 : 1 - Math.cos(Math.PI / 2 * k / 24)); xs.push(bow ? hull.x[0] + d : hull.x[nx - 1] - d); }
+  xs = xs.sort((a, b) => a - b).filter((x, i, a) => !i || x - a[i - 1] > 1e-6);
+  const has = xs.map(x => lev.some(z => hbAt(hull, x, z, flareDeg(), gw, depth) > 1e-9));
+  const i0 = Math.max(0, has.indexOf(true) - 1), i1 = Math.min(xs.length - 1, has.lastIndexOf(true) + 1);
+  const NG = 25, rings = [];
+  for (let i = i0; i <= i1; i++) {
+    const p = girthAt(hull, xs[i], lev, flareDeg(), gw, depth);
+    if (p) rings.push([xs[i], resampleLine(has[i] ? p : [[0, depth], [0, p[p.length - 1][1]]], NG)]);
+  }
   const pos = [], idx = [];
   // two sides: s = +1, -1. three.js: x along length, y up, z = half breadth.
   for (const s of [1, -1]) {
     const base = pos.length / 3;
-    for (let i = 0; i < nx; i++) for (let k = 0; k < nz; k++) pos.push(hull.x[i], zs[k], s * hb(i, k));
-    for (let i = 0; i < nx - 1; i++) for (let k = 0; k < nz - 1; k++) {
-      const a = base + i * nz + k, b = a + nz, c = b + 1, d = a + 1;
+    for (const [x, ring] of rings) for (const [y, z] of ring) pos.push(x, z, s * y);
+    for (let i = 0; i < rings.length - 1; i++) for (let k = 0; k < NG - 1; k++) {
+      const a = base + i * NG + k, b = a + NG, c = b + 1, d = a + 1;
       idx.push(a, b, c, a, c, d);
     }
   }
@@ -840,12 +854,10 @@ function buildCanoe() {
 
 // Hull cross-section at x (between stations, linear) from the keel up to the gunwale, as a filled plane + outline.
 function bulkhead(group, x, zs, gw, depth) {
-  const xs = hull.x; let i = 1; while (i < xs.length - 1 && xs[i] < x) i++;
-  const t = Math.min(1, Math.max(0, (x - xs[i - 1]) / (xs[i] - xs[i - 1])));
-  const hb = k => (1 - t) * halfBreadth(hull, i - 1, zs[k], flareDeg(), gw, depth) + t * halfBreadth(hull, i, zs[k], flareDeg(), gw, depth);
+  const g = girthAt(hull, x, zs, flareDeg(), gw, depth); if (!g) return;
   const pts = [];
-  for (let k = 0; k < zs.length; k++) pts.push(new THREE.Vector2(hb(k), zs[k]));
-  for (let k = zs.length - 1; k >= 0; k--) pts.push(new THREE.Vector2(-hb(k), zs[k]));
+  for (let k = g.length - 1; k >= 0; k--) pts.push(new THREE.Vector2(g[k][0], g[k][1]));
+  for (let k = 1; k < g.length; k++) pts.push(new THREE.Vector2(-g[k][0], g[k][1]));
   // Shape lies in the XY plane (x = half breadth, y = height); turn it so half breadth runs along z.
   const face = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts)),
     new THREE.MeshBasicMaterial({ color: 0x141414, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false }));
@@ -855,9 +867,7 @@ function bulkhead(group, x, zs, gw, depth) {
 
 // Air pocket cover: the gunwale outline from x0 to x1 at the mold depth, as a filled plane + outline.
 function pocketCover(group, x0, x1, gw, depth) {
-  const xs = hull.x, n = 24, at = x => { let i = 1; while (i < xs.length - 1 && xs[i] < x) i++;
-    const t = Math.min(1, Math.max(0, (x - xs[i - 1]) / (xs[i] - xs[i - 1])));
-    return (1 - t) * halfBreadth(hull, i - 1, depth, flareDeg(), gw, depth) + t * halfBreadth(hull, i, depth, flareDeg(), gw, depth); };
+  const n = 24, at = x => hbAt(hull, x, depth, flareDeg(), gw, depth);
   const pts = [];
   for (let k = 0; k <= n; k++) { const x = x0 + (x1 - x0) * k / n; pts.push(new THREE.Vector2(x, at(x))); }
   for (let k = n; k >= 0; k--) { const x = x0 + (x1 - x0) * k / n; pts.push(new THREE.Vector2(x, -at(x))); }
@@ -905,41 +915,108 @@ function interp(xs, ys, x) {
 }
 // Half-breadth of station i at height z, with flared topsides above draft_design (same rule as hull.rs build_flared),
 // or with gw (gunwaleOf, built for `depth`) the side ruled from the waterline to the line-arc-line gunwale (build_topsides).
-function halfBreadth(h, i, z, flare, gw, depth) {
-  const row = h.half_breadth[i], nz = h.z.length;
-  if (z <= h.z[nz - 1]) return interp(h.z, row, z);
-  const side = (top, x) => gw && depth > h.draft_design
-    ? top + (gw.hb(x) - top) * Math.min(1, (z - h.draft_design) / (depth - h.draft_design))
-    : top > 0 ? top + (z - h.draft_design) * Math.tan(flare * Math.PI / 180) : top;
-  // A stem radius above the table (hull.rs Hull::stem_cut): the side built from the uncut top waterline, then cut.
-  if (h.stem) return stemCut(h, h.x[i], z, x => side(interp(h.x, h.stem.top_waterline, x), x));
-  return side(row[nz - 1], h.x[i]);
-}
-// Port of hull.rs Hull::stem_cut: topsides row at height z cut on the stem arc, shifted aft with the smoothstep blend.
-function stemCut(h, x, z, row) {
-  const st = h.stem, n = h.x.length, xa = h.x[0], xb = h.x[n - 1], bow = x - xa <= xb - x;
-  const end = bow ? st.bow : st.stern, d = bow ? x - xa : xb - x, tw = st.top_waterline, r = st.radius_in;
-  let tip = null;
-  if (bow) { const j = tw.findIndex(v => v > 0); if (j >= 0) tip = h.x[Math.max(j - 1, 0)] - xa; }
-  else { let j = -1; for (let q = n - 1; q >= 0; q--) if (tw[q] > 0) { j = q; break; } if (j >= 0) tip = xb - h.x[Math.min(j + 1, n - 1)]; }
-  let s = null;
-  if (end && tip !== null && z >= end[1] - r - 1e-12 && z <= end[1]) {
-    const arc = end[0] + r - Math.sqrt(Math.max(r * r - (z - end[1]) ** 2, 0));
-    if (arc > tip + 1e-12) s = arc - tip;
+// Port of hull.rs Loft: the surface between stations. Station keels (column_keel), a monotone
+// cubic keel line through them (straight on with the end slopes to the stems), sections stretched
+// between the keel line and the table top, and the stem radius arcs. One per hull (cached).
+const lofts = new WeakMap();
+function loftOf(h) {
+  let L = lofts.get(h); if (L) return L;
+  const z = h.z, nz = z.length;
+  const colKeel = row => {
+    const f = row.findIndex(v => v > 1e-9); if (f < 0) return null; if (f === 0) return z[0];
+    let k = z[f - 1];
+    if (f + 1 < nz && row[f + 1] > row[f] + 1e-9) { const a = row[f] ** 2, b = row[f + 1] ** 2; k = (z[f] * b - z[f + 1] * a) / (b - a); }
+    return Math.min(Math.max(k, z[f - 1]), z[f]);
+  };
+  const keel = h.half_breadth.map(colKeel), first = h.half_breadth.map(row => row.findIndex(v => v > 1e-9));
+  const kx = [], kz = []; keel.forEach((k, j) => { if (k !== null) { kx.push(h.x[j]); kz.push(k); } });
+  const n = kx.length, m = new Array(n).fill(0);
+  if (n > 1) {
+    const hh = [], d = [];
+    for (let i = 0; i < n - 1; i++) { hh.push(kx[i + 1] - kx[i]); d.push((kz[i + 1] - kz[i]) / hh[i]); }
+    m[0] = d[0]; m[n - 1] = d[n - 2];
+    for (let i = 1; i < n - 1; i++) if (d[i - 1] * d[i] > 0) { const w1 = 2 * hh[i] + hh[i - 1], w2 = hh[i] + 2 * hh[i - 1]; m[i] = (w1 + w2) / (w1 / d[i - 1] + w2 / d[i]); }
   }
-  if (s === null) return row(x);
-  const u = (d - tip - s) / (4 * r); if (u < 0) return 0;
-  const src = d - s * (1 - (u >= 1 ? 1 : u * u * (3 - 2 * u)));
-  return row(bow ? xa + src : xb - src);
+  const clampZ = v => Math.min(Math.max(v, z[0]), z[nz - 1]);
+  const tableKeel = x => {
+    if (!n) return null; if (n === 1) return kz[0];
+    if (x < kx[0]) return clampZ(kz[0] + m[0] * (x - kx[0]));
+    if (x > kx[n - 1]) return clampZ(kz[n - 1] + m[n - 1] * (x - kx[n - 1]));
+    let i = 0; while (i < n - 2 && kx[i + 1] <= x) i++;
+    const hi = kx[i + 1] - kx[i], t = (x - kx[i]) / hi, t2 = t * t, t3 = t2 * t;
+    return clampZ(kz[i] * (2 * t3 - 3 * t2 + 1) + hi * m[i] * (t3 - 2 * t2 + t) + kz[i + 1] * (3 * t2 - 2 * t3) + hi * m[i + 1] * (t3 - t2));
+  };
+  const station = (j, zq) => {
+    const k = keel[j]; if (k === null) return 0; const row = h.half_breadth[j], f = first[j];
+    if (f > 0) { if (zq <= k) return 0; if (zq < z[f]) return z[f] > k ? row[f] * (zq - k) / (z[f] - k) : row[f]; }
+    return interp(z, row, zq);
+  };
+  const top = z[nz - 1], xs = h.x, nx = xs.length;
+  const breadth = (x, zq) => {
+    const k = tableKeel(x); if (k === null || zq < k) return 0;
+    let j = 1; while (j < nx - 1 && xs[j] <= x) j++;
+    const t = Math.min(1, Math.max(0, (x - xs[j - 1]) / (xs[j] - xs[j - 1])));
+    const ka = tableKeel(xs[j - 1]), kb = tableKeel(xs[j]);
+    let za = zq, zb = zq;
+    if (top - k > 1e-9) { const s = Math.min(1, Math.max(0, (zq - k) / (top - k))); za = ka + s * (top - ka); zb = kb + s * (top - kb); }
+    const ya = station(j - 1, za), yb = station(j, zb);
+    return t <= 0 ? ya : t >= 1 ? yb : ya * (1 - t) + yb * t;
+  };
+  const keelAt = x => {
+    const k = tableKeel(x); if (k === null || !h.stem) return k;
+    const st = h.stem, xa = xs[0], xb = xs[nx - 1], bow = x - xa <= xb - x, end = bow ? st.bow : st.stern, d = bow ? x - xa : xb - x, r = st.radius_in;
+    if (end && d >= end[0] - 1e-12 && d <= end[2]) { const u = d - end[0] - r; return Math.max(k, end[1] - Math.sqrt(Math.max(r * r - u * u, 0))); }
+    return k;
+  };
+  L = { breadth, keelAt, tableKeel };
+  lofts.set(h, L); return L;
 }
-// Extra heights every r/8 up a stem arc above the table, so the 3D view draws it round (zs sorted in place).
+// Half-breadth at (x, z): the loft up to the table top, then the topsides (flared, or ruled to the
+// gunwale gw built for `depth`, as hull.rs build_topsides). Over a stem radius (hull.rs Grid::cut_stem)
+// the column is that surface stretched from its keel K .. depth onto the arc K' .. depth.
+function hbAt(h, x, z, flare, gw, depth) {
+  const L = loftOf(h), dd = h.draft_design;
+  const uncut = (xx, zz) => {
+    if (zz <= dd) return L.breadth(xx, zz);
+    const t = L.breadth(xx, dd);
+    return gw && depth > dd ? t + (gw.hb(xx) - t) * Math.min(1, (zz - dd) / (depth - dd)) : t > 0 ? t + (zz - dd) * Math.tan(flare * Math.PI / 180) : t;
+  };
+  if (h.stem) {
+    const k = L.tableKeel(x), kc = L.keelAt(x);
+    if (k !== null && kc > k + 1e-12) return z < kc || depth - kc <= 1e-9 ? 0 : uncut(x, k + (z - kc) * (depth - k) / (depth - kc));
+  }
+  return uncut(x, z);
+}
+// Extra heights every r/8 over a stem radius's arcs, so the 3D view draws them round (zs sorted in place).
 function stemLevels(h, zs, depth) {
   const st = h.stem; if (!st) return;
-  const r = st.radius_in, top = Math.min(Math.max(...[st.bow, st.stern].filter(Boolean).map(e => e[1])), depth);
-  for (let z = h.draft_design + r / 8; z < top; z += r / 8) zs.push(z);
+  const r = st.radius_in, ends = [st.bow, st.stern].filter(Boolean);
+  const lo = Math.max(0, Math.min(...ends.map(e => e[1] - Math.sqrt(Math.max(r * r - (e[2] - e[0] - r) ** 2, 0)))));
+  const top = Math.min(Math.max(...ends.map(e => e[1])), depth);
+  for (let z = lo; z < top; z += r / 8) zs.push(z);
   zs.push(top); zs.sort((a, b) => a - b);
   for (let k = zs.length - 1; k > 0; k--) if (zs[k] - zs[k - 1] < 1e-3) zs.splice(k, 1);
 }
+// Starboard half girth at x, sheer -> keel centreline: the levels zs above the keel, then the keel
+// point itself (none below it, so nothing is drawn on the centreline under the hull).
+function girthAt(h, x, zs, flare, gw, depth) {
+  const k = loftOf(h).keelAt(x); if (k === null) return null;
+  const pts = [];
+  for (let q = zs.length - 1; q >= 0; q--) if (zs[q] > k + 1e-6) pts.push([hbAt(h, x, zs[q], flare, gw, depth), zs[q]]);
+  pts.push([0, Math.min(k, zs[zs.length - 1])]);
+  return pts;
+}
+// A polyline resampled to n points evenly by arc length (ends kept).
+function resampleLine(p, n) {
+  const c = [0]; for (let i = 1; i < p.length; i++) c.push(c[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+  const L = c[c.length - 1]; if (!(L > 0)) return Array.from({ length: n }, () => p[0].slice());
+  const out = []; let j = 1;
+  for (let i = 0; i < n; i++) { const s = L * i / (n - 1); while (j < p.length - 1 && c[j] < s) j++;
+    const t = c[j] > c[j - 1] ? (s - c[j - 1]) / (c[j] - c[j - 1]) : 0; out.push([p[j - 1][0] + t * (p[j][0] - p[j - 1][0]), p[j - 1][1] + t * (p[j][1] - p[j - 1][1])]); }
+  return out;
+}
+// At table station i.
+function halfBreadth(h, i, z, flare, gw, depth) { return hbAt(h, h.x[i], z, flare, gw, depth); }
 // Port of hull.rs Gunwale::new / of_hull: straight from each tip tangent to an arc of radius r peaking at (xc, b).
 function gunwaleNew(x0, x1, xc, b, r) {
   if (!(r > 0 && b > 0 && x0 < xc && xc < x1)) return null;
@@ -954,8 +1031,7 @@ function gunwaleNew(x0, x1, xc, b, r) {
 // Narrowest outline of radius r enclosing the design waterline, at least the flare at midships; null = none fits.
 function gunwaleOf(h, depth, flare, r) {
   if (!(r > 0)) return null;
-  // Fitted to the uncut top waterline (a stem radius only cuts the ends), as in hull.rs.
-  const nw = h.z.length, tops = h.stem ? h.stem.top_waterline : h.half_breadth.map(row => row[nw - 1]), top = Math.max(...tops);
+  const nw = h.z.length, tops = h.half_breadth.map(row => row[nw - 1]), top = Math.max(...tops);
   const wide = h.x.filter((x, j) => tops[j] >= top - 1e-9), xc = (wide[0] + wide[wide.length - 1]) / 2, x0 = h.x[0], x1 = h.x[h.x.length - 1];
   const b0 = top + Math.max(0, depth - h.draft_design) * Math.tan(flare * Math.PI / 180);
   const ok = b => { const g = gunwaleNew(x0, x1, xc, b, r); return g && h.x.every((x, j) => tops[j] - g.hb(x) <= 1e-9) ? g : null; };
@@ -1189,12 +1265,8 @@ function plotXsec(ctx, W, H) {
   const zs = h.z.slice(); if (depth > h.draft_design) for (let k = 1; k <= 8; k++) zs.push(h.draft_design + (depth - h.draft_design) * k / 8);
   stemLevels(h, zs, depth);
   const sts = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => f * h.length);
-  const prof = sts.map(x => {
-    let i = 1; while (i < h.x.length - 1 && h.x[i] < x) i++;
-    const t = (x - h.x[i - 1]) / (h.x[i] - h.x[i - 1]);
-    return zs.map(z => (1 - t) * halfBreadth(h, i - 1, z, fl, gw, depth) + t * halfBreadth(h, i, z, fl, gw, depth));
-  });
-  const ymax = Math.max(...prof.flat()) * 1.1, pw = (W - 20) / n;
+  const prof = sts.map(x => (girthAt(h, x, zs, fl, gw, depth) || [[0, 0]]).slice().reverse()); // keel -> sheer
+  const ymax = Math.max(...prof.flat().filter((_, i) => i % 2 === 0)) * 1.1, pw = (W - 20) / n;
   const sc = Math.min((pw - 30) / (2 * ymax), (H - 70) / (depth * 1.1));
   ctx.fillStyle = C.muted; ctx.font = font(11);
   ctx.fillText(`Winner hull sections, bow to stern. Flare ${fl} deg, depth ${depth} in, wall ${w.thickness_in} in. Same scale.`, 12, 16);
@@ -1203,11 +1275,11 @@ function plotXsec(ctx, W, H) {
     ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(cx, Y(0) + 4); ctx.lineTo(cx, Y(depth) - 4); ctx.stroke();
     if (d) { const wl = interp(d.x_in, d.waterline_in, sts[s]); hline(ctx, X(-ymax), X(ymax), Y(wl), C.muted, [5, 3]); }
     ctx.strokeStyle = C.ink; ctx.lineWidth = Math.max(1.5, w.thickness_in * sc); ctx.lineJoin = 'round'; ctx.beginPath();
-    for (let k = zs.length - 1; k >= 0; k--) ctx.lineTo(X(-yb[k]), Y(zs[k]));
-    for (let k = 0; k < zs.length; k++) ctx.lineTo(X(yb[k]), Y(zs[k]));
+    for (let k = yb.length - 1; k >= 0; k--) ctx.lineTo(X(-yb[k][0]), Y(yb[k][1]));
+    for (let k = 1; k < yb.length; k++) ctx.lineTo(X(yb[k][0]), Y(yb[k][1]));
     ctx.stroke(); ctx.lineWidth = 1;
     ctx.textAlign = 'center'; ctx.fillStyle = C.soft; ctx.fillText(`x = ${sts[s].toFixed(0)} in`, cx, H - 20);
-    ctx.fillStyle = C.muted; ctx.fillText(`gunwale ${(2 * yb[yb.length - 1]).toFixed(1)} in`, cx, H - 6); ctx.textAlign = 'left';
+    ctx.fillStyle = C.muted; ctx.fillText(`gunwale ${(2 * yb[yb.length - 1][0]).toFixed(1)} in`, cx, H - 6); ctx.textAlign = 'left';
   });
   legend(ctx, W - 260, 16, [[C.ink, 'hull wall'], [C.muted, 'loaded waterline', [5, 3]]]);
 }
@@ -1224,9 +1296,10 @@ function plotZones(ctx, W, H) {
   if (!w || !h) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   const z = w.zones;
   if (!z) return msg(ctx, W, H, 'Single-mix wall. Turn on Two-mix zones to place a dense mix.');
-  const depth = w.depth_in, xs = h.x;
-  // Keel height per station: lowest table row with breadth (the stem rises at the ends).
-  const keel = h.half_breadth.map(row => { const k = row.findIndex(y => y > 1e-6); return k < 0 ? depth : h.z[k]; });
+  const depth = w.depth_in, lo = loftOf(h);
+  // The smooth keel line (the loft's: the stem rises at the ends), every 0.5 in plus the table stations.
+  const xs = [...h.x, ...Array.from({ length: Math.ceil(h.length / 0.5) + 1 }, (_, i) => Math.min(h.length, i * 0.5))].sort((a, b) => a - b).filter((x, i, a) => !i || x - a[i - 1] > 1e-6);
+  const keel = xs.map(x => { const k = lo.keelAt(x); return k === null ? depth : Math.min(k, depth); });
   const r = { l: 72, t: 34, w: W - 92, h: H - 88 };
   const a = axes(ctx, r, [xs[0], xs[xs.length - 1]], [0, depth * 1.08], 'x from bow, in', 'height above keel, in');
   const poly = (top, bot, col) => { ctx.fillStyle = col; ctx.beginPath(); top.forEach(([x, y], i) => i ? ctx.lineTo(a.px(x), a.py(y)) : ctx.moveTo(a.px(x), a.py(y)));

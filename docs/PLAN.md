@@ -62,7 +62,9 @@ side lean limit `hull.gunwale_max_flare_deg`) is done. On full-ended hulls such 
 radius exists at 30 deg; the team should confirm the lean limit the mold shop can build.
 T68 (`hull.stem_radius_in`, was `keel_fillet_radius_in`): reworked 2026-10-14 to a side-view forefoot radius (the plan
 view and sections stay sharp; the user wants a sharp entry but no pointed bottom); 2026-10-15 the
-arc may run above the design waterline into the topsides, default 4 in. The mold is
+arc may run above the design waterline into the topsides, default 4 in; then reworked to a
+keel-line arc with the sections stretched onto it (the per-waterline shift folded sections near a
+flat forefoot). Same day: the smooth-keel loft between stations and the B-spline STEP. The mold is
 stacked traced foam sheets (2026-10-13): smooth outlines cost nothing to cut, so `templates` is not
 needed for this shop; a useful next export would be each sheet's outline (a waterline at every
 sheet thickness) as a 1:1 tracing pattern.
