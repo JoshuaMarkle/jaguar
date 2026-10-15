@@ -543,7 +543,6 @@ mod tests {
             method: DesignMethod::Asd,
             lrfd_dead: 1.2,
             lrfd_dead_only: 1.4,
-            lrfd_dead_min: None,
             lrfd_live: 1.6,
             factor_of_safety: 2.0,
             dynamic_load_factor: 1.2,

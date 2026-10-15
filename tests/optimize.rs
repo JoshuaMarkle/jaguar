@@ -15,9 +15,9 @@ fn example() -> (Params, Hull) {
     (p, h)
 }
 
-/// The example with the GM gate relaxed to 0 (upright stable). The real hull
-/// has loaded GM_T 0.29 in at the winner and at most 0.81 in over the grid with
-/// crew CG 12 in; examples/canoe.toml uses gm_min_in = 0.25 so it still passes.
+/// The example with the GM gate relaxed to 0 (upright stable). The real hull has a loaded
+/// GM_T of about 1.06 in at the winner (real crew weight, crew CG 12 in); examples/canoe.toml
+/// uses gm_min_in = 0.25 so it passes either way.
 fn example_gm0() -> (Params, Hull) {
     let (mut p, h) = example();
     p.stability.gm_min_in = 0.0;

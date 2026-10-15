@@ -381,15 +381,13 @@ pub struct Material {
     /// LRFD factor on self weight in the dead-load-only combination (default 1.4).
     #[serde(default = "lrfd_dead_only")]
     pub lrfd_dead_only: f64,
-    /// Removed (the 0.9D + 1.6L combination is not an ASCE 7 gravity combination); kept
-    /// only to refuse old files with a message instead of "unknown field".
-    #[serde(default, skip_serializing)]
-    pub lrfd_dead_min: Option<f64>,
     /// LRFD factor on the paddler loads (default 1.6).
     #[serde(default = "lrfd_live")]
     pub lrfd_live: f64,
     pub factor_of_safety: f64,
-    /// Multiplier on crew weight for paddling impact.
+    /// Multiplier on crew weight for paddling impact, in the stress checks only (ASD and,
+    /// under the live factor, LRFD). The float (freeboard, GM, draft, drag) carries the real
+    /// crew weight: the freeboard gate already holds the margin.
     pub dynamic_load_factor: f64,
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging.
@@ -909,12 +907,6 @@ impl Params {
             bail!("material: need flex_over_split > 0 and density_extrapolation_pcf >= 0");
         }
         let m = &self.material;
-        if m.lrfd_dead_min.is_some() {
-            bail!(
-                "material.lrfd_dead_min was removed: 0.9D + 1.6L is not an ASCE 7 gravity combination; \
-                 LRFD now checks 1.2D + 1.6L and 1.4D (material.lrfd_dead_only); delete the line"
-            );
-        }
         if ![m.lrfd_dead, m.lrfd_dead_only, m.lrfd_live].iter().all(|v| v.is_finite() && *v > 0.0) {
             bail!("material: need lrfd_dead, lrfd_dead_only, lrfd_live > 0");
         }
@@ -1076,10 +1068,11 @@ mod tests {
         let lrfd = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead = 1.25\nlrfd_live = 1.5");
         let p = Params::parse(&lrfd, Path::new("examples")).unwrap();
         assert_eq!(p.material.combos(), vec![(1.25, 1.5), (1.4, 0.0)]);
-        // The removed 0.9D + 1.6L factor is refused with a message, not silently ignored.
+        // The removed 0.9D + 1.6L factor is not an input any more.
         let old = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_min = 0.9");
-        let e = Params::parse(&old, Path::new("examples")).unwrap_err().to_string();
-        assert!(e.contains("lrfd_dead_min was removed") && e.contains("1.4D"), "{e}");
+        assert!(
+            Params::parse(&old, Path::new("examples")).unwrap_err().to_string().contains("lrfd_dead_min")
+        );
         let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_only = 0.0");
         assert!(Params::parse(&bad, Path::new("examples")).is_err());
     }

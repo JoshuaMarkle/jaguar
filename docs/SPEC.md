@@ -128,7 +128,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    L = crew x dynamic factor, impact being part of the live load before factoring, ASCE 7 4.6;
    buoyancy is a fluid load factored like D, balancing the factored weight) and the worse
    combination governs (the removed `lrfd_dead_min`, 0.9D + 1.6L, is refused); capacities x phi (0.60 plain concrete, 0.75
-   for `aci_22_6` punching), never both. Freeboard, GM and drag always use service loads.
+   for `aci_22_6` punching), never both. Freeboard, GM, draft and drag always use the real crew
+   weight (no dynamic factor, no load factor): the freeboard gate already holds its margin.
 5. **Checks** (`src/check.rs`; governing D/C = max):
    * bending tension: |M| c / I at the tension fibre (bottom, c = zbar, when sagging M > 0; top,
      c = D - zbar, when hogging), vs flexural strength
@@ -219,7 +220,7 @@ mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
 mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's
-`zones` has combinations (`walls`; with none, `note` says why, e.g. no dense mix heavier than a light one), skipped (`heavier`, `punching`), `checked` (placed), `freeboard` (placements that ended missing freeboard, which dense concrete cannot fix), `capped`,
+`zones` has combinations (`walls`; with none, `note` says why, e.g. no dense mix heavier than a light one), skipped (`heavier`, `punching`), `checked` (placed), `freeboard` (walls that miss freeboard, which dense concrete cannot fix: skipped when their single-mix wall already misses it, or placed and ending short), `capped`,
 `single_mix_lb` (the single-mix pick, null if none passes) and `saved_lb` (single_mix_lb - winner
 weight; 0 when the winner is single-mix). Zoned candidates follow the single-mix ones. Zoned D/C(x)
 and stresses are the governing mix's; `inertia_in4` is transformed. The terminal lists the
@@ -353,7 +354,10 @@ geometry the rules leave to the site marked as assumptions.
   model of the drag objective, so absolute times need the calibration.
 
 ## Performance
-`examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.2 s on a laptop (release; about 2 CPU-s, mostly drag and the seat corners).
+`examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.5 s on a laptop (release; drag of every candidate and the seat corners).
+In a shape search only the reported candidates get their drag (each shape's verified winner, or its
+best failing candidate) unless drag is the objective; `[zones]` skips walls whose single-mix wall
+misses freeboard and checks GM by ballast on a quick float before a full check.
 Keep it under 1 s. `examples/shape_opt.toml` must stay under 60 s. `jaguar race` on the
 examples/canoe.toml winner (9 events) runs in about 5 s; `examples/shape_race.toml` in about 44 s
 (22 threads; mostly the per-shape straight-resistance tables, 24 Michell calls per crew).

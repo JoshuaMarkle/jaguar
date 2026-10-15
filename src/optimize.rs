@@ -169,7 +169,7 @@ pub struct Calc {
     pub depth_in: f64,
     /// Integral of the shell area A(x) dx, in^3.
     pub wall_volume_in3: f64,
-    /// Service equilibrium (unfactored, dynamic factor on the crew).
+    /// Service equilibrium: real crew weight (freeboard, GM, drag).
     pub service: CalcFloat,
     /// Equilibrium the stress checks use (factored for lrfd).
     pub strength: CalcFloat,
@@ -482,7 +482,7 @@ fn calc(
         wall_volume_in3: (1..n)
             .map(|i| 0.5 * (sec.area[i] + sec.area[i - 1]) * (grid.x[i] - grid.x[i - 1]))
             .sum(),
-        service: float(&e.service, 1.0),
+        service: float(&e.service, 1.0 / mat.dynamic_load_factor),
         strength: float(loads, live),
         split_slope_psi_per_pcf: fit.split_slope_psi_per_pcf,
         split_intercept_psi: fit.split_intercept_psi,
@@ -790,7 +790,8 @@ pub struct ZoneSearch {
     pub punching: usize,
     /// Placed (`max_checks` counts these), lightest first.
     pub checked: usize,
-    /// Of those, ended missing freeboard, which dense concrete (heavier) cannot fix.
+    /// Two-mix walls that miss freeboard, which dense concrete (heavier) cannot fix: skipped
+    /// because their single-mix wall already misses it, or placed and ending short of it.
     pub freeboard: usize,
     /// `max_checks` was reached with lighter combinations left.
     pub capped: bool,
@@ -984,6 +985,13 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         })
         .collect();
     candidates.sort_by_key(|&(t, r, d, _)| (t, r, d));
+    // (thickness, light mix, geometry) whose single-mix wall misses freeboard: a two-mix wall
+    // there is heavier still, so the zoned search skips it.
+    let fb_fails: std::collections::HashSet<(usize, usize, usize)> = candidates
+        .iter()
+        .filter(|x| x.3.verdict.as_ref().is_some_and(|v| v.freeboard_in < params.gates.freeboard_min_in))
+        .map(|x| (x.0, x.1, x.2))
+        .collect();
     let mut candidates: Vec<Candidate> = candidates.into_iter().map(|x| x.3).collect();
 
     let mut zone_stats = None;
@@ -1001,6 +1009,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             pairs: &pairs,
             ts: &ts,
             plans: &plans,
+            fb_fails: &fb_fails,
         };
         let (zc, stats) =
             zoned_search(params, z, &space, &unbuildable, lightest, (&done, total), on_progress);
@@ -1071,6 +1080,8 @@ struct ZoneSpace<'a> {
     pairs: &'a [(usize, usize)],
     ts: &'a [f64],
     plans: &'a [Result<Vec<CaseSeats>, String>],
+    /// (thickness, light mix, geometry) indices whose single-mix wall misses freeboard.
+    fb_fails: &'a std::collections::HashSet<(usize, usize, usize)>,
 }
 
 /// One combination to place: wall pair, light and dense mix index, all-light weight.
@@ -1237,7 +1248,8 @@ fn place_zones(
         let zl = ZoneLayout { light_pcf: light.0, dense_pcf: dense.0, dense: normalize(&rects) };
         let empty = zl.dense.is_empty();
         let zw = ZonedWall::new(params, grid, t, zl, [light.1.clone(), dense.1.clone()], seats);
-        let mut c = evaluate_wall(params, &light.1, grid, &sec, t, Wall::Zoned(&zw), plan, true);
+        let mut c =
+            evaluate_wall(params, &light.1, grid, &sec, t, Wall::Zoned(&zw), plan, true, search_drag(params));
         c.mix = light.2.clone();
         c.dense_mix = dense.2.clone();
         c.flare_deg = sp.geoms[gi].1;
@@ -1258,18 +1270,39 @@ fn place_zones(
                 station_needs(params, grid, &sec, &zw, seats, t, inc, gate)
             }
         } else if gm_short && h <= 0.5 * grid.depth {
-            grow += 1;
-            let half = GROW_IN * grow as f64 / 2.0;
-            let mid = 0.5 * (xa + xb);
-            if mid - half <= xa && mid + half >= xb {
-                (grow, h) = (0, h + step);
+            // GM by ballast: the strip grows on a quick float check (nominal seats and the crew
+            // shifted fore / aft) and is then fully checked; if even the largest strip (full
+            // length, half the mold depth) leaves GM short, nothing will.
+            let fits = [light.1.clone(), dense.1.clone()];
+            let ok = |extra: &Rect| {
+                let mut r = rects.clone();
+                r.push(*extra);
+                let zl = ZoneLayout { light_pcf: light.0, dense_pcf: dense.0, dense: normalize(&r) };
+                gm_passes(params, grid, t, zl, fits.clone(), seats)
+            };
+            let full = Rect { x0_in: xa, x1_in: xb, z0_in: 0.0, z1_in: snap_down(0.5 * grid.depth, inc) };
+            let mut strip = None;
+            if ok(&full) {
+                while h <= 0.5 * grid.depth {
+                    grow += 1;
+                    let half = GROW_IN * grow as f64 / 2.0;
+                    let mid = 0.5 * (xa + xb);
+                    let r = Rect {
+                        x0_in: snap_down(mid - half, inc).max(xa),
+                        x1_in: snap_up(mid + half, inc).min(xb),
+                        z0_in: 0.0,
+                        z1_in: h.min(grid.depth),
+                    };
+                    if mid - half <= xa && mid + half >= xb {
+                        (grow, h) = (0, h + step);
+                    }
+                    if ok(&r) {
+                        strip = Some(r);
+                        break;
+                    }
+                }
             }
-            vec![Rect {
-                x0_in: snap_down(mid - half, inc).max(xa),
-                x1_in: snap_up(mid + half, inc).min(xb),
-                z0_in: 0.0,
-                z1_in: h.min(grid.depth),
-            }]
+            strip.into_iter().collect()
         } else {
             Vec::new()
         };
@@ -1290,6 +1323,36 @@ fn place_zones(
         }
     }
     (last.filter(|c| c.zones.as_ref().is_some_and(|z| !z.dense.is_empty())), Stopped::Other)
+}
+
+/// Does zoned wall `zl` meet the GM gates (every load case at its nominal seats and the crew
+/// moved fore / aft by the seat variance, real crew weight; and the empty canoe)? A float that
+/// cannot be solved counts as a miss.
+fn gm_passes(
+    params: &Params,
+    grid: &Grid,
+    t: f64,
+    zl: ZoneLayout,
+    fits: [StrengthFit; 2],
+    seats: &[CaseSeats],
+) -> bool {
+    let zw = ZonedWall::new(params, grid, t, zl, fits, seats);
+    let st = &params.stability;
+    let (patch, cg) = (params.material.knee_patch_in, st.crew_cg_in);
+    let gm =
+        |crew: &[CrewLoad]| solve_weights(grid, &zw.zs.weight, &zw.zs.zg, crew, patch, cg).map(|l| l.gm_in);
+    if let Some(m) = st.gm_empty_min_in
+        && !gm(&[]).is_ok_and(|g| g >= m)
+    {
+        return false;
+    }
+    params.load_cases.iter().zip(seats).all(|(case, s)| {
+        seats::shifted(&s.seats_in, params.seats.variance_in, grid).iter().all(|q| {
+            let crew: Vec<CrewLoad> =
+                q.iter().zip(&case.weights_lb).map(|(&x_in, &w)| CrewLoad { x_in, lb: w }).collect();
+            gm(&crew).is_ok_and(|g| g >= st.gm_min_in)
+        })
+    })
 }
 
 /// Two-mix search over `[zones]`: every (wall, depth, flare) with resolved seats x light mix x
@@ -1329,6 +1392,11 @@ fn zoned_search(
         for (ri, l) in sp.axis.iter().enumerate() {
             for (di, d) in sp.dense.iter().enumerate().filter(|(_, d)| d.0 > l.0) {
                 stats.walls += 1;
+                // Dense concrete only adds weight: no two-mix wall here makes freeboard.
+                if sp.fb_fails.contains(&(ti, ri, gi)) {
+                    stats.freeboard += 1;
+                    continue;
+                }
                 if punching_dc(params, &l.1, l.0, t) > gate && punching_dc(params, &d.1, d.0, t) > gate {
                     stats.punching += 1;
                     continue;
@@ -1400,6 +1468,24 @@ fn zoned_search(
     (out, stats)
 }
 
+/// Drag of single-mix candidate `c` on `hull` (its depth, flare, wall and seats re-solved as
+/// the search did), for a reported candidate the search left without one. None when it cannot
+/// be computed.
+pub fn candidate_drag(params: &Params, hull: &Hull, c: &Candidate) -> Option<f64> {
+    if c.zones.is_some() {
+        return None;
+    }
+    let fit = strength(params).ok()?;
+    let axis = density_axis(params, &fit).ok()?;
+    let (rho_fit, mid) =
+        (axis.iter().find(|a| a.0 == c.density_pcf && a.2 == c.mix)?.1.clone(), &axis[axis.len() / 2]);
+    let grid = Grid::build_topsides(hull, c.depth_in, params.hull.stations, candidate_topsides(params, c)).0;
+    let sec = sections(&grid, c.thickness_in);
+    let plan = plan_seats(params, &mid.1, &grid, &sec, c.thickness_in, mid.0).map_err(|e| format!("{e:#}"));
+    let wall = Wall::Uniform(c.density_pcf);
+    evaluate_wall(params, &rho_fit, &grid, &sec, c.thickness_in, wall, &plan, false, true).drag_n
+}
+
 /// Builds a zoned wall for a grid (the winner's layout at a verification resolution).
 type ZonedMaker<'a> = dyn Fn(&Grid) -> ZonedWall + Sync + 'a;
 
@@ -1423,7 +1509,7 @@ fn finish_winner(
     let sec = sections(&grid, c.thickness_in);
     let zw = zoned.map(|mk| mk(&grid));
     let wall = zw.as_ref().map_or(Wall::Uniform(c.density_pcf), Wall::Zoned);
-    let v = evaluate_wall(params, wall_fit, &grid, &sec, c.thickness_in, wall, plan, false);
+    let v = evaluate_wall(params, wall_fit, &grid, &sec, c.thickness_in, wall, plan, false, true);
     // A winner passed, so its seats resolved.
     let seats = plan.as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
     let cases = all_case_diagrams_wall(params, wall_fit, &grid, &sec, c.thickness_in, wall, seats);
@@ -1453,8 +1539,12 @@ fn finish_winner(
         };
     let search_space = search_space(params, fit, c)?;
     let walls = &search_space[..3];
+    let mut candidate = c.clone();
+    if candidate.drag_n.is_none() {
+        candidate.drag_n = v.drag_n;
+    }
     Ok(Winner {
-        candidate: c.clone(),
+        candidate,
         verify_stations: stations,
         verify_dc,
         verified,
@@ -1728,12 +1818,10 @@ pub fn eval_case_wall(
     seats: &[f64],
 ) -> Result<CaseEval> {
     let mat = &params.material;
-    let crew = |lf: f64| -> Vec<CrewLoad> {
-        seats
-            .iter()
-            .zip(&case.weights_lb)
-            .map(|(&x_in, &w)| CrewLoad { x_in, lb: w * mat.dynamic_load_factor * lf })
-            .collect()
+    // Crew at `f` x its weight: 1 for the float (freeboard, GM, drag: the real crew), dynamic
+    // factor x live factor for the stress checks.
+    let crew = |f: f64| -> Vec<CrewLoad> {
+        seats.iter().zip(&case.weights_lb).map(|(&x_in, &w)| CrewLoad { x_in, lb: w * f }).collect()
     };
     let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
     let service = wall.solve(grid, sec, 1.0, &crew(1.0), patch, cg)?;
@@ -1742,10 +1830,11 @@ pub fn eval_case_wall(
         case.weights_lb.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * mat.dynamic_load_factor;
     let mut best: Option<(Loads, Verdict, (f64, f64))> = None;
     for (dead, live) in mat.combos() {
-        let loads = if (dead, live) == (1.0, 1.0) {
+        let f = mat.dynamic_load_factor * live;
+        let loads = if (dead, f) == (1.0, 1.0) {
             service.clone()
         } else {
-            wall.solve(grid, sec, dead, &crew(live), patch, cg)?
+            wall.solve(grid, sec, dead, &crew(f), patch, cg)?
         };
         let mut v = match wall {
             Wall::Uniform(rho) => check(
@@ -2248,7 +2337,14 @@ fn evaluate(
     plan: &Result<Vec<CaseSeats>, String>,
     early_exit: bool,
 ) -> Candidate {
-    evaluate_wall(params, fit, grid, sec, t, Wall::Uniform(rho), plan, early_exit)
+    evaluate_wall(params, fit, grid, sec, t, Wall::Uniform(rho), plan, early_exit, search_drag(params))
+}
+
+/// Whether the search computes every candidate's drag: always on a fixed hull (every candidate
+/// is reported), in a shape search only when drag is the objective (the inner candidates are
+/// not reported; each shape's reported candidate gets its drag, see [`candidate_drag`]).
+fn search_drag(params: &Params) -> bool {
+    params.shape_search.is_none() || params.objective.kind == ObjectiveKind::Drag
 }
 
 /// [`evaluate`] for any wall.
@@ -2262,6 +2358,7 @@ fn evaluate_wall(
     wall: Wall,
     plan: &Result<Vec<CaseSeats>, String>,
     early_exit: bool,
+    want_drag: bool,
 ) -> Candidate {
     let rho = wall.rho();
     let beam = 2.0 * grid.y.iter().cloned().fold(0.0, f64::max);
@@ -2352,8 +2449,8 @@ fn evaluate_wall(
         // The freeboard gate covers every case, not just the governing one.
         v.freeboard_in = fb;
         c.gm_in = Some(gm);
-        // Drag is always reported; it only fails the candidate when it is the objective.
-        {
+        // Drag is reported (it only fails the candidate when it is the objective).
+        if want_drag {
             let draft = heaviest.map(|h| h.1).unwrap_or(f64::NAN);
             let hull = grid_hull(grid);
             let speed = params.objective.speed_mps;

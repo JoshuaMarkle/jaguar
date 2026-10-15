@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(p.search.thickness_in[..2], [m.thickness_in.unwrap(); 2]);
         assert_eq!((p.hull.flare_deg, p.hull.templates), (0.0, None));
         // Run it: one wall, the CAD hull, every check. It is the off1 winner it was drawn from (0.375 in,
-        // 12 in, 58 pcf: 98.4 lb, punching 0.904, GM 0.263) up to the mesh's sampling. off1 sits on
+        // 12 in, 58 pcf: 98.4 lb, punching 0.904, GM 1.06 with the real crew) up to the mesh's sampling. off1 sits on
         // the GM gate and GM is a small difference of large terms, so it is compared, not gated.
         let mut p = p;
         p.stability.gm_min_in = 0.0;
@@ -562,7 +562,7 @@ mod tests {
         let c = &w.candidate;
         assert!((c.hull_weight_lb / 98.4 - 1.0).abs() < 0.02, "{}", c.hull_weight_lb);
         assert!((c.verdict.as_ref().unwrap().dc - 0.904).abs() < 0.005);
-        assert!((c.gm_in.unwrap() - 0.263).abs() < 0.05, "{:?}", c.gm_in);
+        assert!((c.gm_in.unwrap() / 1.06 - 1.0).abs() < 0.08, "{:?}", c.gm_in);
         // A drawn wall under the buildable floor is still analysed, with a note.
         let (_, notes) = analysis_toml(&base, Path::new("examples"), &hp, &m, Some(0.25), None).unwrap();
         assert!(notes.iter().any(|n| n.contains("thinner than your buildable floor")));

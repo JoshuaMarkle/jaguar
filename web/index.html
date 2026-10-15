@@ -257,7 +257,7 @@ const FIELDS = {
     ['flex_over_split', 'Flex / split ratio', '-', 'Bending (flexural) strength divided by the split-cylinder tensile strength the lab measured. 1.0 is the safe choice; textbook relations give about 1.12.', 'any', 0],
     ['density_extrapolation_pcf', 'Density extrapolation', 'pcf', 'How far beyond the lightest and heaviest tested mixes the search may go. The strength line is fitted through only a few lab points, so far outside them it is a guess.', 'any', 0],
     ['factor_of_safety', 'Factor of safety', '-', 'Strength is divided by this. Must be at least 1.', 'any', 1],
-    ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight to cover paddling impact.', 'any', 0],
+    ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight for paddling impact, in the stress checks only (both methods). Freeboard, GM and drag use the real crew weight.', 'any', 0],
     ['lrfd_dead', 'LRFD dead factor', '-', 'Design method lrfd only: factor on the self weight (the buoyancy balancing it carries the same factor). Default 1.2.', 'any', 0],
     ['lrfd_dead_only', 'LRFD dead-only factor', '-', 'Design method lrfd only: self-weight factor of the dead-load-only combination (no crew; ASCE 7 1.4D). Default 1.4.', 'any', 0],
     ['lrfd_live', 'LRFD paddler factor', '-', 'Design method lrfd only: factor on the paddler loads (after the dynamic load factor). Default 1.6.', 'any', 0],
@@ -450,6 +450,7 @@ function buildForm() {
   $('flotation.on').onchange = setFlotation;
   $('turning.on').onchange = setTurning;
   $('zones.on').onchange = setZones;
+  $('material.method').onchange = setMethod;
   for (const b of $('dispseg').children) b.onclick = () => setDispMode(b.dataset.disp);
   $('dispaddbtn').onclick = () => { dispRow('', ''); dispMode = 'custom'; dispRefresh(); };
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
@@ -489,6 +490,12 @@ function setShapeMode() {
 }
 function setFlotation() { $('flotbody').style.display = $('flotation.on').checked ? 'grid' : 'none'; }
 function setTurning() { $('turnbody').style.display = $('turning.on').checked ? 'grid' : 'none'; }
+// Only the active design method's factors are shown: factor of safety (asd) or the LRFD factors.
+function setMethod() {
+  const lrfd = $('material.method').value === 'lrfd';
+  $('material.factor_of_safety').closest('.row').style.display = lrfd ? 'none' : '';
+  for (const k of ['lrfd_dead', 'lrfd_dead_only', 'lrfd_live']) $(`material.${k}`).closest('.row').style.display = lrfd ? '' : 'none';
+}
 function setZones() { $('zonebody').style.display = $('zones.on').checked ? 'grid' : 'none'; }
 // Race displacement rows: crew lb + share. The segmented control fills presets; editing a row makes it custom.
 function dispRow(crew, w) {
@@ -562,7 +569,7 @@ function fillForm(p, hulls) {
   $('objective.kind').value = p.objective.kind || 'drag';
   loadedRace = p.race || null;
   $('material.strength_model').value = p.material.strength_model || 'fit';
-  $('material.method').value = p.material.method || 'asd';
+  $('material.method').value = p.material.method || 'asd'; setMethod();
   const pu = p.punching || { method: 'aci_22_6', knees: 1, knee_split: 0.5, knee_spacing_in: 8, pad_in: 0 };
   $('punching.method').value = pu.method; $('punching.knees').value = String(pu.knees);
   // No layer fields in the file = 2 passes, mesh after 1 (d = t/2), same as the engine default.
@@ -1457,7 +1464,7 @@ function savingRow(c) {
   const t = 'Weight of this design against the lightest single-mix design that passes in the same run (what a run without [zones] picks).';
   if (z.single_mix_lb == null) return kv('Two-mix saving', 'no single-mix wall passes', t);
   const s = z.saved_lb || 0;
-  if (!(c && c.zones) && z.freeboard > 0) return kv('Two-mix saving', `0 lb <span class="muted">${z.freeboard} of the ${z.checked} lighter walls miss freeboard, which heavier dense concrete cannot fix</span>`, t);
+  if (!(c && c.zones) && z.freeboard > 0) return kv('Two-mix saving', `0 lb <span class="muted">${z.freeboard} two-mix walls miss freeboard, which heavier dense concrete cannot fix</span>`, t);
   return kv('Two-mix saving', `${s.toFixed(1)} lb <span class="muted">${(100 * s / z.single_mix_lb).toFixed(1)}% vs single mix ${z.single_mix_lb.toFixed(1)} lb</span>`, t);
 }
 // GM of the empty canoe (with its gate, if any), then each load case against the per-case gate.

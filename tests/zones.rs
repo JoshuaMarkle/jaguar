@@ -181,7 +181,7 @@ fn placements_that_end_short_of_freeboard_are_counted() {
     p.gates.freeboard_min_in = 7.0;
     let r = optimize::run(&p, &h).unwrap();
     let s = r.zones.as_ref().unwrap();
-    assert!(s.freeboard > 0 && s.freeboard <= s.checked, "{s:?}");
+    assert!(s.freeboard > 0 && s.freeboard <= s.walls, "{s:?}");
     if r.winner.as_ref().is_some_and(|w| w.candidate.zones.is_none()) {
         let text = jaguar::report::summary_lines(&r).join("\n");
         assert!(text.contains("miss freeboard"), "{text}");

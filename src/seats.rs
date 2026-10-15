@@ -166,6 +166,8 @@ impl<'a> Surrogate<'a> {
         let mat = &params.material;
         let lb: Vec<f64> = case.weights_lb.iter().map(|w| w * mat.dynamic_load_factor).collect();
         let w: f64 = lb.iter().sum();
+        // The float (freeboard, GM) carries the real crew; the stresses the dynamic factor.
+        let w_real: f64 = case.weights_lb.iter().sum();
         let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
         let combos = mat.combos();
         let n = grid.nx();
@@ -175,11 +177,11 @@ impl<'a> Surrogate<'a> {
         let nodes = (0..nn)
             .map(|j| {
                 let xe = if nn == 1 { lo } else { lo + (hi - lo) * j as f64 / (nn - 1) as f64 };
-                let service = solve(grid, sec, rho, &[CrewLoad { x_in: xe, lb: w }], patch, cg).ok()?;
+                let service = solve(grid, sec, rho, &[CrewLoad { x_in: xe, lb: w_real }], patch, cg).ok()?;
                 let fb = crate::check::freeboard(grid, &service);
                 let (mut v0, mut m0, mut hoop) = (Vec::new(), Vec::new(), Vec::new());
                 for &(dead, live) in &combos {
-                    let ld = if (dead, live) == (1.0, 1.0) {
+                    let ld = if (dead, live * mat.dynamic_load_factor) == (1.0, 1.0) {
                         service.clone()
                     } else {
                         solve(grid, sec, rho * dead, &[CrewLoad { x_in: xe, lb: w * live }], patch, cg)

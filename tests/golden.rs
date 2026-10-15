@@ -63,7 +63,6 @@ fn golden_bending_dc() {
             method: jaguar::params::DesignMethod::Asd,
             lrfd_dead: 1.2,
             lrfd_dead_only: 1.4,
-            lrfd_dead_min: None,
             lrfd_live: 1.6,
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),

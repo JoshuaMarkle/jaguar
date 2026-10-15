@@ -334,6 +334,9 @@ fn eval_shape(
     // Called on a 1-thread pool (`on_workers`): "parallel" rayon calls run serially there.
     let r = run_inner(params, &hull, true, &|_| {})?;
     let mut rep = representative(&r).context("inner search produced no candidates")?;
+    if rep.drag_n.is_none() {
+        rep.drag_n = crate::optimize::candidate_drag(params, &hull, &rep);
+    }
     let mut m = shape_metrics(ss, &shape);
     if m.rejected.is_none() {
         m.rejected = unbuildable;
