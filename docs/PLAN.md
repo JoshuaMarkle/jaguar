@@ -113,7 +113,7 @@ Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to
 | Bow/stern air pockets, swamped flotation | done (T43, web form + result + 3D bulkheads T49); STEP/STL bulkheads (T52) |
 | Multi-mix zones, I-beam middle, light ends; multi-pour graph | done for 2 mixes (T71/T72 `[zones]`, rectangles anywhere, web Mix zones tab) |
 | Race simulator, optimal path, straight vs turn metrics | done (T61 `jaguar race`, T62 race objective, T63 web tab) |
-| LRFD factors as inputs (1.2 / 1.6 blanks) | done (T64: `material.lrfd_dead`, `lrfd_dead_min`, `lrfd_live`) |
+| LRFD factors as inputs (1.2 / 1.6 blanks) | done (T64: `material.lrfd_dead`, `lrfd_live`; combinations 1.2D + 1.6L and 1.4D `lrfd_dead_only`, ASCE 7) |
 
 ## How to take a task
 

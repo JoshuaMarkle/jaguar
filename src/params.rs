@@ -363,11 +363,14 @@ pub struct Material {
     /// data it is a guess, so densities outside
     /// [min tested - this, max tested + this] are not searched.
     pub density_extrapolation_pcf: f64,
-    /// "asd" (default): service loads, every capacity / `factor_of_safety`.
-    /// "lrfd": strength envelope lrfd_dead D + lrfd_live L and lrfd_dead_min D +
-    /// lrfd_live L (default 1.2D+1.6L, 0.9D+1.6L; L = crew x dynamic factor),
-    /// capacity x phi (ACI 318-19 21.2.1: 0.60 plain concrete, 0.75 for
-    /// `aci_22_6` punching); `factor_of_safety` unused.
+    /// "asd" (default): service loads (crew x dynamic factor), every capacity /
+    /// `factor_of_safety`.
+    /// "lrfd": the ASCE 7-22 2.3.1 gravity combinations lrfd_dead D + lrfd_live L
+    /// (1.2D + 1.6L) and lrfd_dead_only D (1.4D, no crew), L = crew x dynamic factor
+    /// (impact is part of the live load before factoring, ASCE 7 4.6); buoyancy is a
+    /// fluid load factored like D (it balances the factored weight); capacity x phi
+    /// (ACI 318-19 21.2.1: 0.60 plain concrete, 0.75 for `aci_22_6` punching);
+    /// `factor_of_safety` unused.
     /// Freeboard, GM and drag always use service loads.
     #[serde(default)]
     pub method: DesignMethod,
@@ -375,9 +378,13 @@ pub struct Material {
     /// factored weight, so it carries the same factor. Default 1.2.
     #[serde(default = "lrfd_dead")]
     pub lrfd_dead: f64,
-    /// LRFD factor on self weight in the light-dead combination (default 0.9).
-    #[serde(default = "lrfd_dead_min")]
-    pub lrfd_dead_min: f64,
+    /// LRFD factor on self weight in the dead-load-only combination (default 1.4).
+    #[serde(default = "lrfd_dead_only")]
+    pub lrfd_dead_only: f64,
+    /// Removed (the 0.9D + 1.6L combination is not an ASCE 7 gravity combination); kept
+    /// only to refuse old files with a message instead of "unknown field".
+    #[serde(default, skip_serializing)]
+    pub lrfd_dead_min: Option<f64>,
     /// LRFD factor on the paddler loads (default 1.6).
     #[serde(default = "lrfd_live")]
     pub lrfd_live: f64,
@@ -400,8 +407,8 @@ pub enum DesignMethod {
 fn lrfd_dead() -> f64 {
     1.2
 }
-fn lrfd_dead_min() -> f64 {
-    0.9
+fn lrfd_dead_only() -> f64 {
+    1.4
 }
 fn lrfd_live() -> f64 {
     1.6
@@ -413,7 +420,7 @@ impl Material {
         match self.method {
             DesignMethod::Asd => vec![(1.0, 1.0)],
             DesignMethod::Lrfd => {
-                vec![(self.lrfd_dead, self.lrfd_live), (self.lrfd_dead_min, self.lrfd_live)]
+                vec![(self.lrfd_dead, self.lrfd_live), (self.lrfd_dead_only, 0.0)]
             }
         }
     }
@@ -902,10 +909,14 @@ impl Params {
             bail!("material: need flex_over_split > 0 and density_extrapolation_pcf >= 0");
         }
         let m = &self.material;
-        if !([m.lrfd_dead, m.lrfd_dead_min, m.lrfd_live].iter().all(|v| v.is_finite() && *v > 0.0)
-            && m.lrfd_dead_min <= m.lrfd_dead)
-        {
-            bail!("material: need lrfd_dead, lrfd_dead_min, lrfd_live > 0 and lrfd_dead_min <= lrfd_dead");
+        if m.lrfd_dead_min.is_some() {
+            bail!(
+                "material.lrfd_dead_min was removed: 0.9D + 1.6L is not an ASCE 7 gravity combination; \
+                 LRFD now checks 1.2D + 1.6L and 1.4D (material.lrfd_dead_only); delete the line"
+            );
+        }
+        if ![m.lrfd_dead, m.lrfd_dead_only, m.lrfd_live].iter().all(|v| v.is_finite() && *v > 0.0) {
+            bail!("material: need lrfd_dead, lrfd_dead_only, lrfd_live > 0");
         }
         if self.objective.speed_mps.is_nan() || self.objective.speed_mps <= 0.0 {
             bail!("objective.speed_mps must be > 0");
@@ -1059,14 +1070,18 @@ mod tests {
     fn lrfd_factors_are_inputs() {
         let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
         let p = Params::parse(&text, Path::new("examples")).unwrap();
-        assert_eq!((p.material.lrfd_dead, p.material.lrfd_dead_min, p.material.lrfd_live), (1.2, 0.9, 1.6));
+        assert_eq!((p.material.lrfd_dead, p.material.lrfd_dead_only, p.material.lrfd_live), (1.2, 1.4, 1.6));
         assert_eq!(p.material.combos(), vec![(1.0, 1.0)], "asd: service loads");
+        // ASCE 7 gravity combinations: 1.2D + 1.6L and 1.4D alone (no crew).
         let lrfd = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead = 1.25\nlrfd_live = 1.5");
         let p = Params::parse(&lrfd, Path::new("examples")).unwrap();
-        assert_eq!(p.material.combos(), vec![(1.25, 1.5), (0.9, 1.5)]);
-        let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_min = 1.3");
-        let e = Params::parse(&bad, Path::new("examples")).unwrap_err().to_string();
-        assert!(e.contains("lrfd_dead_min <= lrfd_dead"), "{e}");
+        assert_eq!(p.material.combos(), vec![(1.25, 1.5), (1.4, 0.0)]);
+        // The removed 0.9D + 1.6L factor is refused with a message, not silently ignored.
+        let old = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_min = 0.9");
+        let e = Params::parse(&old, Path::new("examples")).unwrap_err().to_string();
+        assert!(e.contains("lrfd_dead_min was removed") && e.contains("1.4D"), "{e}");
+        let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_only = 0.0");
+        assert!(Params::parse(&bad, Path::new("examples")).is_err());
     }
 
     #[test]

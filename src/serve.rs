@@ -557,6 +557,13 @@ fn base_dir_of(params_path: &Path) -> PathBuf {
 
 fn load_prefs(path: &Path, base_dir: &Path) -> Option<(String, Params)> {
     let text = std::fs::read_to_string(path).ok()?;
+    // Prefs are written by this UI: drop the factor of the removed 0.9D + 1.6L combination so
+    // settings saved before it was removed still load (a hand-written canoe.toml is refused).
+    let text: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("lrfd_dead_min"))
+        .map(|l| format!("{l}\n"))
+        .collect();
     let p = Params::parse(&text, base_dir).ok()?;
     Some((text, p))
 }

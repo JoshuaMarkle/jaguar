@@ -180,8 +180,9 @@ def kupfer(sigma, tau, ft, fc):
 def strength(L, T, y0, i):
     """SPEC Physics 4-5: every stress check but punching, per strength combination.
 
-    ASD: one combination at service loads, capacities / FS. LRFD: 1.2D+1.6L and
-    0.9D+1.6L (L = crew x dyn), capacities x 0.60; the higher D/C governs."""
+    ASD: one combination at service loads, capacities / FS. LRFD (ASCE 7 2.3.1
+    gravity): 1.2D+1.6L and 1.4D (L = crew x dyn), capacities x 0.60; the higher
+    D/C governs."""
     depth, t, rho = i["depth"], i["thickness"], i["density"]
     x, z, y = build(L, T, y0, depth, i["stations"])
     A, zbar, I = section(z, y, t)
@@ -191,7 +192,7 @@ def strength(L, T, y0, i):
     if i["method"] == "asd":
         combos, k = [(1.0, 1.0)], 1 / i["fs"]
     else:
-        combos, k = [(1.2, 1.6), (0.9, 1.6)], 0.60
+        combos, k = [(1.2, 1.6), (1.4, 0.0)], 0.60
     ok = I > 1e-3 * I.max()
     out = []
     for dead, live in combos:

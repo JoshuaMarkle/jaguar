@@ -259,7 +259,7 @@ const FIELDS = {
     ['factor_of_safety', 'Factor of safety', '-', 'Strength is divided by this. Must be at least 1.', 'any', 1],
     ['dynamic_load_factor', 'Dynamic load factor', '-', 'Multiplier on crew weight to cover paddling impact.', 'any', 0],
     ['lrfd_dead', 'LRFD dead factor', '-', 'Design method lrfd only: factor on the self weight (the buoyancy balancing it carries the same factor). Default 1.2.', 'any', 0],
-    ['lrfd_dead_min', 'LRFD light-dead factor', '-', 'Design method lrfd only: self-weight factor of the second combination (light hull, full crew). Default 0.9.', 'any', 0],
+    ['lrfd_dead_only', 'LRFD dead-only factor', '-', 'Design method lrfd only: self-weight factor of the dead-load-only combination (no crew; ASCE 7 1.4D). Default 1.4.', 'any', 0],
     ['lrfd_live', 'LRFD paddler factor', '-', 'Design method lrfd only: factor on the paddler loads (after the dynamic load factor). Default 1.6.', 'any', 0],
     ['knee_patch_in', 'Knee patch length', 'in', 'Length of the knee contact patch. Never zero: a point load makes D/C stop converging.', 'any', 0]],
   seats: [
@@ -413,7 +413,7 @@ function buildForm() {
     + section('material',
       row('material.mix_data', 'Mix data file', mt, '<input id="material.mix_data">')
       + row('material.strength_model', 'Strength model', smt, '<select id="material.strength_model"><option value="fit">fit (any density on the lab line)</option><option value="tested_mixes">tested_mixes (only mixes you tested)</option></select>')
-      + row('material.method', 'Design method', 'asd: strength divided by the factor of safety. lrfd: crew x 1.6, self weight x 1.2 or 0.9, strength x phi (0.60, punching 0.75). LRFD gives a heavier wall.', '<select id="material.method"><option value="asd">asd (factor of safety)</option><option value="lrfd">lrfd (load + resistance factors)</option></select>')
+      + row('material.method', 'Design method', 'asd: crew x dynamic factor, strength divided by the factor of safety. lrfd (ASCE 7 + ACI 318): 1.2 x self weight + 1.6 x crew (crew includes the dynamic factor) and 1.4 x self weight alone, buoyancy balancing the factored weight, strength x phi (0.60, punching 0.75). LRFD gives a heavier wall.', '<select id="material.method"><option value="asd">asd (factor of safety)</option><option value="lrfd">lrfd (load + resistance factors)</option></select>')
       + FIELDS.material.map(f => numRow('material', f)).join(''))
     + section('punching',
       row('punching.method', 'Method', pmt, '<select id="punching.method"><option value="aci_22_6">aci_22_6 (reinforced slab)</option><option value="plain_14_5">plain_14_5 (plain concrete)</option></select>')

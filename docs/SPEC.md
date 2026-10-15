@@ -120,10 +120,12 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    fitted line (split and each measured one; none below the lightest test of a line with a
    negative slope), or only at
    tested mixes with `strength_model = "tested_mixes"`. `material.method = "asd"` (default): service
-   loads, every capacity divided by `factor_of_safety`. `"lrfd"`: each load case is re-solved for
-   `lrfd_dead` D + `lrfd_live` L and `lrfd_dead_min` D + `lrfd_live` L (defaults 1.2, 0.9, 1.6;
-   D = self weight, L = crew x dynamic factor, buoyancy balancing the factored weight, so it
-   carries the dead factor) and the worse combination governs; capacities x phi (0.60 plain concrete, 0.75
+   loads (crew x `dynamic_load_factor`), every capacity divided by `factor_of_safety`. `"lrfd"`:
+   the ASCE 7-22 2.3.1 gravity combinations, each load case re-solved for `lrfd_dead` D +
+   `lrfd_live` L and `lrfd_dead_only` D alone (defaults 1.2D + 1.6L and 1.4D; D = self weight,
+   L = crew x dynamic factor, impact being part of the live load before factoring, ASCE 7 4.6;
+   buoyancy is a fluid load factored like D, balancing the factored weight) and the worse
+   combination governs (the removed `lrfd_dead_min`, 0.9D + 1.6L, is refused); capacities x phi (0.60 plain concrete, 0.75
    for `aci_22_6` punching), never both. Freeboard, GM and drag always use service loads.
 5. **Checks** (`src/check.rs`; governing D/C = max):
    * bending tension: |M| c / I at the tension fibre (bottom, c = zbar, when sagging M > 0; top,
