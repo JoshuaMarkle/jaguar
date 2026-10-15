@@ -171,3 +171,19 @@ fn zones_input_is_strict() {
         assert!(Params::parse(&(base.clone() + &bad), dir).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn placements_that_end_short_of_freeboard_are_counted() {
+    // A freeboard gate only deeper molds meet: the lighter (shallower) zoned walls end on
+    // freeboard, which more dense concrete cannot fix; the result says how many.
+    let (mut p, h) = example();
+    p.search.depth_in = [11.0, 14.0, 1.0];
+    p.gates.freeboard_min_in = 7.0;
+    let r = optimize::run(&p, &h).unwrap();
+    let s = r.zones.as_ref().unwrap();
+    assert!(s.freeboard > 0 && s.freeboard <= s.checked, "{s:?}");
+    if r.winner.as_ref().is_some_and(|w| w.candidate.zones.is_none()) {
+        let text = jaguar::report::summary_lines(&r).join("\n");
+        assert!(text.contains("miss freeboard"), "{text}");
+    }
+}

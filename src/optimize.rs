@@ -788,6 +788,8 @@ pub struct ZoneSearch {
     pub punching: usize,
     /// Placed (`max_checks` counts these), lightest first.
     pub checked: usize,
+    /// Of those, ended missing freeboard, which dense concrete (heavier) cannot fix.
+    pub freeboard: usize,
     /// `max_checks` was reached with lighter combinations left.
     pub capped: bool,
     /// Weight of the single-mix pick (the winner had there been no `[zones]`); None = no
@@ -1180,26 +1182,40 @@ fn station_needs(
     need
 }
 
+/// Why [`place_zones`] stopped short of a pass.
+#[derive(Clone, Copy, PartialEq)]
+enum Stopped {
+    Other,
+    /// The wall misses freeboard: more dense concrete only adds weight.
+    Freeboard,
+}
+
 /// Place the dense mix for one combination: start all light; if the light mix fails knee
 /// punching, make every knee footprint dense; then, while the wall fails a D/C check that more
 /// dense can fix (`station_needs`), add those rectangles; while only GM is short, add a keel
 /// strip (dense concrete lowest in the hull lowers G most): z 0..h centred on midships, 24 in
 /// longer each round, and once it spans the hull, h one step higher. Returns the final candidate (passing
-/// or failing with its reason); None when the all-light wall already passes (that is the
-/// single-mix candidate) or punching cannot pass.
-fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &ZoneTry) -> Option<Candidate> {
+/// or failing with its reason), or None when nothing was placed, with why (an all-light wall
+/// that passes is the single-mix candidate itself).
+fn place_zones(
+    params: &Params,
+    z: &crate::params::Zones,
+    sp: &ZoneSpace,
+    tr: &ZoneTry,
+) -> (Option<Candidate>, Stopped) {
     const MAX_ROUNDS: usize = 80;
     const GROW_IN: f64 = 24.0;
     let (gi, ti) = sp.pairs[tr.pi];
     let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
     let plan = &sp.plans[tr.pi];
-    let seats = plan.as_ref().ok()?;
+    let Ok(seats) = plan.as_ref() else { return (None, Stopped::Other) };
     let (light, dense) = (&sp.axis[tr.ri], &sp.dense[tr.di]);
     let (gate, inc) = (params.gates.dc_search, z.increment_in);
     let sec = sections(grid, t);
     let mut rects: Vec<Rect> = Vec::new();
     if punching_dc(params, &light.1, light.0, t) > gate {
-        rects = knee_regions(params, grid, t, seats)?
+        let Some(regions) = knee_regions(params, grid, t, seats) else { return (None, Stopped::Other) };
+        rects = regions
             .into_iter()
             .map(|r| Rect {
                 x0_in: snap_down(r.x0_in, inc).max(grid.x[0]),
@@ -1224,7 +1240,7 @@ fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &Z
         c.dense_mix = dense.2.clone();
         c.flare_deg = sp.geoms[gi].1;
         if c.passes && empty {
-            return None;
+            return (None, Stopped::Other);
         }
         let fb_ok = c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= params.gates.freeboard_min_in);
         let dc_over = c.verdict.as_ref().is_some_and(|v| v.dc > gate);
@@ -1256,7 +1272,12 @@ fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &Z
             Vec::new()
         };
         if need.is_empty() {
-            return if empty { None } else { Some(c) };
+            let why = if !fb_ok && c.error.is_none() && c.verdict.is_some() {
+                Stopped::Freeboard
+            } else {
+                Stopped::Other
+            };
+            return (if empty { None } else { Some(c) }, why);
         }
         let before = normalize(&rects);
         rects.extend(need);
@@ -1266,7 +1287,7 @@ fn place_zones(params: &Params, z: &crate::params::Zones, sp: &ZoneSpace, tr: &Z
             break;
         }
     }
-    last.filter(|c| c.zones.as_ref().is_some_and(|z| !z.dense.is_empty()))
+    (last.filter(|c| c.zones.as_ref().is_some_and(|z| !z.dense.is_empty())), Stopped::Other)
 }
 
 /// Two-mix search over `[zones]`: every (wall, depth, flare) with resolved seats x light mix x
@@ -1290,6 +1311,7 @@ fn zoned_search(
         heavier: 0,
         punching: 0,
         checked: 0,
+        freeboard: 0,
         capped: false,
         single_mix_lb: None,
         saved_lb: None,
@@ -1346,19 +1368,20 @@ fn zoned_search(
         }
         next += batch.len();
         let total = total0 + stats.checked + batch.len();
-        let cs: Vec<Option<Candidate>> = batch
+        let cs: Vec<(Option<Candidate>, Stopped)> = batch
             .par_iter()
             .map(|tr| {
-                let c = place_zones(params, z, sp, tr);
+                let (c, light) = place_zones(params, z, sp, tr);
                 let k = done.fetch_add(1, Ordering::SeqCst) + 1;
                 if let Some(c) = &c {
                     on_progress(Progress::Candidate { done: k, total, candidate: c.clone() });
                 }
-                c
+                (c, light)
             })
             .collect();
         stats.checked += cs.len();
-        for c in cs.into_iter().flatten() {
+        stats.freeboard += cs.iter().filter(|x| x.1 == Stopped::Freeboard).count();
+        for c in cs.into_iter().filter_map(|x| x.0) {
             if c.passes && best.is_none_or(|b| c.hull_weight_lb < b) {
                 best = Some(c.hull_weight_lb);
             }

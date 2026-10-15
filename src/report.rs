@@ -292,6 +292,10 @@ pub fn saving_line(z: &crate::optimize::ZoneSearch, zoned_winner: bool, weight: 
     }
     match (z.single_mix_lb, zoned_winner) {
         (None, _) => "        two mixes: no single-mix wall passes; this design needs both mixes".into(),
+        (Some(_), false) if z.freeboard > 0 => format!(
+            "        two mixes: none lighter passes: {} of the {} lighter walls miss freeboard, which dense concrete (heavier) cannot fix; the single-mix wall stands (saves 0 lb)",
+            z.freeboard, z.checked
+        ),
         (Some(_), false) => {
             "        two mixes: none lighter passes; the single-mix wall stands (saves 0 lb)".into()
         }

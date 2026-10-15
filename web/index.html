@@ -35,6 +35,8 @@
   #top .sep { width: 1px; align-self: stretch; margin: var(--s3) 0; background: var(--hair-soft); }
   #top .btn.primary { justify-self: auto; padding: 0 var(--s4); }
   .runbox { display: grid; gap: 3px; width: 200px; }
+  .objpick { display: flex; align-items: center; gap: var(--s2); color: var(--muted); white-space: nowrap; }
+  .objpick select { width: 140px; color: var(--ink); }
   .statusline { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* ---------- side panels (inputs left, result right) ---------- */
@@ -179,6 +181,8 @@
   <span id="prefnote" class="hint"></span>
   <button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset to canoe.toml</button>
   <div class="sep"></div>
+  <label class="objpick" for="objective.kind" title="What best means among designs that pass every check. Weight = lightest hull. Drag = least water resistance at the race speed (matters with shape search). Race = shortest weighted race time over the [race] events (shape search only).">Optimize for
+    <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
   <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
   <button id="run" class="btn primary">Run optimization</button>
 </header>
@@ -434,7 +438,7 @@ function buildForm() {
       + `${row('zones.increment_in', 'Mark increment', ZINC_T, '<input type="number" id="zones.increment_in" step="any" min="0">', 'in')}`
       + `${row('zones.max_checks', 'Max placements', ZMAX_T, '<input type="number" id="zones.max_checks" step="1" min="1">')}</div>`)
     + section('objective',
-      row('objective.kind', 'Optimize for', ot, '<select id="objective.kind"><option value="drag">drag (least resistance)</option><option value="weight">weight (lightest hull)</option><option value="race">race (shortest weighted race time, needs [race])</option></select>')
+      row('', 'Optimize for', ot, '<span class="hint">chosen in the top bar, next to Run</span>')
       + FIELDS.objective.map(f => numRow('objective', f)).join('')
       + row('', 'Race displacements', DISP_T, '<span class="hint" id="dispnote"></span>')
       + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${['none', 'regionals', 'nationals', 'total', 'custom'].map(m => `<button type="button" data-disp="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>`
@@ -723,6 +727,7 @@ async function savePrefs() {
 $('form').addEventListener('input', schedulePrefs);
 $('form').addEventListener('change', schedulePrefs);
 $('form').addEventListener('click', e => { if (e.target.tagName === 'BUTTON') schedulePrefs(); });
+$('objective.kind').addEventListener('change', schedulePrefs);
 $('resetprefs').onclick = async () => {
   clearTimeout(prefTimer);
   const r = await fetch('/api/prefs', { method: 'DELETE' });
@@ -1451,6 +1456,7 @@ function savingRow(c) {
   const t = 'Weight of this design against the lightest single-mix design that passes in the same run (what a run without [zones] picks).';
   if (z.single_mix_lb == null) return kv('Two-mix saving', 'no single-mix wall passes', t);
   const s = z.saved_lb || 0;
+  if (!(c && c.zones) && z.freeboard > 0) return kv('Two-mix saving', `0 lb <span class="muted">${z.freeboard} of the ${z.checked} lighter walls miss freeboard, which heavier dense concrete cannot fix</span>`, t);
   return kv('Two-mix saving', `${s.toFixed(1)} lb <span class="muted">${(100 * s / z.single_mix_lb).toFixed(1)}% vs single mix ${z.single_mix_lb.toFixed(1)} lb</span>`, t);
 }
 // GM of the empty canoe (with its gate, if any), then each load case against the per-case gate.

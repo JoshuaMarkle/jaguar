@@ -209,7 +209,7 @@ mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
 mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's
-`zones` has combinations (`walls`; with none, `note` says why, e.g. no dense mix heavier than a light one), skipped (`heavier`, `punching`), `checked` (placed), `capped`,
+`zones` has combinations (`walls`; with none, `note` says why, e.g. no dense mix heavier than a light one), skipped (`heavier`, `punching`), `checked` (placed), `freeboard` (placements that ended missing freeboard, which dense concrete cannot fix), `capped`,
 `single_mix_lb` (the single-mix pick, null if none passes) and `saved_lb` (single_mix_lb - winner
 weight; 0 when the winner is single-mix). Zoned candidates follow the single-mix ones. Zoned D/C(x)
 and stresses are the governing mix's; `inertia_in4` is transformed. The terminal lists the

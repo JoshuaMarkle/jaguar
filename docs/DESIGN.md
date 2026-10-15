@@ -99,7 +99,7 @@ Saans is a commercial typeface. The closest widely-available substitutes are **I
 
 ### JAGUAR web UI shell (web/index.html)
 
-- Top bar: wordmark and tagline left; saved-settings note, `Reset to canoe.toml`, run status with progress, and the single primary `Run optimization` right.
+- Top bar: wordmark and tagline left; saved-settings note, `Reset to canoe.toml`, the `Optimize for` choice (min weight / min drag / min race time), run status with progress, and the single primary `Run optimization` right.
 - Left panel, **Inputs**: a segmented control picks one group at a time (Hull, Crew, Material, Search, Checks); each group holds its collapsible sections (Material also holds the lab mix data). The chosen group and collapsed sections are remembered per browser.
 - Centre: the 3D canoe over the charts. Chart tabs sit above the chart as one segmented track per group: search (Candidates, Wall map, Shape search), structure (Along hull, Stress, D/C(x), Checks), hull (Freeboard, Sections, Mix zones), Race.
 - Right panel, **Result**: run errors, the winner badge, exports and stats, the checks table.
