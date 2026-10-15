@@ -194,6 +194,7 @@ pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &
         x,
         z,
         half_breadth,
+        stem: None,
     };
     h.validate()?;
     Ok(h)

@@ -63,7 +63,7 @@ fn the_whole_build_chain_stays_symmetric() {
     let mut p = Params::load(Path::new("examples/beamy.toml")).unwrap();
     p.hull.doubly_symmetric = true;
     p.hull.templates = Some(11);
-    p.hull.keel_fillet_radius_in = Some(0.5);
+    p.hull.stem_radius_in = 4.0;
     let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap().prepared(&p.hull).unwrap();
     assert!(table_asymmetry(&h) < 1e-9, "{}", table_asymmetry(&h));
     let (g, why) = Grid::build_topsides(&h, 13.0, 161, Topsides { flare_deg: 3.0, ..p.hull.topsides() });
@@ -85,8 +85,7 @@ fn the_whole_build_chain_stays_symmetric() {
         gunwale_radius_in: Some(400.0),
         metrics: None,
     };
-    let only_sym =
-        jaguar::params::HullParams { templates: None, keel_fillet_radius_in: None, ..p.hull.clone() };
+    let only_sym = jaguar::params::HullParams { templates: None, stem_radius_in: 0.0, ..p.hull.clone() };
     let gh = jaguar::hullgen::generate(&shape, 41, 21, "sym").unwrap().prepared(&only_sym).unwrap();
     let ts = Topsides { flare_deg: 3.0, gunwale_radius_in: Some(400.0), gunwale_max_flare_deg: 89.0 };
     let (g, why) = Grid::build_topsides(&gh, 12.0, 161, ts);

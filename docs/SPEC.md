@@ -46,6 +46,8 @@ Unknown keys are errors, so a typo never becomes a silent default.
   "half_breadth": [[...], ...]          // [station][waterline], in, >= 0
 }
 ```
+Optional `"stem"`: written by JAGUAR on a prepared hull whose stem radius runs above the table
+(radius, each end's [stem x, arc top], the uncut top waterline; Physics 0). Hull files leave it out.
 A dense rectangular offset table is what every hull tool (Michlet, CAD section cuts, spreadsheets)
 can produce, needs only linear interpolation, and the browser can mesh it directly.
 
@@ -62,24 +64,30 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    identical as well as port and starboard, so one end mold makes both ends. A hull file becomes
    the mean of the hull at x and at L - x, on the stations of both (`Hull::symmetrized`; an
    already symmetric hull is unchanged); a shape search ties the stern factors to the bow's
-   (`shape_search.symmetric`, the same switch). Templates, forefoot radius, flare, the gunwale
+   (`shape_search.symmetric`, the same switch). Templates, stem radius, flare, the gunwale
    outline and the export treat both ends alike, so the built canoe stays symmetric.
-   **Forefoot radius** (optional `hull.keel_fillet_radius_in = r`, applied after templates): in
-   side view, the corner where the stem meets the keel line at the bow and at the stern (the
-   forefoot) is cut on an arc of radius r tangent to the stem (the last station without breadth)
-   and resting on the keel line within 2 r (`Hull::filleted`). Each waterline the arc shortens
-   keeps its plan shape at the tip: it is shifted aft to the arc, the shift blended out over 4 r
-   with zero slope at the tip, so the entry angle is unchanged. Length overall (stem tops), draft
-   and everything beyond 5 r from the ends are unchanged; concrete is only removed; plan view and
-   sections are not rounded. A stem shorter than the arc (its top would be above the hull table's design
-   draft) is an error for a hull file; in a shape search that shape is rejected with the reason (analysed
-   without the radius) and the search goes on. The table is refined
-   (waterlines every r/8 over each arc, stations every r/8 within 5 r of each end) and the
-   STEP/STL export keeps those stations. off1 at r 1 in: -0.002 lb, drag, GM and the
-   winner unchanged (the corner cut is (1 - pi/4) r^2 in side view where the waterlines are
-   under 1 in wide; the 1.5 in analysis stations barely see it, the export carries it); the shape
-   search pick is unchanged. The added waterlines are analysis waterlines too, so a run
-   costs about 1.5x (shape_opt.toml: 103 s vs 67 s on the same machine).
+   **Stem radius** (`hull.stem_radius_in = r`, default 4 in, 0 = sharp, applied after templates;
+   old name `keel_fillet_radius_in` still reads): in side view, the corner where the stem meets
+   the keel line at the bow and at the stern (the forefoot) is cut on an arc of radius r tangent to
+   the stem (the last station without breadth) and resting on the keel line within 2 r
+   (`Hull::filleted`). Each waterline the arc shortens keeps its plan shape at the tip: it is
+   shifted aft to the arc, the shift blended out over 4 r with zero slope at the tip, so the entry
+   angle is unchanged. The top of the stem, length overall, draft and everything beyond 5 r from the
+   ends are unchanged; concrete is only removed; plan view and sections are not rounded. An arc
+   taller than the hull table (its top above the design draft; off1's stem foot is at z 4.0, so
+   r 4 reaches z 8.0) goes on into the topsides: the prepared hull carries the arcs and the uncut
+   top waterline (`stem` in the hull JSON, kept in result.json's `winner_hull`), every topsides
+   row up to the arc top is built from the uncut waterline (flared or ruled to the gunwale
+   outline, which is fitted to the uncut waterline) and then cut the same way, and the grid gets
+   a row every r/8 up the arc. A mold shallower than the arc top fails that candidate with the
+   reason (a shape search goes on). Weight, displacement, freeboard, GM, D/C, flotation, drag
+   and the export all use the cut hull; the export takes the keel along the arc from the grid
+   where the table has no breadth. The table is refined (waterlines every r/8 over each arc,
+   stations every r/8 within 5 r of each end) and the STEP/STL export keeps those stations.
+   off1 at r 4 vs sharp: 98.32 vs 98.39 lb; the cut takes more displaced volume than concrete off
+   the ends, so it floats about 0.01 in lower (freeboard 6.66 vs 6.67 in, GM 1.061 vs 1.063 in),
+   drag 32.2 vs 32.0 N, punching D/C unchanged; run 0.34 vs 0.30 s. Shape search
+   (shape_opt.toml): 86.8 vs 86.3 lb, 33 s vs 27 s.
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`

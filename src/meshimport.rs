@@ -352,6 +352,7 @@ pub fn hull_from_mesh(raw: &[[V3; 3]], name: &str, o: &MeshOptions) -> Result<(H
         x,
         z,
         half_breadth,
+        stem: None,
     };
     hull.validate().context("imported table")?;
     let axis = |a: usize| ['x', 'y', 'z'][a];
@@ -405,6 +406,7 @@ pub fn analysis_toml(
     for k in [
         "templates",
         "keel_fillet_radius_in",
+        "stem_radius_in",
         "gunwale_radius_in",
         "gunwale_max_flare_deg",
         "doubly_symmetric",
@@ -413,6 +415,8 @@ pub fn analysis_toml(
     }
     hull.insert("file".into(), abs(&hull_path.to_string_lossy()).into());
     hull.insert("flare_deg".into(), 0.0.into());
+    // The CAD stem is analysed as drawn (the default stem radius would cut it).
+    hull.insert("stem_radius_in".into(), 0.0.into());
     t.insert("hull".into(), hull.into());
     t.remove("shape_search");
     let wall = thickness_in.or(m.thickness_in);

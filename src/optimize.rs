@@ -2314,6 +2314,7 @@ fn grid_hull(grid: &Grid) -> Hull {
         x: grid.x.clone(),
         z: grid.z.clone(),
         half_breadth: (0..grid.nx()).map(|i| grid.row(i).to_vec()).collect(),
+        stem: None,
     }
 }
 

@@ -284,6 +284,8 @@ fn gunwale_radius_is_searched() {
 fn templates_are_what_the_search_analyses() {
     let mut p = small(false);
     p.hull.templates = Some(9);
+    // The stem radius is cut into the loft afterwards (it refines the ends); off here.
+    p.hull.stem_radius_in = 0.0;
     p.validate().unwrap();
     let r = jaguar::run(&p, &|_| {}).unwrap();
     let h = r.winner_hull.as_ref().expect("winner");
@@ -295,23 +297,25 @@ fn templates_are_what_the_search_analyses() {
     assert!(p.validate().is_err());
 }
 
-/// A shape whose stem is too short for hull.keel_fillet_radius_in (a shallow design draft) is
-/// rejected with the reason; the shape search goes on instead of stopping on that error.
+/// hull.stem_radius_in in a shape search: every shape is analysed with its stem arcs (the
+/// generated stems are short, so the arc runs up into the topsides), and a mold shallower than
+/// the arc's top is rejected with the reason while the search goes on.
 #[test]
-fn shapes_too_shallow_for_the_forefoot_radius_are_rejected_not_fatal() {
+fn stem_radius_taller_than_the_mold_rejects_the_design_not_the_run() {
     let mut p = small(false);
-    p.hull.keel_fillet_radius_in = Some(0.75);
-    p.shape_search.as_mut().unwrap().draft_in = [2.0, 2.5];
+    p.hull.stem_radius_in = 12.0;
+    p.search.depth_in = [11.0, 13.0, 2.0];
     let r = jaguar::run(&p, &|_| {}).expect("the run finishes");
-    let rejected: Vec<_> = r
-        .candidates
-        .iter()
-        .filter(|c| c.error.as_deref().is_some_and(|e| e.contains("does not fit")))
-        .collect();
-    assert!(!rejected.is_empty(), "some 2 in drafts cannot take a 0.75 in radius");
-    assert!(rejected.iter().all(|c| !c.passes && c.verdict.is_some() && c.hull_weight_lb > 0.0));
-    if let Some(w) = &r.winner {
-        assert!(r.winner_hull.as_ref().unwrap().name.ends_with("-f0.75"), "the winner carries the radius");
-        assert!(w.candidate.error.is_none());
-    }
+    assert!(r.winner.is_none(), "no 11..13 in mold fits a 12 in arc on top of the stem foot");
+    assert!(!r.candidates.is_empty());
+    assert!(
+        r.candidates
+            .iter()
+            .all(|c| !c.passes && c.error.as_deref().is_some_and(|e| e.contains("stem radius 12 in")))
+    );
+    p.hull.stem_radius_in = 4.0;
+    let r = jaguar::run(&p, &|_| {}).expect("the run finishes");
+    let (w, wh) = (r.winner.as_ref().expect("a 4 in arc fits"), r.winner_hull.as_ref().unwrap());
+    assert!(wh.name.ends_with("-f4"), "the winner carries the radius: {}", wh.name);
+    assert!(wh.stem.as_ref().is_some_and(|s| s.top_in() <= w.candidate.depth_in));
 }

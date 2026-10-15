@@ -348,6 +348,7 @@ mod tests {
             x: linspace(0.0, 200.0, 11),
             z: linspace(0.0, 12.0, 7),
             half_breadth: vec![vec![10.0; 7]; 11],
+            stem: None,
         }
     }
 

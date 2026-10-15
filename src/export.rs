@@ -277,8 +277,18 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     let (kx, kz): (Vec<f64>, Vec<f64>) =
         hull.x.iter().zip(&hull.half_breadth).filter_map(|(&x, y)| Some((x, keel_z(y, &hull.z)?))).unzip();
     ensure!(!kx.is_empty(), "hull has no offsets");
+    // A stem radius above the table: where the table has no offsets but the topsides do (the arc
+    // there), the keel is the grid's own (its rows follow the arc every r/8).
+    let keel = |i: usize| {
+        let x = grid.x[i];
+        let outside = x < kx[0] - 1e-9 || x > kx[kx.len() - 1] + 1e-9;
+        match keel_z(grid.row(i), &grid.z) {
+            Some(z) if hull.stem.is_some() && outside => z,
+            _ => pchip(&kx, &kz, x),
+        }
+    };
     let halves: Vec<Option<Vec<(f64, f64)>>> =
-        (0..grid.nx()).map(|i| half_girth(grid.row(i), &grid.z, pchip(&kx, &kz, grid.x[i]))).collect();
+        (0..grid.nx()).map(|i| half_girth(grid.row(i), &grid.z, keel(i))).collect();
     let Some(first) = halves.iter().position(Option::is_some) else { bail!("hull has no offsets") };
     let last = halves.iter().rposition(Option::is_some).unwrap();
     ensure!(halves[first..=last].iter().all(Option::is_some), "hull has an empty station mid-length");

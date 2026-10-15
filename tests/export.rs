@@ -30,6 +30,7 @@ fn boxy(l: f64, half: f64, draft: f64) -> Hull {
         x,
         z,
         half_breadth,
+        stem: None,
     }
 }
 

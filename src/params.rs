@@ -294,11 +294,13 @@ pub struct HullParams {
     /// so the search tunes the buildable hull. >= 3.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub templates: Option<usize>,
-    /// Present = side-view radius, in, at the forefoot of the bow and stern (where the stem
-    /// meets the keel line; `Hull::filleted`), so the bottom has no point (stress
-    /// concentration). Plan-view entry stays sharp. Applied after `templates`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keel_fillet_radius_in: Option<f64>,
+    /// Side-view stem radius, in (default 4): the bottom of the bow and stern stems, where the
+    /// stem meets the keel line, rounded on an arc tangent to both (`Hull::filleted`), so the
+    /// bottom has no point. The top of the stem, the plan-view entry and the sections stay as
+    /// they are; the arc may run above the design waterline (a mold shallower than its top is
+    /// rejected). 0 = sharp. Applied after `templates`. Old name `keel_fillet_radius_in`.
+    #[serde(default = "stem_radius", alias = "keel_fillet_radius_in")]
+    pub stem_radius_in: f64,
     /// With a gunwale outline: steepest outward side lean allowed anywhere
     /// along the hull, deg from vertical (default 30). Steeper = rejected.
     #[serde(default = "gunwale_max_flare")]
@@ -313,6 +315,13 @@ pub struct HullParams {
 
 fn gunwale_max_flare() -> f64 {
     crate::hull::GUNWALE_MAX_FLARE_DEG
+}
+
+/// Default `hull.stem_radius_in`, in.
+pub const STEM_RADIUS_IN: f64 = 4.0;
+
+fn stem_radius() -> f64 {
+    STEM_RADIUS_IN
 }
 
 impl Params {
@@ -986,8 +995,9 @@ impl Params {
         {
             bail!("hull.gunwale_radius_in must be > 0");
         }
-        if self.hull.keel_fillet_radius_in.is_some_and(|r| !(r.is_finite() && r > 0.0 && r <= 6.0)) {
-            bail!("hull.keel_fillet_radius_in must be in (0, 6] in");
+        let r = self.hull.stem_radius_in;
+        if !(r.is_finite() && (0.0..=12.0).contains(&r)) {
+            bail!("hull.stem_radius_in must be in [0, 12] in (0 = sharp), got {r}");
         }
         if self.hull.templates.is_some_and(|n| n < 3) {
             bail!("hull.templates must be >= 3 (bow tip, one section, stern tip)");

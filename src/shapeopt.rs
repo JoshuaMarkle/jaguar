@@ -143,6 +143,7 @@ pub fn loaded_turn(
         x: g.x.clone(),
         z: g.z.clone(),
         half_breadth: (0..g.nx()).map(|i| g.row(i).to_vec()).collect(),
+        stem: None,
         ..hull.clone()
     };
     let mut sum = Turn { drag_n: 0.0, moment_nm: 0.0, drift_deg: 0.0 };
@@ -284,21 +285,22 @@ fn representative(r: &RunResult) -> Option<Candidate> {
         .cloned()
 }
 
-/// The hull analysed for shape `v`: generated, then `Hull::prepared` (templates, keel
-/// fillet), so the search tunes the hull as it will be built.
+/// The hull analysed for shape `v`: generated, then `Hull::prepared` (templates, stem
+/// radius), so the search tunes the hull as it will be built.
 fn hull_for(params: &Params, v: &[f64; SHAPE_DIMS], index: usize) -> Result<Hull> {
     templated(params, generate(&to_shape(v), STATIONS, WATERLINES, &format!("opt-{index}"))?)
 }
 
-/// [`hull_for`], or, when the shape cannot take `hull.keel_fillet_radius_in` (its stem is
-/// shorter than the arc), the shape built without it and why: the shape is then rejected
-/// with that reason, its numbers those of the real generated hull, and the search goes on.
+/// [`hull_for`], or, when the shape cannot take `hull.stem_radius_in`, the shape built without
+/// it and why: the shape is then rejected with that reason, its numbers those of the real
+/// generated hull, and the search goes on. (An arc taller than the mold is rejected per
+/// candidate instead, by `Grid::build_topsides`.)
 fn hull_or_reason(params: &Params, v: &[f64; SHAPE_DIMS], index: usize) -> Result<(Hull, Option<String>)> {
     match hull_for(params, v, index) {
         Ok(h) => Ok((h, None)),
-        Err(e) if params.hull.keel_fillet_radius_in.is_some() => {
+        Err(e) if params.hull.stem_radius_in > 0.0 => {
             let mut p = params.clone();
-            p.hull.keel_fillet_radius_in = None;
+            p.hull.stem_radius_in = 0.0;
             Ok((hull_for(&p, v, index)?, Some(format!("{e:#}"))))
         }
         Err(e) => Err(e),

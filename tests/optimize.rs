@@ -520,28 +520,46 @@ fn flare_axis_takes_the_demolding_minimum_unless_needed() {
     assert!(p.validate().unwrap_err().to_string().contains("not both"));
 }
 
-/// hull.keel_fillet_radius_in: the run analyses the hull with the side-view forefoot arcs (stem
-/// tops kept, so the same length; concrete only removed), the winner hull is that table, and the
-/// STEP export keeps its refined stations so the arcs are in the file.
+/// hull.stem_radius_in (default 4 in): the run analyses the hull with the side-view stem arcs
+/// (stem tops kept, so the same length; concrete only removed). On off1 the 4 in arc runs above
+/// the design waterline into the topsides. Weight, displacement, GM and D/C come from that
+/// geometry, the winner hull carries it, and the STEP / STL export is a closed solid with it.
 #[test]
-fn keel_fillet_keeps_length_and_reaches_the_export() {
+fn stem_radius_keeps_length_and_reaches_the_export() {
     let (mut p, h) = example();
     p.search.thickness_in = [0.375, 0.5, 0.125];
     p.search.depth_in = [12.0, 13.0, 1.0];
-    let plain = jaguar::run(&p, &|_| {}).unwrap();
-    p.hull.keel_fillet_radius_in = Some(0.5);
-    p.validate().unwrap();
+    assert_eq!(p.hull.stem_radius_in, 4.0, "examples/canoe.toml uses the default");
     let r = jaguar::run(&p, &|_| {}).unwrap();
+    p.hull.stem_radius_in = 0.0;
+    p.validate().unwrap();
+    let plain = jaguar::run(&p, &|_| {}).unwrap();
     let (a, b) = (plain.winner.as_ref().unwrap(), r.winner.as_ref().unwrap());
     let wh = r.winner_hull.as_ref().unwrap();
-    assert!(wh.x.len() > h.x.len() && wh.name.ends_with("-f0.5"));
+    assert!(wh.x.len() > h.x.len() && wh.name.ends_with("-f4"));
+    assert!(wh.stem.as_ref().is_some_and(|s| s.top_in() > h.draft_design), "the arc runs above the table");
+    assert!(plain.winner_hull.as_ref().unwrap().stem.is_none());
     assert_eq!(a.candidate.length_in, b.candidate.length_in);
     let key = |c: &optimize::Candidate| (c.thickness_in, c.density_pcf, c.depth_in);
+    let mut moved = 0;
     for (c0, c1) in plain.candidates.iter().zip(&r.candidates) {
         assert_eq!(key(c0), key(c1));
-        assert!(c1.hull_weight_lb <= c0.hull_weight_lb + 1e-9, "the forefoot arc only removes concrete");
-        assert!(c1.hull_weight_lb > c0.hull_weight_lb * 0.99, "and only a little");
+        assert!(c1.hull_weight_lb < c0.hull_weight_lb, "the stem arc only removes concrete");
+        assert!(c1.hull_weight_lb > c0.hull_weight_lb * 0.97, "and only a little");
+        // The float and the checks see the cut ends. The arc takes more displaced volume than
+        // concrete off the ends, so the canoe floats a little lower; GM moves; the knee punching
+        // D/C (local) stays, the hull-girder checks recompute.
+        if let (Some(v0), Some(v1)) = (&c0.verdict, &c1.verdict) {
+            assert!(v1.freeboard_in < v0.freeboard_in && v1.freeboard_in > v0.freeboard_in - 0.05);
+            assert!(c1.gm_in != c0.gm_in);
+            let other = |v: &jaguar::check::Verdict| {
+                serde_json::to_string(&v.checks.iter().filter(|c| c.name != "punching").collect::<Vec<_>>())
+                    .unwrap()
+            };
+            moved += usize::from(other(v0) != other(v1));
+        }
     }
+    assert!(moved > 0, "GM and D/C come from the cut geometry");
     let text = serde_json::to_string(&r).unwrap();
     let (hull, spec) = jaguar::export::from_result(&text, 161, 41).unwrap();
     let nosed = jaguar::export::build_mesh(&hull, &spec).unwrap();
@@ -550,8 +568,16 @@ fn keel_fillet_keeps_length_and_reaches_the_export() {
     assert!(nosed.closed && nosed.tris.len() > smooth.tris.len());
     let (lo, hi) = (nosed.bbox(), smooth.bbox());
     assert!((lo.1[0] - lo.0[0] - (hi.1[0] - hi.0[0])).abs() < 1e-6, "same exported length");
-    p.hull.keel_fillet_radius_in = Some(0.0);
-    assert!(p.validate().is_err());
+    for bad in [-1.0, 12.5, f64::NAN] {
+        p.hull.stem_radius_in = bad;
+        assert!(p.validate().is_err(), "{bad}");
+    }
+    // The old name still reads.
+    let text = std::fs::read_to_string("examples/canoe.toml")
+        .unwrap()
+        .replace("stem_radius_in", "keel_fillet_radius_in");
+    let old = Params::parse(&text, Path::new("examples")).unwrap();
+    assert_eq!(old.hull.stem_radius_in, 4.0);
 }
 
 /// GM per load case and of the empty canoe: every candidate carries one GM per case (their
