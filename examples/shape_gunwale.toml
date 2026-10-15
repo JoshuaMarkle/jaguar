@@ -94,6 +94,6 @@ gunwale_radius_in = [150.0, 800.0]   # line-arc-line gunwale, radius searched (h
 # rocker_in = [0.5, 3.0]          # keel rise at 5% L from each end, in; outside = rejected
 # min_entry_angle_deg = 8.0       # waterline entry half-angle; finer bows rejected
 # symmetric = false               # true: aft factors follow the fore ones
-samples       = 96
+samples       = 200          # the gunwale widens the canoe past the waterline beam: the 30 in overall cap needs more samples
 refine_rounds = 6
 seed          = 1

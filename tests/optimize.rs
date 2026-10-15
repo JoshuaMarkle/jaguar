@@ -82,11 +82,11 @@ fn example_finds_verified_winner() {
     assert_eq!(w.search_space[0].at_bound, Some(Bound::Min));
     assert_eq!(w.search_space[0].limit, Some("buildable floor"));
     assert!(w.search_space[1..].iter().all(|a| a.at_bound.is_none()));
-    // 58 pcf is between the tested M2 (55.6) and the 60 pcf mix: predicted, reach 2 pcf.
+    // 58 pcf is between the tested M2 A (56.408) and the 60 pcf mix: predicted, reach 1.6 pcf.
     let pv = &w.mix_provenance;
     assert_eq!(pv.status, jaguar::mix::Provenance::Predicted);
     assert_eq!(pv.nearest.len(), 2);
-    assert!((pv.reach_pcf - 2.0).abs() < 1e-9);
+    assert!((pv.reach_pcf - 1.592).abs() < 1e-9, "{}", pv.reach_pcf);
     assert!(r.candidates.iter().all(|c| c.density_pcf >= 51.0 - 1e-9));
     assert!(r.candidates.iter().all(|c| c.thickness_in >= 0.375 - 1e-9));
 }

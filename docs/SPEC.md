@@ -108,8 +108,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    minimum. Search candidates stop sampling at the first sample that misses a gate.
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
    vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
-   optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (per-mix means
-   under tested_mixes), else flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
+   optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (under
+   tested_mixes each lab row is its own mix with its own values, never averaged), else flexural = `flex_over_split` * f_sp, f'c = (f_sp/6.7)^2.
    Densities are searched only within `density_extrapolation_pcf` of the tested range of every
    fitted line (split and each measured one; none below the lightest test of a line with a
    negative slope), or only at
@@ -168,7 +168,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin.
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern
    search over Michlet Series 7 shape factors within bounds. Each shape runs the wall search above,
-   and the best objective wins. Optional manufacturability rules: `draft_step_in`, `length_step_in`,
+   and the best objective wins. `beam_in = [min, max]`: the waterline beam is sampled in it, and a
+   wall candidate whose overall beam (flared topsides and gunwale at its depth included) exceeds
+   max fails with the reason. Optional manufacturability rules: `draft_step_in`, `length_step_in`,
    `beam_step_in` (snap), `rocker_in = [min, max]` and `min_entry_angle_deg` (reject, with the reason
    in the candidate), `symmetric` (aft factors = fore). Each shape's `shape.metrics` (entry angle,
    rocker in, lateral moment, rejection reason) is in result.json.
@@ -232,7 +234,7 @@ KG), strength fit values, and per check the station, section values (M, V, A, zb
 or punching intermediates (d_load, depth, b0, P, v_u, v_c) with capacity and D/C; recomputed by
 the checks' own code so each demand and capacity equals that case's verdict (or `error`). The terminal prints one line per case under the winner (seats bow to stern as
 knee@lb, source, variance, D/C), the mix provenance
-line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam (overall, gunwale included; a shape run's `shape.beam_in` is the waterline beam its bounds limit), shape, weight, GM, drag, race_s and the
+line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam (overall, gunwale included; a shape run's `shape.beam_in` is its waterline beam), shape, weight, GM, drag, race_s and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
 Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth ascending), and the
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.

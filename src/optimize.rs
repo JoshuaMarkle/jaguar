@@ -858,10 +858,6 @@ pub fn density_axis(params: &Params, fit: &StrengthFit) -> Result<Vec<(f64, Stre
             Ok(densities(params, fit)?.into_iter().map(|r| (r, fit.clone(), None)).collect())
         }
         StrengthModel::TestedMixes => {
-            // Averaging different mixes into one would be a mix nobody tested.
-            if let Some(p) = fit.replicate_problems().first() {
-                anyhow::bail!("{p}");
-            }
             let m = fit.tested_mixes();
             anyhow::ensure!(!m.is_empty(), "no tested mixes in the mix data");
             Ok(m.iter().map(|x| (x.density_pcf, fit.for_mix(x), Some(x.name.clone()))).collect())
@@ -2269,6 +2265,16 @@ fn evaluate_wall(
     let (mut gm, mut fb) = (f64::INFINITY, f64::INFINITY);
     // (crew lb, midship draft) of the heaviest load case, for drag
     let mut heaviest: Option<(f64, f64)> = None;
+    // shape_search.beam_in limits the canoe's widest point, flared topsides and gunwale included.
+    if let Some(ss) = &params.shape_search
+        && beam > ss.beam_in[1] + 1e-9
+    {
+        c.error = Some(format!(
+            "beam {beam:.2} in overall (topsides to {:.1} in deep) > shape_search.beam_in max {} in",
+            grid.depth, ss.beam_in[1]
+        ));
+        return c;
+    }
     let plan = match plan {
         Ok(p) => p,
         Err(e) => {

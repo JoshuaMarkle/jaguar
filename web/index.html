@@ -289,7 +289,7 @@ const FIELDS = {
 // Shape search bounds: [key, label, unit, tooltip, default [min, max]]. Meanings from hullgen.rs ShapeParams.
 const SHAPE = [
   ['length_in', 'Length', 'in', 'Overall hull length. Longer = faster and stiffer to paddle straight, but heavier.', [216, 264]],
-  ['beam_in', 'Waterline beam', 'in', 'Maximum width at the design waterline (this is what the bounds limit). With side flare the canoe is wider above the waterline: the result shows both. Wider = more stable, more drag.', [18, 30]],
+  ['beam_in', 'Beam', 'in', 'Beam range. The max limits the canoe\'s widest point, flared sides and gunwale included (a design wider than it fails); the waterline beam is searched within min..max. Wider = more stable, more drag.', [18, 30]],
   ['draft_in', 'Design draft', 'in', 'Depth of the design waterline of the generated hull table (not the mold depth).', [4, 8]],
   ['fore_wp', 'Bow waterplane', '-', 'Bow waterline shape exponent. Larger = finer, more hollow bow; 0 = full width all the way to the stem (blunt).', [0.3, 1.6]],
   ['section', 'Section shape', '-', 'Cross-section exponent. Small (~0.1) = boxy, near-vertical sides and a flat bottom; 0.5 = rounded (elliptic); 1 = V-ish.', [0.2, 0.8]],
@@ -1486,7 +1486,7 @@ function showWinner() {
     </div>
     ${kv('Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`)}
     ${kv('Beam overall', `${f(c.beam_in, 1)} in`, 'Widest point of the canoe, gunwale included (flared sides are wider than the waterline).')}
-    ${sh ? kv('Beam at waterline', `${f(sh.beam_in, 1)} in <span class="muted">searched, bounds ${f(((result.params.shape_search || {}).beam_in || [])[0], 0)} to ${f(((result.params.shape_search || {}).beam_in || [])[1], 0)}</span>`, 'The shape-search beam: width at the design waterline, the value the beam bounds limit.') : ''}
+    ${sh ? kv('Beam at waterline', `${f(sh.beam_in, 1)} in <span class="muted">overall limit ${f(((result.params.shape_search || {}).beam_in || [])[1], 0)}</span>`, 'Width at the design waterline (the searched shape factor); the beam max limits the overall beam above.') : ''}
     ${sh ? kv('Design draft', `${f(sh.draft_in, 2)} in`) : ''}
     ${kv('Thickness', `${f(c.thickness_in, 3)} in`)}
     ${kv(c.zones ? 'Light density' : 'Density', `${f(c.density_pcf, 1)} pcf`)}

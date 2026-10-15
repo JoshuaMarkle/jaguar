@@ -9,7 +9,7 @@
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 11 | 109.3 | 8.7 | punching 0.90 |
 | barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 125.7 | 48.5 | punching 0.90 |
 | shape_opt.toml | shape search pick (entry 9.3 deg, rocker 3.5/3.0 in) | 216 x 24.6 (18 ft) | 0.375 | 58 | 12 | **90.8** | 2.6 | punching 0.90 |
-| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 318 in, waterline ends fore_wp 1.22 / aft_wp 1.27) | 224 x 25.1 (18 ft 8 in) | 0.375 | 58 | 12 | 100.4 | 2.3 | punching 0.90 |
+| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 430 in, waterline ends fore_wp 1.47 / aft_wp 1.60; 23.4 in at the waterline) | 234 x 26.3 overall (19 ft 6 in) | 0.375 | 58 | 12 | 96.8 | 1.6 | punching 0.90 |
 | shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 103.2 | 0.53 | punching 0.90 |
 
 All verified at 321 stations: 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee
@@ -38,8 +38,8 @@ weights) are commented out: with any of them off1 has no design, GM fails at cre
   gate; the lighter wall alone is at 0.24) with 51 pcf everywhere else: 88.5 lb, 9.9 lb (10%)
   lighter than the single-mix pick. The light mix sits at the low end of the lab data (51 pcf,
   +4 pcf extrapolation): lighter tested mixes would cut more.
-* With `strength_model = "tested_mixes"` only real mixes are allowed. M2 (55.6 pcf) is too weak in
-  punching, so the 60 pcf "final target" mix wins.
+* With `strength_model = "tested_mixes"` only real mixes are allowed, each lab row its own mix.
+  M2 A (56.4 pcf) and M2 B (54.9 pcf) are too weak in punching, so the 60 pcf "final target" mix wins.
 
 ### Mold templates (`hull.templates`): how much does a simple mold cost?
 

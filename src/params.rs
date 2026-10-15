@@ -633,6 +633,8 @@ pub struct Displacement {
 #[serde(deny_unknown_fields)]
 pub struct ShapeSearch {
     pub length_in: [f64; 2],
+    /// [min, max]: the waterline beam is sampled in it, and a design whose overall beam
+    /// (flared topsides / gunwale included) exceeds max fails.
     pub beam_in: [f64; 2],
     pub draft_in: [f64; 2],
     pub fore_wp: [f64; 2],

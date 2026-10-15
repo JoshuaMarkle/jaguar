@@ -248,6 +248,9 @@ fn gunwale_radius_is_searched() {
     let mut p = small(false);
     let ss = p.shape_search.as_mut().unwrap();
     ss.gunwale_radius_in = Some([150.0, 600.0]);
+    // The beam bound is the overall beam and the gunwale outline is wider than the waterline:
+    // give the waterline room below the 26 in limit.
+    ss.beam_in = [20.0, 26.0];
     // Buildable shapes need straight / hollow waterline ends: sample more than the default 12.
     ss.samples = 40;
     p.validate().unwrap();
@@ -257,6 +260,7 @@ fn gunwale_radius_is_searched() {
         assert!((150.0..=600.0).contains(&g), "{g}");
     }
     let w = r.winner.as_ref().expect("a buildable shape");
+    assert!(w.candidate.beam_in <= 26.0 + 1e-9, "overall beam {}", w.candidate.beam_in);
     let s = w.candidate.shape.as_ref().unwrap();
     let hull = r.winner_hull.as_ref().unwrap();
     let ts = jaguar::hull::Topsides { gunwale_radius_in: s.gunwale_radius_in, ..p.hull.topsides() };

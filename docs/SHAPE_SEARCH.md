@@ -69,8 +69,10 @@ above the waterline, not the generator, so searching it would need a second oute
   Physics 1), the radius searched as an 11th shape variable and stored in `shape.gunwale_radius_in`.
   A straight entry from the tip encloses only straight or hollow waterline ends (Series 7 `wp`
   >= about 1), so the search moves there; full ends need gunwales too wide for
-  `hull.gunwale_max_flare_deg`. `examples/shape_gunwale.toml`: 100.4 lb, 223.6 in, R 318 in,
-  draft 4.5 in (tall topsides let the gunwale widen within 30 deg), vs 90.8 lb without it.
+  `hull.gunwale_max_flare_deg`. The gunwale is wider than the waterline and `beam_in` caps the
+  overall beam, so the waterline beam ends up narrower. `examples/shape_gunwale.toml` (200
+  samples): 96.8 lb, 234 in, R 430 in, 26.3 in overall (23.4 at the waterline), vs 90.8 lb
+  without it.
 * `kind = "race"` (needs `[race]`, src/race.rs): score = weighted race time over the `[race]`
   events, so wall weight, displacement, straight and turning drag are weighed by how they move
   the clock instead of by `straight_weight` / `displacements` (`jaguar race` prints the

@@ -12,8 +12,7 @@ does not matter, extra columns are ignored):
 
 | column | meaning |
 |---|---|
-| `mix` | name of the mix / cylinder, free text. A trailing replicate token (one letter or a number after a space) is stripped to get the tested mix: `M2 A`, `M2 B` -> `M2`. Replicates must agree on density within 3 pcf; rows of one group farther apart are refused with `strength_model = "tested_mixes"` (their mean would be a mix nobody tested) and warned about otherwise: give different mixes different names or a `mix_id` |
-| `mix_id` | optional; when present and non-empty it overrides the grouping above |
+| `mix` | name of the mix / cylinder, free text. With `strength_model = "tested_mixes"` every row is its own mix, never averaged with another (`M2 A` and `M2 B` are two mixes); rows with the same name are numbered (`M2 #1`, `M2 #2`) |
 | `cured_days` | age at the break (informational) |
 | `density_pcf` | wet density of the cylinder, pcf (the raw sheet's "Wet Density" column; the "final target" row's 60 pcf is also in that column). Hull weight uses the same density, so if your mold-day concrete is lighter once dry, reported weights are conservative. |
 | `split_tensile_psi` | measured split-cylinder tensile strength, psi ("7,191" style commas ok) |
@@ -52,18 +51,16 @@ The web mix panel plots each measured property with its fit line (solid) and der
 density in the trusted range. `"tested_mixes"` (see `examples/canoe_mixes.toml`) instead lets the
 optimizer choose only among the mixes actually tested:
 
-* rows are grouped into mixes by the rule in the `mix` column above;
-* per mix: n, mean density, mean and min FINAL split strength (each row scaled by its
-  `fraction_of_final`). The **design strength is the mean**; min and n are reported so you can see
-  the scatter;
+* every row is one mix at its own density and FINAL split strength (scaled by its
+  `fraction_of_final`): nothing is averaged, so the optimizer only picks densities that were
+  actually tested;
 * the density axis is the list of mixes (ordered by density then name). `search.density_pcf` and
   `density_extrapolation_pcf` are ignored and there are no grid-edge/mix-edge flags for density;
-* flexural and f'c are the mix's mean measured values when any of its rows has them, else derived
-  from the mix's mean split strength as in fit mode (`m` after the value in `jaguar mix`).
+* flexural and f'c are the row's measured values when it has them, else derived from its split
+  strength as in fit mode (`m` after the value in `jaguar mix`).
 
-The winner line reads e.g. `mix M2 (55.6 pcf)`. `jaguar mix` prints the per-mix table. The
-"final target" row (60 pcf, 300 psi, final) has no replicate token so it is its own mix; it is the
-team's target mix, kept under the name the raw sheet implies.
+The winner line reads e.g. `mix M2 A (56.4 pcf)`. `jaguar mix` prints the per-mix table. The
+"final target" row (60 pcf, 300 psi, final) is the team's target mix.
 
 ## Extrapolation limit
 

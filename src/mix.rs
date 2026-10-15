@@ -44,8 +44,9 @@ pub struct MixPoint {
     pub fraction_of_final: f64,
     /// `measured_psi / fraction_of_final`.
     pub final_psi: f64,
-    /// Tested-mix group this row belongs to: the `mix_id` column when given
-    /// and non-empty, else [`mix_group`] of `mix` ("M2 A" -> "M2").
+    /// The tested mix this row is (`strength_model = "tested_mixes"`): every row is its own
+    /// mix, never averaged with another. Its `mix` name, with " #k" added when the same name
+    /// is on several rows.
     pub group: String,
     /// Measured flexural strength at test age, psi (blank cell => None).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -66,7 +67,7 @@ impl MixPoint {
     }
 }
 
-/// One tested mix: all rows sharing a group name.
+/// One tested mix: one lab row (rows are never averaged into a mix).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TestedMix {
     pub name: String,
@@ -88,10 +89,6 @@ pub struct TestedMix {
 
 /// A density within this of a tested mix's mean density counts as tested, pcf.
 pub const TESTED_TOL_PCF: f64 = 0.05;
-
-/// Rows grouped as one tested mix (replicates) must agree on density within this, pcf;
-/// farther apart they are different mixes, and their mean density is no mix that was tested.
-pub const REPLICATE_SPREAD_PCF: f64 = 3.0;
 
 /// Whether a design density has lab data behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -122,21 +119,6 @@ pub struct MixProvenance {
     pub nearest: Vec<NearMix>,
     /// Distance to the nearest tested mix, pcf.
     pub reach_pcf: f64,
-}
-
-/// Group name for a `mix` cell: a trailing replicate token (a single letter or
-/// a number, after a space) is stripped, so "M2 A", "M2 B" and "M2 3" are all
-/// "M2". Names without such a token ("final target") are kept as given.
-pub fn mix_group(mix: &str) -> String {
-    let m = mix.trim();
-    if let Some((head, last)) = m.rsplit_once(char::is_whitespace) {
-        let rep = (last.chars().count() == 1 && last.chars().all(|c| c.is_ascii_alphabetic()))
-            || (!last.is_empty() && last.chars().all(|c| c.is_ascii_digit()));
-        if rep && !head.trim().is_empty() {
-            return head.trim().to_string();
-        }
-    }
-    m.to_string()
 }
 
 /// Least-squares line of one measured FINAL strength vs density.
@@ -351,28 +333,6 @@ impl StrengthFit {
     /// Weak-fit warnings: one per fitted property (split, and each measured
     /// one) with fewer than 5 points or rms scatter above 15% of the mean, and
     /// one per line with a negative slope.
-    /// Tested mixes whose rows differ in density by more than [`REPLICATE_SPREAD_PCF`]: one
-    /// message per mix naming its rows. Empty when every group is consistent.
-    pub fn replicate_problems(&self) -> Vec<String> {
-        let mut out = vec![];
-        for m in self.tested_mixes() {
-            let rows: Vec<&MixPoint> = self.points.iter().filter(|p| p.group == m.name).collect();
-            let lo = rows.iter().map(|p| p.density_pcf).fold(f64::INFINITY, f64::min);
-            let hi = rows.iter().map(|p| p.density_pcf).fold(f64::NEG_INFINITY, f64::max);
-            if hi - lo > REPLICATE_SPREAD_PCF {
-                let list: Vec<String> =
-                    rows.iter().map(|p| format!("{} {:.2} pcf", p.mix, p.density_pcf)).collect();
-                out.push(format!(
-                    "tested mix {}: rows {} differ by {:.1} pcf (replicates of one mix agree within {REPLICATE_SPREAD_PCF} pcf); if they are different mixes give them different names (e.g. M2, M3) or a mix_id column",
-                    m.name,
-                    list.join(", "),
-                    hi - lo
-                ));
-            }
-        }
-        out
-    }
-
     pub fn weak_fit_warnings(&self) -> Vec<String> {
         let split: Vec<f64> = self.points.iter().map(|p| p.final_psi).collect();
         let mut fits = vec![("strength", split, self.rms_residual_psi)];
@@ -382,8 +342,7 @@ impl StrengthFit {
                 fits.push((prop.label(), ys, f.rms_residual_psi));
             }
         }
-        let mut out: Vec<String> =
-            self.replicate_problems().into_iter().map(|m| format!("WARNING {m}")).collect();
+        let mut out = vec![];
         for (name, f) in self.active_fits() {
             if f.slope_psi_per_pcf < 0.0 {
                 out.push(format!(
@@ -410,7 +369,7 @@ impl StrengthFit {
         out
     }
 
-    /// Tested mixes (rows grouped by [`MixPoint::group`]), ordered by mean
+    /// Tested mixes, one per lab row ([`MixPoint::group`] names it), ordered by
     /// density then name. Design strength of a mix = mean final split strength;
     /// flexural / compressive means are over the rows that measured them.
     pub fn tested_mixes(&self) -> Vec<TestedMix> {
@@ -545,8 +504,8 @@ impl StrengthFit {
 
 /// Parse the mix CSV: `#` comment lines, one header line, then rows with
 /// columns `mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note`,
-/// optional `flexural_psi` / `compressive_psi` columns (cells may be blank),
-/// and an optional `mix_id` column that overrides the tested-mix grouping.
+/// and optional `flexural_psi` / `compressive_psi` columns (cells may be blank).
+/// Every row is its own tested mix ([`MixPoint::group`]).
 /// Columns are found by header name, so order may change and extra columns
 /// are ignored. Quoted fields and thousands separators ("7,191") are handled.
 pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
@@ -556,7 +515,6 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
     let col = |name: &str| find(name).with_context(|| format!("missing column '{name}'"));
     let (ci_mix, ci_rho, ci_psi, ci_frac) =
         (col("mix")?, col("density_pcf")?, col("split_tensile_psi")?, col("fraction_of_final")?);
-    let ci_id = find("mix_id");
     let (ci_flex, ci_fc) = (find(Property::Flexural.column()), find(Property::Compressive.column()));
     let mut out = vec![];
     for (ln, line) in lines.enumerate() {
@@ -582,9 +540,8 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
             bail!("row {}: need density > 0, strength > 0, 0 < fraction_of_final <= 1", ln + 1);
         }
         let mix = f.get(ci_mix).cloned().unwrap_or_default();
-        let id = ci_id.and_then(|i| f.get(i)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         out.push(MixPoint {
-            group: id.unwrap_or_else(|| mix_group(&mix)),
+            group: mix.trim().to_string(),
             mix,
             density_pcf: rho,
             measured_psi: psi,
@@ -593,6 +550,14 @@ pub fn parse_csv(text: &str) -> Result<Vec<MixPoint>> {
             flexural_psi: opt(ci_flex, "flexural_psi")?,
             compressive_psi: opt(ci_fc, "compressive_psi")?,
         });
+    }
+    // Rows sharing a name stay separate mixes: number them.
+    let names: Vec<String> = out.iter().map(|p| p.group.clone()).collect();
+    for (i, p) in out.iter_mut().enumerate() {
+        if names.iter().filter(|n| **n == names[i]).count() > 1 {
+            let k = names[..=i].iter().filter(|n| **n == names[i]).count();
+            p.group = format!("{} #{k}", names[i]);
+        }
     }
     Ok(out)
 }
@@ -634,62 +599,61 @@ mod tests {
     }
 
     #[test]
-    fn grouping_rule() {
-        assert_eq!(mix_group("M2 A"), "M2");
-        assert_eq!(mix_group("M2 b"), "M2");
-        assert_eq!(mix_group("Mix 7 12"), "Mix 7");
-        assert_eq!(mix_group("final target"), "final target");
-        assert_eq!(mix_group("M2"), "M2");
-        assert_eq!(mix_group("A"), "A");
-        let t = "mix,mix_id,density_pcf,split_tensile_psi,fraction_of_final\nM2 A,,56,120,0.6\nfoo,M2,54,150,0.6\nX,,60,300,1\n";
+    fn every_row_is_its_own_mix() {
+        let t = "mix,density_pcf,split_tensile_psi,fraction_of_final\nM2 A,56,120,0.6\nM2 B,54,150,0.6\nX,60,300,1\nX,61,310,1\n";
         let p = parse_csv(t).unwrap();
-        assert_eq!(p[0].group, "M2");
-        assert_eq!(p[1].group, "M2");
+        let g: Vec<&str> = p.iter().map(|r| r.group.as_str()).collect();
+        assert_eq!(g, ["M2 A", "M2 B", "X #1", "X #2"]);
+        let fit = StrengthFit::parse(t, 1.0).unwrap();
+        let m = fit.tested_mixes();
+        assert_eq!(m.len(), 4);
+        assert!(m.iter().all(|x| x.n == 1));
+        assert_eq!(m[0].density_pcf, 54.0);
+        assert_eq!(m[0].split_mean_psi, 250.0);
     }
 
     #[test]
     fn team_data_per_mix_means() {
+        // Every lab row is its own mix: M2 B (54.86), M2 A (56.408), final target (60).
         let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
         let m = fit.tested_mixes();
-        assert_eq!(m.len(), 2);
-        assert_eq!(m[0].name, "M2");
-        assert_eq!(m[0].n, 2);
-        assert!((m[0].density_pcf - (56.408 + 54.860) / 2.0).abs() < 1e-9);
-        assert!((m[0].split_mean_psi - 144.0 / 0.6).abs() < 1e-9);
-        assert!((m[0].split_min_psi - 143.0 / 0.6).abs() < 1e-9);
-        assert_eq!(m[1].n, 1);
-        assert!((m[1].split_mean_psi - 300.0).abs() < 1e-9);
-        let f = fit.for_mix(&m[0]);
-        assert!((f.split_psi(10.0) - 240.0).abs() < 1e-9);
-        assert!((f.fc_psi(99.0) - (240.0f64 / 6.7).powi(2)).abs() < 1e-9);
-        assert_eq!(f.points.len(), 2);
+        let names: Vec<&str> = m.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["M2 B", "M2 A", "final target"]);
+        assert!(m.iter().all(|x| x.n == 1));
+        assert_eq!((m[0].density_pcf, m[1].density_pcf, m[2].density_pcf), (54.860, 56.408, 60.0));
+        assert!((m[0].split_mean_psi - 145.0 / 0.6).abs() < 1e-9);
+        assert!((m[1].split_mean_psi - 143.0 / 0.6).abs() < 1e-9);
+        assert!((m[2].split_mean_psi - 300.0).abs() < 1e-9);
+        let f = fit.for_mix(&m[1]);
+        assert!((f.split_psi(10.0) - 143.0 / 0.6).abs() < 1e-9);
+        assert!((f.fc_psi(99.0) - (143.0f64 / 0.6 / 6.7).powi(2)).abs() < 1e-9);
+        assert_eq!(f.points.len(), 1);
     }
 
     #[test]
     fn provenance_reach() {
         let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
-        let m2 = (56.408 + 54.860) / 2.0;
-        // Between M2 and the 60 pcf mix: predicted, bracketed, reach to the closer one.
+        // Between M2 A (56.408) and the 60 pcf mix: predicted, bracketed, reach to the closer one.
         let p = fit.provenance(58.0, None).unwrap();
         assert_eq!(p.status, Provenance::Predicted);
         let names: Vec<&str> = p.nearest.iter().map(|n| n.name.as_str()).collect();
-        assert_eq!(names, ["M2", "final target"]);
-        assert!((p.nearest[0].distance_pcf - (m2 - 58.0)).abs() < 1e-12);
+        assert_eq!(names, ["M2 A", "final target"]);
+        assert!((p.nearest[0].distance_pcf - (56.408 - 58.0)).abs() < 1e-12);
         assert!((p.nearest[1].distance_pcf - 2.0).abs() < 1e-12);
-        assert!((p.reach_pcf - 2.0).abs() < 1e-12);
-        // Below the tested range: only the lightest mix.
+        assert!((p.reach_pcf - 1.592).abs() < 1e-9);
+        // Below the tested range: only the lightest mix (M2 B, 54.86).
         let p = fit.provenance(51.0, None).unwrap();
         assert_eq!(p.nearest.len(), 1);
-        assert!((p.reach_pcf - (m2 - 51.0)).abs() < 1e-12);
+        assert!((p.reach_pcf - (54.860 - 51.0)).abs() < 1e-12);
         // At a tested density: tested, one mix, reach 0.
         let p = fit.provenance(60.0, None).unwrap();
         assert_eq!(p.status, Provenance::Tested);
         assert_eq!(p.nearest.len(), 1);
         assert_eq!(p.reach_pcf, 0.0);
         // Tested-mixes mode names the mix.
-        let p = fit.provenance(m2, Some("M2")).unwrap();
+        let p = fit.provenance(56.408, Some("M2 A")).unwrap();
         assert_eq!((p.status, p.nearest.len(), p.reach_pcf), (Provenance::Tested, 1, 0.0));
-        assert!(fit.provenance(m2, Some("nope")).is_err());
+        assert!(fit.provenance(56.408, Some("nope")).is_err());
     }
 
     #[test]
@@ -812,21 +776,23 @@ mod tests {
 
     #[test]
     fn tested_mixes_use_per_mix_measured_means() {
-        // M1 measured flexural on one of its rows and f'c on both; M2 nothing.
+        // Each row is a mix with its own measured strengths: M1 A measured flexural and f'c,
+        // M1 B only f'c, M2 A nothing.
         let t = format!("{HDR}M1 A,50,200,0.5,100,1000\nM1 B,52,220,1,,1600\nM2 A,60,300,1,,\n");
         let fit = StrengthFit::parse(&t, 1.0).unwrap();
         let m = fit.tested_mixes();
-        assert_eq!(m[0].flexural_mean_psi, Some(200.0));
-        assert_eq!(m[0].compressive_mean_psi, Some(1800.0));
-        assert_eq!((m[1].flexural_mean_psi, m[1].compressive_mean_psi), (None, None));
+        assert_eq!(m.len(), 3);
+        assert_eq!((m[0].flexural_mean_psi, m[0].compressive_mean_psi), (Some(200.0), Some(2000.0)));
+        assert_eq!((m[1].flexural_mean_psi, m[1].compressive_mean_psi), (None, Some(1600.0)));
+        assert_eq!((m[2].flexural_mean_psi, m[2].compressive_mean_psi), (None, None));
         let f1 = fit.for_mix(&m[0]);
         assert_eq!(f1.flexural_psi(10.0), 200.0);
-        assert_eq!(f1.fc_psi(99.0), 1800.0);
+        assert_eq!(f1.fc_psi(99.0), 2000.0);
         assert_eq!(f1.flexural_fit.as_ref().unwrap().n, 1);
-        // M2 has no measurements: derived from its own split mean even though
-        // the whole-file f'c fit exists.
+        // M2 A has no measurements: derived from its own split strength even though the
+        // whole-file f'c fit exists.
         assert!(fit.compressive_fit.is_some());
-        let f2 = fit.for_mix(&m[1]);
+        let f2 = fit.for_mix(&m[2]);
         assert_eq!(f2.source(Property::Compressive), "derived");
         assert!((f2.fc_psi(60.0) - (300.0f64 / 6.7).powi(2)).abs() < 1e-9);
         assert_eq!(f2.flexural_psi(60.0), 300.0);
