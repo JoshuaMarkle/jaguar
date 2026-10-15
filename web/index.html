@@ -159,6 +159,10 @@
   #view { grid-column: 2; grid-row: 2; position: relative; min-height: 0; min-width: 0; background: var(--soft); overflow: hidden; }
   #view canvas { display: block; }
   #viewlabel:empty { display: none; }
+  #viewcube { position: absolute; right: var(--s3); top: var(--s3); display: flex; flex-direction: column; align-items: center; gap: var(--s1); }
+  #viewcube canvas { display: block; }
+  #viewcube button { height: 22px; padding: 0 var(--s2); border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--canvas); color: var(--ink); cursor: pointer; font: inherit; font-size: 11px; }
+  #viewcube button:hover { background: var(--soft); }
   #viewlabel { position: absolute; left: var(--s3); top: var(--s3); background: var(--canvas); border-radius: var(--r-sm); padding: 3px 8px; color: var(--ink-soft); }
   #plotwrap { grid-column: 2; grid-row: 3; position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   #plotctl { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
@@ -759,15 +763,108 @@ function placeCam() {
   camera.lookAt(target);
 }
 let drag = null;
-renderer.domElement.addEventListener('mousedown', e => drag = [e.clientX, e.clientY]);
+// Left-drag orbits; right-drag, middle-drag or Shift+drag pans (moves the point the camera
+// looks at across the screen); the wheel zooms.
+renderer.domElement.addEventListener('mousedown', e => {
+  e.preventDefault(); stopTween();
+  drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey };
+});
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 window.addEventListener('mouseup', () => drag = null);
 window.addEventListener('mousemove', e => {
   if (!drag) return;
-  theta += (e.clientX - drag[0]) * 0.01;
-  phi = Math.min(3.1, Math.max(0.05, phi - (e.clientY - drag[1]) * 0.01));
-  drag = [e.clientX, e.clientY]; placeCam();
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (drag.pan) {
+    // One pixel moves the target by the width of a pixel at the target's distance.
+    const s = 2 * radius * Math.tan(camera.fov * Math.PI / 360) / Math.max(view.clientHeight, 1);
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+    target.addScaledVector(right, -dx * s).addScaledVector(up, dy * s);
+  } else {
+    theta += dx * 0.01;
+    phi = Math.min(PHI_MAX, Math.max(PHI_MIN, phi - dy * 0.01));
+  }
+  drag.x = e.clientX; drag.y = e.clientY; placeCam();
 });
-renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
+renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); stopTween(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
+
+// ---------- view cube ----------
+// A small cube in the top right turns with the camera; click a face, edge or corner to look at
+// the canoe from there (x along the length, bow at x = 0, y up, +z starboard as drawn). Home
+// returns to the starting view of the whole canoe.
+const PHI_MIN = 1e-3, PHI_MAX = Math.PI - 1e-3;
+const cubeBox = document.createElement('div'); cubeBox.id = 'viewcube';
+const cubeR = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+cubeR.setPixelRatio(window.devicePixelRatio || 1); cubeR.setSize(96, 96); cubeR.setClearColor(0x000000, 0);
+cubeBox.appendChild(cubeR.domElement);
+const homeBtn = document.createElement('button'); homeBtn.type = 'button'; homeBtn.textContent = 'Home';
+homeBtn.title = 'Back to the starting view of the whole canoe';
+cubeBox.appendChild(homeBtn); view.appendChild(cubeBox);
+const cubeScene = new THREE.Scene(), cubeCam = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+const faceTex = label => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, 128, 128);
+  g.strokeStyle = '#e0e0e0'; g.lineWidth = 4; g.strokeRect(2, 2, 124, 124);
+  g.fillStyle = '#141414'; g.font = '600 26px -apple-system, "Helvetica Neue", Arial, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(label, 64, 66);
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t;
+};
+// BoxGeometry face order: +x, -x, +y, -y, +z, -z.
+const cubeMats = ['STERN', 'BOW', 'TOP', 'BOTTOM', 'STBD', 'PORT'].map(l => new THREE.MeshBasicMaterial({ map: faceTex(l) }));
+const cube = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), cubeMats);
+cubeScene.add(cube);
+cubeScene.add(new THREE.LineSegments(new THREE.EdgesGeometry(cube.geometry), new THREE.LineBasicMaterial({ color: 0x141414 })));
+// Hover mark: a flat square on the face, edge or corner region under the mouse.
+const hoverMark = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ color: 0x0066ff, transparent: true, opacity: 0.25, depthTest: false }));
+hoverMark.visible = false; cubeScene.add(hoverMark);
+function syncCube() {
+  const d = new THREE.Vector3().subVectors(camera.position, target).normalize();
+  cubeCam.position.copy(d).multiplyScalar(4); cubeCam.up.copy(camera.up); cubeCam.lookAt(0, 0, 0);
+}
+// The view direction (cube coordinates, each -1, 0 or 1) under a point of the cube canvas, or null.
+const ray = new THREE.Raycaster();
+function cubeDir(e) {
+  const r = cubeR.domElement.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), cubeCam);
+  const hit = ray.intersectObject(cube)[0]; if (!hit) return null;
+  // Within 0.6 of an edge along an axis = that side too: faces, edges and corners.
+  return [hit.point.x, hit.point.y, hit.point.z].map(v => Math.abs(v) > 0.6 ? Math.sign(v) : 0);
+}
+cubeR.domElement.addEventListener('mousemove', e => {
+  const d = cubeDir(e);
+  cubeR.domElement.style.cursor = d ? 'pointer' : 'default';
+  if (!d) { hoverMark.visible = false; return; }
+  // Mark the clicked-on region: a small square just outside the cube, facing the direction.
+  const n = new THREE.Vector3(...d).normalize(), size = d.filter(v => v).length === 1 ? 1.2 : 0.55;
+  hoverMark.scale.set(size, size, 1); hoverMark.position.copy(new THREE.Vector3(...d).multiplyScalar(1.02));
+  hoverMark.lookAt(n.clone().multiplyScalar(5)); hoverMark.visible = true;
+});
+cubeR.domElement.addEventListener('mouseleave', () => { hoverMark.visible = false; });
+cubeR.domElement.addEventListener('click', e => { const d = cubeDir(e); if (d) viewFrom(new THREE.Vector3(...d).normalize()); });
+homeBtn.addEventListener('click', () => { if (homeView) tweenTo(homeView.theta, homeView.phi, homeView.radius, homeView.target); });
+let homeView = null, tween = null;
+const stopTween = () => { tween = null; };
+// Look at the canoe from unit direction d (from the target toward the camera).
+function viewFrom(d) {
+  let th = Math.atan2(d.z, d.x);
+  const ph = Math.min(PHI_MAX, Math.max(PHI_MIN, Math.acos(Math.max(-1, Math.min(1, d.y)))));
+  // Straight down or up: keep the canoe's length across the screen (bow left).
+  if (Math.abs(d.x) < 1e-9 && Math.abs(d.z) < 1e-9) th = Math.PI / 2;
+  tweenTo(th, ph, radius, target.clone());
+}
+function tweenTo(th, ph, rad, tgt) {
+  // Turn the short way round.
+  while (th - theta > Math.PI) th -= 2 * Math.PI;
+  while (th - theta < -Math.PI) th += 2 * Math.PI;
+  tween = { t0: performance.now(), from: { theta, phi, radius, target: target.clone() }, to: { theta: th, phi: ph, radius: rad, target: tgt } };
+}
+function stepTween() {
+  if (!tween) return;
+  const u = Math.min(1, (performance.now() - tween.t0) / 350), s = u * u * (3 - 2 * u), a = tween.from, b = tween.to;
+  theta = a.theta + (b.theta - a.theta) * s; phi = a.phi + (b.phi - a.phi) * s; radius = a.radius + (b.radius - a.radius) * s;
+  target.lerpVectors(a.target, b.target, s); placeCam();
+  if (u >= 1) tween = null;
+}
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
@@ -775,7 +872,7 @@ function resize() {
   c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); drawPlot(); drawMix();
 }
 window.addEventListener('resize', resize);
-(function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); })();
+(function loop() { stepTween(); renderer.render(scene, camera); syncCube(); cubeR.render(cubeScene, cubeCam); requestAnimationFrame(loop); })();
 
 function buildCanoe() {
   if (!hull) return;
@@ -849,7 +946,8 @@ function buildCanoe() {
     water.rotation.x = -Math.PI / 2; water.position.y = draft; scene.add(water);
   }
   target.set(hull.length / 2, depth / 2, 0);
-  radius = hull.length * 1.1; placeCam();
+  radius = hull.length * 1.1; stopTween(); placeCam();
+  homeView = { theta, phi, radius, target: target.clone() };
 }
 
 // Hull cross-section at x (between stations, linear) from the keel up to the gunwale, as a filled plane + outline.

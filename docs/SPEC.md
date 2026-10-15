@@ -21,6 +21,9 @@ jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit pa
 `--prefs`, default `$XDG_CONFIG_HOME/jaguar/prefs.toml` else `~/.config/jaguar/prefs.toml`, and
 restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and edits the lab CSV
 (saved over `material.mix_data` after it parses and fits, previous kept as `.bak`). HTTP API: `src/serve.rs`.
+3D view: left-drag orbits, right-, middle- or Shift-drag pans, the wheel zooms; a view cube in the
+top right turns with the camera (faces BOW, STERN, PORT, STBD, TOP, BOTTOM) and a click on a face,
+edge or corner turns the view there; Home returns to the starting view.
 
 ## Inputs
 
