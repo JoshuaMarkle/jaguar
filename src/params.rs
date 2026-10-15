@@ -303,6 +303,12 @@ pub struct HullParams {
     /// along the hull, deg from vertical (default 30). Steeper = rejected.
     #[serde(default = "gunwale_max_flare")]
     pub gunwale_max_flare_deg: f64,
+    /// Doubly symmetric canoe (manufacturability: one end mold makes both ends): bow and stern
+    /// identical as well as port and starboard. A hull file is made fore-aft symmetric
+    /// (`Hull::symmetrized`); a shape search ties the stern factors to the bow's (same as
+    /// `shape_search.symmetric`). Default off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub doubly_symmetric: bool,
 }
 
 fn gunwale_max_flare() -> f64 {
@@ -750,6 +756,11 @@ impl Params {
         }
         if p.material.mix_data.is_relative() {
             p.material.mix_data = base_dir.join(&p.material.mix_data);
+        }
+        // shape_search.symmetric is the shape-search form of hull.doubly_symmetric: either sets both.
+        if let Some(ss) = &mut p.shape_search {
+            let sym = ss.symmetric || p.hull.doubly_symmetric;
+            (ss.symmetric, p.hull.doubly_symmetric) = (sym, sym);
         }
         p.validate()?;
         Ok(p)

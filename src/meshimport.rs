@@ -402,7 +402,13 @@ pub fn analysis_toml(
         t.get(k).and_then(|v| v.as_table()).cloned().with_context(|| format!("base canoe.toml has no [{k}]"))
     };
     let mut hull = table(&mut t, "hull")?;
-    for k in ["templates", "keel_fillet_radius_in", "gunwale_radius_in", "gunwale_max_flare_deg"] {
+    for k in [
+        "templates",
+        "keel_fillet_radius_in",
+        "gunwale_radius_in",
+        "gunwale_max_flare_deg",
+        "doubly_symmetric",
+    ] {
         hull.remove(k);
     }
     hull.insert("file".into(), abs(&hull_path.to_string_lossy()).into());

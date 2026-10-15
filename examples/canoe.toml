@@ -8,6 +8,7 @@
 [hull]
 file = "off1_hull.json"   # jaguar-hull/1, relative to this file
 stations = 161            # search resolution; the winner is re-checked at 2n-1
+# doubly_symmetric = true      # bow = stern (and port = starboard): one end mold makes both ends; a hull file is averaged with its mirror
 # keel_fillet_radius_in = 0.5  # side-view radius where the stem meets the keel (forefoot), bow and stern, in; entry stays sharp
 #                         # (tips stay put: same length; the hull is kept >= 2r wide near the tips)
 # templates = 11          # constructable mold: the hull as 11 cross-section templates, straight between

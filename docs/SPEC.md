@@ -58,6 +58,12 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    analysed, so the search tunes the buildable loft (not an approximation of a smooth optimum,
    which sits on its gates and falls off them when simplified). The winner hull, export and web
    view are the loft. Topsides follow it with the constant flare (draft everywhere).
+   **Doubly symmetric** (optional `hull.doubly_symmetric = true`, applied first): bow and stern
+   identical as well as port and starboard, so one end mold makes both ends. A hull file becomes
+   the mean of the hull at x and at L - x, on the stations of both (`Hull::symmetrized`; an
+   already symmetric hull is unchanged); a shape search ties the stern factors to the bow's
+   (`shape_search.symmetric`, the same switch). Templates, forefoot radius, flare, the gunwale
+   outline and the export treat both ends alike, so the built canoe stays symmetric.
    **Forefoot radius** (optional `hull.keel_fillet_radius_in = r`, applied after templates): in
    side view, the corner where the stem meets the keel line at the bow and at the stern (the
    forefoot) is cut on an arc of radius r tangent to the stem (the last station without breadth)
@@ -172,7 +178,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    wall candidate whose overall beam (flared topsides and gunwale at its depth included) exceeds
    max fails with the reason. Optional manufacturability rules: `draft_step_in`, `length_step_in`,
    `beam_step_in` (snap), `rocker_in = [min, max]` and `min_entry_angle_deg` (reject, with the reason
-   in the candidate), `symmetric` (aft factors = fore). Each shape's `shape.metrics` (entry angle,
+   in the candidate), `symmetric` (aft factors = fore; same switch as `hull.doubly_symmetric`). Each shape's `shape.metrics` (entry angle,
    rocker in, lateral moment, rejection reason) is in result.json.
 10. **Two-mix zones** (optional `[zones]`, `optimize::zoned_search`): the wall search also tries
    walls of two mixes: the light mix (`search.density_pcf`) everywhere except side-view rectangles

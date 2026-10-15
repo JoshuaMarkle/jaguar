@@ -56,11 +56,13 @@ impl Hull {
             .with_context(|| format!("writing {}", path.display()))
     }
 
-    /// The hull as the run builds it: `hull.templates`, then `hull.keel_fillet_radius_in`.
+    /// The hull as the run builds it: `hull.doubly_symmetric`, then `hull.templates`, then
+    /// `hull.keel_fillet_radius_in` (both treat the two ends alike, so symmetry is kept).
     pub fn prepared(self, hp: &crate::params::HullParams) -> Result<Hull> {
+        let h = if hp.doubly_symmetric { self.symmetrized() } else { self };
         let h = match hp.templates {
-            Some(n) => self.templated(n),
-            None => self,
+            Some(n) => h.templated(n),
+            None => h,
         };
         match hp.keel_fillet_radius_in {
             Some(r) => h.filleted(r),
@@ -176,6 +178,41 @@ impl Hull {
         };
         h.validate()?;
         Ok(h)
+    }
+
+    /// The hull made fore-aft symmetric (doubly symmetric with port/starboard): each station
+    /// is the mean of the hull at x and at L - x, on the stations of both (the table
+    /// interpolates linearly, so that is exact). Already symmetric hulls come back unchanged.
+    pub fn symmetrized(&self) -> Hull {
+        let (x0, x1) = (self.x[0], self.x[self.x.len() - 1]);
+        let mut x: Vec<f64> = self.x.iter().flat_map(|&v| [v, x0 + x1 - v]).collect();
+        x.sort_by(f64::total_cmp);
+        x.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        // Pair the stations exactly (mirror of each is in the list), so the table is symmetric bit for bit.
+        let n = x.len();
+        for i in 0..n / 2 {
+            x[n - 1 - i] = x0 + x1 - x[i];
+        }
+        if n % 2 == 1 {
+            x[n / 2] = 0.5 * (x0 + x1);
+        }
+        let half: Vec<Vec<f64>> = (0..n)
+            .map(|i| {
+                (0..self.z.len())
+                    .map(|k| {
+                        0.5 * (interp_col(&self.x, &self.half_breadth, k, x[i])
+                            + interp_col(&self.x, &self.half_breadth, k, x[n - 1 - i]))
+                    })
+                    .collect()
+            })
+            .collect();
+        Hull {
+            name: format!("{}-sym", self.name),
+            source: format!("{}, made doubly symmetric (bow and stern averaged)", self.source),
+            x,
+            half_breadth: half,
+            ..self.clone()
+        }
     }
 
     /// The hull as `n` cross-section templates with a straight (ruled) loft

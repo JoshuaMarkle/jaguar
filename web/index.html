@@ -317,11 +317,11 @@ const SHAPE_OPT = [
 ];
 const GME_T = 'Minimum metacentric height of the empty canoe (no crew aboard): how strongly it rights itself when it sits empty in the water, e.g. at the dock or launching. Empty = not gated (still computed and shown).';
 const FIL_T = 'Side-view radius where the stem meets the keel line (the forefoot) at the bow and stern, so the bottom has no point (a stress concentration). The corner is cut on this arc; each waterline it shortens keeps its shape at the tip, so the entry angle stays as sharp. Length is unchanged. Empty = pointed forefoot.';
-const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius or gunwale outline). Then Run analyses that design; Race races it.';
+const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius, symmetry or gunwale outline). Then Run analyses that design; Race races it.';
 const TPL_T = 'Constructable mold: build the hull from this many cross-section templates (tips included, closer at the ends) with straight surfaces between them, as hot-wire foam or frames with straight battens produce. The analysis, export and 3D view use that loft; with shape search the optimizer tunes it. 9-11 cost about 1% race time (docs/HULLS.md). Empty = smooth hull.';
 const GW_T = 'Constructable gunwale: in top view the sides run straight from the bow, one circular arc of this radius through the middle, straight to the stern; each side is straight from the waterline up to it. The gunwale is the narrowest such outline that keeps the sides from leaning in (and at least the flare at midships). Empty = off. Full-ended hulls need a small radius; a radius that fits no outline rejects the design.';
 const ROCKER_T = 'Allowed keel rise, min and max, at 5% of the length from the bow and from the stern, relative to the lowest keel point. Shapes outside are rejected. Both empty = any rocker.';
-const SYM_T = 'Bow and stern identical: stern waterplane, stern rocker and stern taper follow the bow values (their bounds above are ignored).';
+const SYM_T = 'Doubly symmetric canoe, for manufacturability (one end mold makes both ends): bow and stern identical as well as port and starboard. A hull file is made symmetric by averaging each station with its mirror; with shape search the stern factors follow the bow ones (their bounds are ignored). Templates, forefoot radius, flare, gunwale and export all keep it.';
 // objective.displacements presets: [crew_lb, share of race distance].
 const DISP_PRESETS = { regionals: [[350, 0.75], [700, 0.25]], nationals: [[350, 0.60], [525, 0.20], [700, 0.20]], total: [[350, 0.675], [525, 0.10], [700, 0.225]] };
 const DISP_T = 'Drag objective only. None = drag of the heaviest load case at its loaded draft. Otherwise the drag is the weighted sum over race conditions, each floating level at hull weight + crew. Regionals 350/700 lb at 75/25%, Nationals 350/525/700 at 60/20/20%, Total 350/525/700 at 67.5/10/22.5%. Shares must sum to 1.';
@@ -397,10 +397,10 @@ function buildForm() {
       + `${row('meshfile', 'Import CAD mesh', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the mesh (auto: from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><label class="btn soft file">Choose file<input type="file" id="meshfile" accept=".stl,.obj"></label></div>')}`
       + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div></div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join('')
+      + row('hull.doubly_symmetric', 'Doubly symmetric', SYM_T, '<input type="checkbox" class="switch" id="hull.doubly_symmetric">')
       + row('hull.keel_fillet_radius_in', 'Forefoot radius', FIL_T, '<input type="number" id="hull.keel_fillet_radius_in" step="any" min="0" placeholder="sharp">', 'in')
       + row('hull.templates', 'Mold templates', TPL_T, '<input type="number" id="hull.templates" step="1" min="3" placeholder="smooth">'))
     + section('shape', SHAPE.map(pair).join('')
-      + row('shape.symmetric', 'Symmetric ends', SYM_T, '<input type="checkbox" class="switch" id="shape.symmetric">')
       + '<div class="group">Buildability limits <span class="hint">empty = no limit</span></div>'
       + SHAPE_OPT.map(optRow).join('')
       + row('shape.rocker_in.0', 'End rocker', ROCKER_T, `<div class="multi">${rocker(0)}${rocker(1)}</div>`, 'in')
@@ -541,6 +541,7 @@ function wireMeshImport() {
     sel.innerHTML = hullOptions(await (await fetch('/api/hulls')).json()); sel.value = v.file;
     $('hull.flare_deg').value = 0;
     for (const id of ['hull.templates', 'hull.keel_fillet_radius_in', 'hull.gunwale_radius_in']) $(id).value = '';
+    $('hull.doubly_symmetric').checked = false;
     if (typeof m.thickness_in === 'number') {
       for (const n of [0, 1]) $(`search.thickness_in.${n}`).value = m.thickness_in.toFixed(4);
       if (Number($('gates.thickness_min_buildable_in').value) > m.thickness_in) $('gates.thickness_min_buildable_in').value = m.thickness_in.toFixed(4);
@@ -580,7 +581,7 @@ function fillForm(p, hulls) {
   $('hull.gunwale_radius_in').value = p.hull.gunwale_radius_in ?? '';
   $('hull.templates').value = p.hull.templates ?? '';
   $('hull.keel_fillet_radius_in').value = p.hull.keel_fillet_radius_in ?? '';
-  $('shape.symmetric').checked = !!(ss && ss.symmetric);
+  $('hull.doubly_symmetric').checked = !!(p.hull.doubly_symmetric || (ss && ss.symmetric));
   $('shapemode').checked = !!ss; setShapeMode(); shapeHints();
   const fp = p.flotation;
   $('flotation.on').checked = !!fp; setFlotation();
@@ -617,6 +618,7 @@ function formToml() {
   if (!shape) out.push(`file = ${tstr(g('hull.file'))}`);
   if (!shape && g('hull.gunwale_radius_in').trim() !== '') out.push(`gunwale_radius_in = ${fl(g('hull.gunwale_radius_in'))}`);
   out.push(`stations = ${int('hull.stations')}`, `flare_deg = ${fl(g('hull.flare_deg'))}`);
+  if ($('hull.doubly_symmetric').checked) out.push('doubly_symmetric = true');
   if (g('hull.templates').trim() !== '') out.push(`templates = ${int('hull.templates')}`);
   if (g('hull.keel_fillet_radius_in').trim() !== '') out.push(`keel_fillet_radius_in = ${fl(g('hull.keel_fillet_radius_in'))}`);
   out.push('');
@@ -674,7 +676,6 @@ function formToml() {
       if (rk.some(v => v === '')) throw new Error('end rocker: give both min and max, or leave both empty');
       out.push(`rocker_in = [${rk.map(fl).join(', ')}]`);
     }
-    if ($('shape.symmetric').checked) out.push('symmetric = true');
     out.push('');
   }
   if ($('flotation.on').checked) {

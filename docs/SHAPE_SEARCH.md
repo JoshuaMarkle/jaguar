@@ -30,7 +30,7 @@ stability logic lives in one place.
 | key | effect |
 |---|---|
 | `draft_step_in`, `length_step_in`, `beam_step_in` | sampled values snap to the nearest multiple inside the bounds (depth already steps by `search.depth_in`) |
-| `symmetric = true` | `aft_wp`, `aft_rocker`, `aft_len_frac` follow the fore values (3 fewer dimensions, aft bounds ignored) |
+| `symmetric = true` | `aft_wp`, `aft_rocker`, `aft_len_frac` follow the fore values (3 fewer dimensions, aft bounds ignored); the same switch as `hull.doubly_symmetric` (either sets both) |
 | `rocker_in = [min, max]` | keel rise above the lowest keel point at 5% L from the bow and from the stern, in. Outside = **rejected** (not remapped) |
 | `min_entry_angle_deg` | design-waterline entry half-angle = atan(half-breadth / x) of the chord over the first 5% L. Finer = **rejected** |
 
