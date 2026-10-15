@@ -71,7 +71,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    keeps its plan shape at the tip: it is shifted aft to the arc, the shift blended out over 4 r
    with zero slope at the tip, so the entry angle is unchanged. Length overall (stem tops), draft
    and everything beyond 5 r from the ends are unchanged; concrete is only removed; plan view and
-   sections are not rounded. Err when the stem is shorter than the arc. The table is refined
+   sections are not rounded. A stem shorter than the arc (its top would be above the hull table's design
+   draft) is an error for a hull file; in a shape search that shape is rejected with the reason (analysed
+   without the radius) and the search goes on. The table is refined
    (waterlines every r/8 over each arc, stations every r/8 within 5 r of each end) and the
    STEP/STL export keeps those stations. off1 at r 1 in: -0.002 lb, drag, GM and the
    winner unchanged (the corner cut is (1 - pi/4) r^2 in side view where the waterlines are
