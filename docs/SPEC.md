@@ -78,7 +78,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    STEP/STL export keeps those stations. off1 at r 1 in: -0.002 lb, drag, GM and the
    winner unchanged (the corner cut is (1 - pi/4) r^2 in side view where the waterlines are
    under 1 in wide; the 1.5 in analysis stations barely see it, the export carries it); the shape
-   search pick is unchanged (90.8 lb). The added waterlines are analysis waterlines too, so a run
+   search pick is unchanged. The added waterlines are analysis waterlines too, so a run
    costs about 1.5x (shape_opt.toml: 103 s vs 67 s on the same machine).
 1. **Grid**: resample to `hull.stations` evenly spaced x. Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.

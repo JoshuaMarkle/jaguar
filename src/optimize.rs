@@ -1799,9 +1799,14 @@ pub fn plan_seats(
         .map(|case| match seats::fixed(params, case, grid) {
             Some(s) => Ok(s),
             None => {
+                // Worst of the nominal seats and the whole crew moved forward / aft by the variance.
                 let exact = |s: &[f64]| {
-                    let e = eval_case(params, fit, grid, sec, rho, case, s)?;
-                    Ok(seats::score(params, &e.verdict, e.service.gm_in))
+                    let mut worst: f64 = 0.0;
+                    for q in seats::shifted(s, params.seats.variance_in, grid) {
+                        let e = eval_case(params, fit, grid, sec, rho, case, &q)?;
+                        worst = worst.max(seats::score(params, &e.verdict, e.service.gm_in));
+                    }
+                    Ok(worst)
                 };
                 seats::auto(params, fit, grid, sec, t, rho, case, &exact)
                     .map_err(|e| anyhow::anyhow!("{}: {e:#}", case.name))

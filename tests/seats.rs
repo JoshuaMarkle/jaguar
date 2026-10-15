@@ -105,3 +105,30 @@ fn auto_seats_are_deterministic() {
     let b = serde_json::to_string(&optimize::run(&p, &h).unwrap()).unwrap();
     assert_eq!(a, b);
 }
+
+/// Auto seats are chosen at their worst forward / aft shift by the seat variance (where the
+/// verdict's worst float, freeboard and GM corners are), so with a large variance they are
+/// never worse than even spacing there.
+#[test]
+fn auto_seats_are_scored_at_their_worst_shift() {
+    let (mut p, _, fit, g, s) = setup();
+    p.seats.variance_in = 12.0;
+    let robust = |case: usize, seats_in: &[f64]| {
+        seats::shifted(seats_in, p.seats.variance_in, &g)
+            .iter()
+            .map(|q| exact(&p, &fit, &g, &s, case, q))
+            .fold(0.0, f64::max)
+    };
+    let plan = plan_seats(&p, &fit, &g, &s, 0.375, 58.0).unwrap();
+    for (i, cs) in plan.iter().enumerate() {
+        let even = seats::even(cs.seats_in.len(), &g);
+        let (a, e) = (robust(i, &cs.seats_in), robust(i, &even));
+        assert!(a <= e + 1e-12, "case {i}: auto {a} > even {e} at the worst shift");
+    }
+    // The shifted sets: nominal, all forward, all aft, kept on the hull.
+    let l = g.x[g.nx() - 1];
+    let sh = seats::shifted(&[5.0, 120.0], 12.0, &g);
+    assert_eq!(sh, vec![vec![5.0, 120.0], vec![0.0, 108.0], vec![17.0, 132.0]]);
+    assert!(sh.iter().flatten().all(|&x| (0.0..=l).contains(&x)));
+    assert_eq!(seats::shifted(&[50.0], 0.0, &g), vec![vec![50.0]]);
+}

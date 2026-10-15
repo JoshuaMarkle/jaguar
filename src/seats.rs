@@ -25,7 +25,11 @@
 //!
 //! **Variance.** Whatever the source, a case is checked at the nominal seats
 //! and at all 2^k corners with each knee moved by +/- `variance_in`
-//! ([`samples`]); the case verdict is the worst sample.
+//! ([`samples`]); the case verdict is the worst sample. So auto seats are scored
+//! (surrogate and exact) as the worst of the nominal seats and the two corners
+//! that move the whole crew forward or aft by the variance ([`shifted`]): the
+//! float, freeboard and GM depend on the crew only through its centroid, so those
+//! two are their worst corners, and seats that only pass at nominal are not picked.
 
 use crate::check::{Verdict, check, first_moment_below, hoop_psi, kupfer_dc};
 use crate::equilibrium::{CrewLoad, patch_vm, solve};
@@ -228,8 +232,21 @@ impl<'a> Surrogate<'a> {
         Surrogate { params, x, st, lo, hi, nodes, lb, combos, cap }
     }
 
-    /// Surrogate score of knees at `seats` (`weights_lb` order).
+    /// Surrogate score of knees at `seats` (`weights_lb` order): the worst of the nominal
+    /// seats and the whole crew moved forward / aft by the seat variance ([`shifted`]).
     fn score(&self, seats: &[f64]) -> f64 {
+        let v = self.params.seats.variance_in;
+        if v <= 0.0 {
+            return self.score_at(seats);
+        }
+        let (x0, xl) = (self.x[0], self.x[self.x.len() - 1]);
+        [-v, 0.0, v]
+            .iter()
+            .map(|d| self.score_at(&seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect::<Vec<_>>()))
+            .fold(0.0, f64::max)
+    }
+
+    fn score_at(&self, seats: &[f64]) -> f64 {
         let w: f64 = self.lb.iter().sum();
         let xe = self.lb.iter().zip(seats).map(|(l, s)| l * s).sum::<f64>() / w;
         let (j, a) = if self.nodes.len() == 1 {
@@ -263,6 +280,19 @@ impl<'a> Surrogate<'a> {
         }
         utilization(self.params, dc, (1.0 - a) * n0.fb + a * n1.fb, (1.0 - a) * n0.gm + a * n1.gm)
     }
+}
+
+/// The seat sets auto seats are scored at: nominal, then (v > 0) every knee moved forward
+/// by v and every knee moved aft by v, kept on the hull [x0, xL] like [`samples`].
+pub fn shifted(seats: &[f64], v: f64, grid: &Grid) -> Vec<Vec<f64>> {
+    let mut out = vec![seats.to_vec()];
+    if v > 0.0 {
+        let (lo, hi) = (grid.x[0], grid.x[grid.nx() - 1]);
+        for d in [-v, v] {
+            out.push(seats.iter().map(|&s| (s + d).clamp(lo, hi)).collect());
+        }
+    }
+    out
 }
 
 /// Distinct crew orders (permutations of paddler indices; orders that only
@@ -334,7 +364,9 @@ pub fn auto(
     } else {
         (0..k).map(|j| lo + (hi - lo) * j as f64 / (k - 1) as f64).collect()
     };
-    let sur = Surrogate::build(params, fit, grid, sec, t, rho, case, (lo, hi));
+    // Nodes cover every crew centroid the shifted seats can reach.
+    let v = sp.variance_in;
+    let sur = Surrogate::build(params, fit, grid, sec, t, rho, case, ((lo - v).max(x0), (hi + v).min(xl)));
     // slots (bow to stern) -> seats in weights_lb order
     let place = |order: &[usize], p: &[f64]| {
         let mut s = vec![0.0; k];
