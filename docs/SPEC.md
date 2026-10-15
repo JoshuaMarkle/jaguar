@@ -146,7 +146,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    tip, full hull interior up to D = enclosed area minus wall area) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
    by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are
    never tried.
-7. **Objective** (`objective.kind`, default `drag` when omitted): `weight` = lightest passing; `drag` = lowest Michell wave +
+7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
    ITTC-57 friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction). Drag is taken at the heaviest load case's loaded draft, or, with
    `objective.displacements = [{crew_lb, weight}, ...]` (weights sum to 1), as the weighted sum of

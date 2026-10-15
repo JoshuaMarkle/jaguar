@@ -74,7 +74,9 @@ pub struct Candidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gm_empty_in: Option<f64>,
     /// Total resistance at objective.speed_mps, N (wave + ITTC friction), worst
-    /// (heaviest) load case. None unless objective.kind = drag.
+    /// (heaviest) load case, or weighted over objective.displacements. Computed for every
+    /// analysed candidate whatever the objective; None if it could not be (a failure only
+    /// when objective.kind = drag).
     pub drag_n: Option<f64>,
     /// Weighted race time, s, on the shape search's planned paths
     /// (`race::planned_time`). None unless objective.kind = race.
@@ -2345,7 +2347,8 @@ fn evaluate_wall(
         // The freeboard gate covers every case, not just the governing one.
         v.freeboard_in = fb;
         c.gm_in = Some(gm);
-        if params.objective.kind == ObjectiveKind::Drag {
+        // Drag is always reported; it only fails the candidate when it is the objective.
+        {
             let draft = heaviest.map(|h| h.1).unwrap_or(f64::NAN);
             let hull = grid_hull(grid);
             let speed = params.objective.speed_mps;
@@ -2355,12 +2358,13 @@ fn evaluate_wall(
             };
             match drag {
                 Ok(r) => c.drag_n = Some(r),
-                Err(e) => {
+                Err(e) if params.objective.kind == ObjectiveKind::Drag => {
                     c.error = Some(format!("drag: {e:#}"));
                     c.verdict = Some(v);
                     c.governing_case = Some(name);
                     return c;
                 }
+                Err(_) => {}
             }
         }
         if let Some(fp) = &params.flotation {

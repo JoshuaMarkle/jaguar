@@ -183,12 +183,14 @@ fn example_winner_gm_and_drag() {
     let (mut p, h) = example_gm0();
     let r = optimize::run(&p, &h).unwrap();
     let c = r.winner.unwrap().candidate;
-    assert!(c.drag_n.is_none(), "weight objective computes no drag");
-    eprintln!("weight winner GM {:?} in", c.gm_in);
+    // Drag is reported whatever the objective, for every analysed candidate.
+    assert!(c.drag_n.is_some_and(|d| d > 0.0), "weight objective still reports drag");
+    assert!(r.candidates.iter().filter(|k| k.verdict.is_some()).all(|k| k.drag_n.is_some()));
     assert!(c.gm_in.unwrap() >= p.stability.gm_min_in);
     p.objective.kind = jaguar::params::ObjectiveKind::Drag;
-    let r = optimize::run(&p, &h).unwrap();
-    eprintln!("drag-mode winner drag {:?} N", r.winner.unwrap().candidate.drag_n);
+    let d = optimize::run(&p, &h).unwrap().winner.unwrap().candidate;
+    // The drag pick has no more drag than the weight pick.
+    assert!(d.drag_n.unwrap() <= c.drag_n.unwrap() + 1e-9);
 }
 
 #[test]
