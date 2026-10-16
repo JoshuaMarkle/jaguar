@@ -421,6 +421,9 @@ fn lrfd_dead_only() -> f64 {
 fn lrfd_live() -> f64 {
     1.6
 }
+fn knee_split() -> f64 {
+    0.5
+}
 
 impl Material {
     /// (dead, live) load factors of every strength combination.
@@ -453,6 +456,8 @@ pub struct Punching {
     /// Knees carrying one paddler: 1 (all weight on one knee, conservative) or 2.
     pub knees: u32,
     /// Share of the paddler's weight on the heavier knee when knees = 2 (0.5-1).
+    /// Default 0.5: the weight splits evenly between the two knees.
+    #[serde(default = "knee_split")]
     pub knee_split: f64,
     /// Centre-to-centre knee spacing, in (used to check whether the two critical
     /// perimeters overlap; if so the full load acts on the combined perimeter).
@@ -1086,6 +1091,14 @@ mod tests {
         );
         let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_only = 0.0");
         assert!(Params::parse(&bad, Path::new("examples")).is_err());
+    }
+
+    #[test]
+    fn knee_split_defaults_to_even() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let line = text.lines().find(|l| l.starts_with("knee_split")).unwrap();
+        let p = Params::parse(&text.replace(line, ""), Path::new("examples")).unwrap();
+        assert_eq!(p.punching.knee_split, 0.5);
     }
 
     #[test]

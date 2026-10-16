@@ -71,7 +71,7 @@ after 1, d = t/2 on either mold; the examples spell that out.
 
 * `knees = 1`: the whole paddler (x dynamic factor 1.2) on one knee. Very conservative.
 * `knees = 2` (default): the heavier knee carries `knee_split` of the paddler
-  (default 0.6, which allows for uneven kneeling). If the two critical circles
+  (default 0.5, an even split; 0.6 allows for uneven kneeling). If the two critical circles
   overlap (`knee_spacing_in < d_load + d`), they act together: the whole paddler
   on a merged racetrack-shaped perimeter `b0 = 2 * spacing + pi * (d_load + d)`.
   At 8 in spacing they do not overlap.
