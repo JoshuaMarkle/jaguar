@@ -27,6 +27,10 @@ pub struct Loads {
     pub kb_in: f64,
     pub bm_in: f64,
     pub kg_in: f64,
+    /// Per station, lb per inch of length: buoyancy (empty when not floating) and self weight
+    /// (as factored). Net distributed load q = buoyancy - self weight; V, M integrate it.
+    pub buoyancy: Vec<f64>,
+    pub self_weight: Vec<f64>,
 }
 
 fn trapz(f: &[f64], x: &[f64]) -> f64 {
@@ -222,7 +226,8 @@ pub fn solve_weights(
     };
     // Distributed loads (buoyancy - self weight) integrate by trapezoid; crew
     // patches are added in closed form so they are exact at any station spacing.
-    let q: Vec<f64> = buoy(d0, th).iter().zip(&w_hull).map(|(b, w)| b - w).collect();
+    let buoyancy = buoy(d0, th);
+    let q: Vec<f64> = buoyancy.iter().zip(&w_hull).map(|(b, w)| b - w).collect();
     let mut v = vec![0.0; n];
     let mut m = vec![0.0; n];
     for i in 1..n {
@@ -254,6 +259,8 @@ pub fn solve_weights(
         kb_in,
         bm_in,
         kg_in,
+        buoyancy,
+        self_weight: w_hull,
     })
 }
 

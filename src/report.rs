@@ -919,6 +919,7 @@ mod tests {
             }],
             empty: Default::default(),
             calc: Default::default(),
+            case_calcs: vec![],
             verify_failure: (!verified).then(|| "D/C at 81 stations 1.0200 > dc_verify 0.95".into()),
             stands: None,
             knee_split_sensitivity: vec![],

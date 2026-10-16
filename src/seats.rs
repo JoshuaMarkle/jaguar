@@ -5,7 +5,8 @@
 //!
 //! **Auto.** Seats only move the global V(x), M(x) (and through trim the
 //! freeboard and GM); knee punching does not depend on them. So the seats and
-//! crew order minimize the highest utilization of the seat-dependent gates
+//! crew order (paddlers pinned by `positions` stay in their seat) minimize the highest
+//! utilization of the seat-dependent gates
 //! ([`score`]: bending tension, bending compression, shear and biaxial D/C
 //! against dc_search, freeboard and GM against their minimums). Constraints: knees at least `spacing_min_in`
 //! apart, within [`bow_clear_in`, L - `stern_clear_in`]. Every distinct crew
@@ -65,6 +66,33 @@ pub fn even(k: usize, grid: &Grid) -> Vec<f64> {
     (0..k).map(|i| x0 + l * (i + 1) as f64 / (k + 1) as f64).collect()
 }
 
+/// Seat (slot, bow to stern) -> paddler for the entered order: pinned paddlers
+/// (`positions`) in their seat, the others filling the free seats in `weights_lb` order.
+pub fn default_order(case: &LoadCase) -> Vec<usize> {
+    let k = case.weights_lb.len();
+    let pos = |i: usize| case.positions.as_ref().map_or(0, |p| p[i]);
+    let mut free = (0..k).filter(|&i| pos(i) == 0);
+    (0..k)
+        .map(|slot| {
+            (0..k).find(|&i| pos(i) == slot + 1).unwrap_or_else(|| free.next().expect("one per seat"))
+        })
+        .collect()
+}
+
+/// Seats per paddler (`weights_lb` order) from slot positions bow to stern and a slot order.
+pub fn place(order: &[usize], slots: &[f64]) -> Vec<f64> {
+    let mut s = vec![0.0; order.len()];
+    for (slot, &who) in order.iter().enumerate() {
+        s[who] = slots[slot];
+    }
+    s
+}
+
+/// Evenly spaced seats for `case` in its [`default_order`].
+pub fn even_placed(case: &LoadCase, grid: &Grid) -> Vec<f64> {
+    place(&default_order(case), &even(case.weights_lb.len(), grid))
+}
+
 /// Paddler indices sorted bow to stern (stable on ties).
 pub fn order_of(seats: &[f64]) -> Vec<usize> {
     let mut o: Vec<usize> = (0..seats.len()).collect();
@@ -76,7 +104,7 @@ pub fn order_of(seats: &[f64]) -> Vec<usize> {
 pub fn fixed(params: &Params, case: &LoadCase, grid: &Grid) -> Option<CaseSeats> {
     let (seats_in, source) = match &case.seats_in {
         Some(s) => (s.clone(), SeatSource::Given),
-        None if !params.seats.auto => (even(case.weights_lb.len(), grid), SeatSource::Even),
+        None if !params.seats.auto => (even_placed(case, grid), SeatSource::Even),
         None => return None,
     };
     Some(CaseSeats { crew_order: order_of(&seats_in), seats_in, source })
@@ -297,29 +325,37 @@ pub fn shifted(seats: &[f64], v: f64, grid: &Grid) -> Vec<Vec<f64>> {
     out
 }
 
-/// Distinct crew orders (permutations of paddler indices; orders that only
-/// swap equal weights are dropped), lexicographic.
-fn orders(w: &[f64]) -> Vec<Vec<usize>> {
-    fn rec(w: &[f64], cur: &mut Vec<usize>, used: &mut Vec<bool>, out: &mut Vec<Vec<usize>>) {
-        if cur.len() == w.len() {
+/// Distinct crew orders (slot -> paddler index, bow to stern) with each pinned paddler
+/// (`pos[i]` = seat 1..k, 0 = free) in its seat; orders that only swap free paddlers of equal
+/// weight are dropped. Lexicographic.
+fn orders(w: &[f64], pos: &[usize]) -> Vec<Vec<usize>> {
+    fn rec(w: &[f64], pos: &[usize], cur: &mut Vec<usize>, used: &mut Vec<bool>, out: &mut Vec<Vec<usize>>) {
+        let slot = cur.len();
+        if slot == w.len() {
             out.push(cur.clone());
+            return;
+        }
+        if let Some(p) = (0..w.len()).find(|&i| pos[i] == slot + 1) {
+            cur.push(p);
+            rec(w, pos, cur, used, out);
+            cur.pop();
             return;
         }
         let mut tried: Vec<f64> = Vec::new();
         for i in 0..w.len() {
-            if used[i] || tried.contains(&w[i]) {
+            if used[i] || pos[i] != 0 || tried.contains(&w[i]) {
                 continue;
             }
             tried.push(w[i]);
             used[i] = true;
             cur.push(i);
-            rec(w, cur, used, out);
+            rec(w, pos, cur, used, out);
             cur.pop();
             used[i] = false;
         }
     }
     let mut out = Vec::new();
-    rec(w, &mut Vec::new(), &mut vec![false; w.len()], &mut out);
+    rec(w, pos, &mut Vec::new(), &mut vec![false; w.len()], &mut out);
     out
 }
 
@@ -369,16 +405,9 @@ pub fn auto(
     // Nodes cover every crew centroid the shifted seats can reach.
     let v = sp.variance_in;
     let sur = Surrogate::build(params, fit, grid, sec, t, rho, case, ((lo - v).max(x0), (hi + v).min(xl)));
-    // slots (bow to stern) -> seats in weights_lb order
-    let place = |order: &[usize], p: &[f64]| {
-        let mut s = vec![0.0; k];
-        for (slot, &who) in order.iter().enumerate() {
-            s[who] = p[slot];
-        }
-        s
-    };
+    let pos = case.positions.clone().unwrap_or_else(|| vec![0; k]);
     let mut best: Vec<(f64, Vec<usize>, Vec<f64>)> = Vec::new();
-    for order in orders(&case.weights_lb) {
+    for order in orders(&case.weights_lb, &pos) {
         let mut p = start.clone();
         let mut f = sur.score(&place(&order, &p));
         let mut step = 0.25 * (hi - lo).max(sp.spacing_min_in);
@@ -409,10 +438,11 @@ pub fn auto(
         best.push((f, order.clone(), place(&order, &p)));
     }
     best.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // Exact scoring: even spacing first (wins ties), then the 3 best orders.
+    // Exact scoring: even spacing in the entered order (pins kept) first (wins ties), then the
+    // 3 best orders.
     let mut tries: Vec<Vec<f64>> = Vec::new();
     if feasible(&ev) {
-        tries.push(ev);
+        tries.push(place(&default_order(case), &ev));
     }
     tries.extend(best.into_iter().take(3).map(|b| b.2));
     let mut pick: Option<(f64, Vec<f64>)> = None;
@@ -441,9 +471,40 @@ mod tests {
 
     #[test]
     fn orders_dedupe_equal_weights() {
-        assert_eq!(orders(&[1.0, 2.0]), vec![vec![0, 1], vec![1, 0]]);
-        assert_eq!(orders(&[1.0, 1.0, 2.0]).len(), 3);
-        assert_eq!(orders(&[1.0, 2.0, 3.0, 4.0]).len(), 24);
+        assert_eq!(orders(&[1.0, 2.0], &[0, 0]), vec![vec![0, 1], vec![1, 0]]);
+        assert_eq!(orders(&[1.0, 1.0, 2.0], &[0, 0, 0]).len(), 3);
+        assert_eq!(orders(&[1.0, 2.0, 3.0, 4.0], &[0; 4]).len(), 24);
+    }
+
+    #[test]
+    fn pinned_paddlers_stay_in_their_seat() {
+        // Paddler 3 steers in the stern (seat 4): the other three take every order of seats 1-3.
+        let o = orders(&[1.0, 2.0, 3.0, 4.0], &[0, 0, 0, 4]);
+        assert_eq!(o.len(), 6);
+        assert!(o.iter().all(|x| x[3] == 3));
+        // Two pinned: bow and stern fixed, the middle two swap.
+        let o = orders(&[1.0, 2.0, 3.0, 4.0], &[0, 4, 1, 0]);
+        assert_eq!(o, vec![vec![2, 0, 3, 1], vec![2, 3, 0, 1]]);
+        // A pinned paddler is not interchangeable with a free one of the same weight.
+        let o = orders(&[5.0, 5.0, 2.0], &[3, 0, 0]);
+        assert_eq!(o, vec![vec![1, 2, 0], vec![2, 1, 0]]);
+        // All pinned: exactly that order.
+        assert_eq!(orders(&[1.0, 2.0, 3.0], &[2, 3, 1]), vec![vec![2, 0, 1]]);
+    }
+
+    #[test]
+    fn default_order_fills_free_seats_in_entered_order() {
+        let case = |pos: Option<Vec<usize>>| LoadCase {
+            name: "x".into(),
+            weights_lb: vec![1.0, 2.0, 3.0, 4.0],
+            seats_in: None,
+            positions: pos,
+        };
+        assert_eq!(default_order(&case(None)), vec![0, 1, 2, 3]);
+        assert_eq!(default_order(&case(Some(vec![0, 0, 1, 0]))), vec![2, 0, 1, 3]);
+        assert_eq!(default_order(&case(Some(vec![0, 4, 0, 0]))), vec![0, 2, 3, 1]);
+        let g = Grid { x: vec![0.0, 100.0], z: vec![0.0, 1.0], y: vec![1.0; 4], depth: 1.0 };
+        assert_eq!(even_placed(&case(Some(vec![0, 4, 0, 0])), &g), vec![20.0, 80.0, 40.0, 60.0]);
     }
 
     #[test]

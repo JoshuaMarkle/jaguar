@@ -101,6 +101,13 @@ pub fn normalize(ss: &ShapeSearch, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS
 }
 
 /// Dimensions the search moves (fixed bounds and symmetric-tied aft ones excluded).
+/// Most shapes a search can evaluate: the samples plus every refine round at its full size
+/// (the best K_BEST shapes stepped both ways along each free factor). Rounds that repeat known
+/// shapes are smaller, so this is an upper bound (the web UI's time estimate).
+pub fn planned_shapes(ss: &ShapeSearch) -> usize {
+    ss.samples + ss.refine_rounds * K_BEST * 2 * free_dims(ss).len()
+}
+
 fn free_dims(ss: &ShapeSearch) -> Vec<usize> {
     let b = ss.bounds();
     (0..SHAPE_DIMS).filter(|&d| b[d].1[1] > b[d].1[0] && !(ss.symmetric && matches!(d, 6 | 7 | 9))).collect()

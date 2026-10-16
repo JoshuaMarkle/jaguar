@@ -1,7 +1,7 @@
 # canoe.toml: the team's settings, the starter for the JAGUAR desktop app (Documents/JAGUAR).
 # Units: in, lb, psi, pcf. Unknown keys are an error. Edit it in the web UI (hover a label for
 # help); every key is explained in the example canoe.toml and docs/SPEC.md of the source.
-# Hull shape search ([shape_search], no hull.file): 4000 samples take hours; 96 take minutes.
+# Hull shape search ([shape_search], no hull.file): 4000 samples take ~12 min on a recent laptop; 96 ~1 min.
 # off1_hull.json (the examples' hull) is too small for the 2M, 2F crew: it sinks.
 [hull]
 stations = 161

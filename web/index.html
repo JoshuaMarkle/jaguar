@@ -76,6 +76,9 @@
   .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: -2px; }
   .multi { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s1); }
   .multi input { padding: 0 6px; }
+  .lcp { display: grid; gap: var(--s1); }
+  .lcp label { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; gap: var(--s1); }
+  .lcp span { color: var(--muted); font-variant-numeric: tabular-nums; }
   .kv { min-height: 22px; }
   .kv > :first-child { color: var(--muted); }
   .kv > :nth-child(2) { grid-column: 2 / 4; font-variant-numeric: tabular-nums; }
@@ -193,7 +196,7 @@
     <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
   <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
   <button id="run" class="btn primary">Run optimization</button>
-  <span id="runctl" hidden style="display:contents">
+  <span id="runctl" hidden>
     <button type="button" class="btn soft" id="pauserun" title="Hold the run after the candidates or hull shapes being checked now. Resume carries on where it stopped.">Pause</button>
     <button type="button" class="btn soft" id="endrun" title="End the run. Shape search: no new shapes; the best hull found so far is verified and shown as the result. Fixed hull: the run is cancelled and the last result stays.">End</button></span>
   <span id="deskbtns" hidden><div class="sep"></div>
@@ -377,14 +380,38 @@ const ZMAX_T = 'Most (wall, light mix, dense mix) combinations placed, lightest 
 function lcBlock(lc) {
   const d = document.createElement('div'); d.className = 'lc';
   const tn = 'Name of this crew arrangement.';
-  const tw = 'Paddler weights in lb, bow to stern, comma separated.';
+  const tw = 'Paddler weights in lb, comma separated. With Auto seats on, JAGUAR chooses where each one kneels and the crew order (every order is tried), except paddlers pinned below.';
   const ts = 'Optional knee positions in inches from the bow, one per paddler, comma separated. Leave empty for auto seats (or evenly spaced with Auto seats off).';
+  const tp = 'Pin a paddler to a seat (1 = bow seat, the highest number = stern seat), e.g. who steers in the stern. auto = JAGUAR chooses that paddler\'s seat; with Auto seats off the free paddlers fill the free seats in the order entered. Pin everyone for a fixed crew order.';
   d.innerHTML = row('', 'Name', tn, `<input class="lcname" value="${esc(lc.name || '')}">`)
     + row('', 'Weights', tw, `<input class="lcw" value="${(lc.weights_lb || []).join(', ')}">`, 'lb')
+    + `<div class="lcprow">${row('', 'Positions', tp, '<div class="lcp"></div>')}</div>`
     + row('', 'Seats', ts, `<input class="lcs" placeholder="auto" value="${(lc.seats_in || []).join(', ')}">`, 'in')
     + row('', '', 'Delete this load case.', '<button type="button" class="btn soft">Remove case</button>');
   d.querySelector('button').onclick = () => d.remove();
+  d.dataset.pins = JSON.stringify(lc.positions || []);
+  const sync = () => pinSelects(d);
+  d.querySelector('.lcw').addEventListener('input', sync);
+  d.querySelector('.lcs').addEventListener('input', sync);
   $('cases').appendChild(d);
+  sync();
+}
+// One seat picker per paddler (weights order): auto, or a seat 1 (bow) .. k (stern). Hidden when
+// the case gives Seats (they fix every seat). Keeps the picks while weights are edited.
+function pinSelects(d) {
+  const box = d.querySelector('.lcp');
+  const prev = box.children.length ? [...box.querySelectorAll('select')].map(s => Number(s.value)) : JSON.parse(d.dataset.pins || '[]');
+  const w = list(d.querySelector('.lcw').value);
+  const k = w.length;
+  d.querySelector('.lcprow').hidden = k < 2 || list(d.querySelector('.lcs').value).length > 0;
+  const name = s => s === 1 ? '1 bow' : s === k ? `${k} stern` : String(s);
+  box.innerHTML = w.map((x, i) => {
+    const v = prev[i] && prev[i] <= k ? prev[i] : 0;
+    const opts = [0, ...Array.from({ length: k }, (_, s) => s + 1)].map(s =>
+      `<option value="${s}" ${s === v ? 'selected' : ''}>${s ? name(s) : 'auto'}</option>`).join('');
+    return `<label title="Paddler ${i + 1}: seat pinned (1 = bow) or auto"><span>${esc(String(x))} lb</span><select>${opts}</select></label>`;
+  }).join('');
+  for (const s of box.querySelectorAll('select')) s.addEventListener('change', () => { d.dataset.pins = JSON.stringify([...box.querySelectorAll('select')].map(q => Number(q.value))); });
 }
 function buildForm() {
   const ht = 'Which hull shape (jaguar-hull/1 JSON next to the canoe.toml) to optimize.';
@@ -666,6 +693,12 @@ function formToml() {
     out.push('[[load_case]]', `name = ${tstr(d.querySelector('.lcname').value)}`, `weights_lb = [${list(d.querySelector('.lcw').value).map(fl).join(', ')}]`);
     const seats = list(d.querySelector('.lcs').value);
     if (seats.length) out.push(`seats_in = [${seats.map(fl).join(', ')}]`);
+    const pins = [...d.querySelectorAll('.lcp select')].map(s => Number(s.value));
+    if (!seats.length && pins.some(v => v > 0)) {
+      const dup = pins.filter(v => v > 0).find((v, i, a) => a.indexOf(v) !== i);
+      if (dup) throw new Error(`load case ${d.querySelector('.lcname').value}: two paddlers pinned to seat ${dup}`);
+      out.push(`positions = [${pins.join(', ')}]`);
+    }
     out.push('');
   }
   out.push('[seats]', `auto = ${$('seats.auto').checked}`);
@@ -2110,132 +2143,241 @@ function reportHtml(canoeImg, charts) {
   <div class="page">${calcHtml(win)}</div>
   </body></html>`;
 }
-// Calculation appendix: each governing equation, then the same equation with the winner's numbers
-// (result.winner.calc, recomputed by the checks' own code, so every result equals the verdict).
+// Design proof appendix of the PDF report: a pass/fail summary of every check and gate, the
+// design basis, the strength fit worked from the lab points, section properties, then every
+// load case worked in full (result.winner.case_calcs, recomputed by the checks' own code, so each
+// worked D/C equals the checks table) and the verification, stands and flotation.
 function calcHtml(win) {
-  const k = win.calc, c = win.candidate, e = win.empty;
-  const head = '<h2 style="margin-top:0">Calculations.</h2>';
-  if (!k || k.error || !k.service) return head + `<div class="note">Calculation trace not available${k && k.error ? ': ' + esc(k.error) : ' (re-run with this version of JAGUAR)'}.</div>`;
+  const P = result.params, G = P.gates, ST = P.stability, pm = P.material, c = win.candidate, e = win.empty;
+  const k0 = win.calc;
+  const head = '<h2 style="margin-top:0">Design proof.</h2>';
+  if (!k0 || k0.error || !k0.service) return head + `<div class="note">Calculation trace not available${k0 && k0.error ? ': ' + esc(k0.error) : ' (re-run with this version of JAGUAR)'}.</div>`;
+  const calcs = Array.isArray(win.case_calcs) && win.case_calcs.length ? win.case_calcs : [k0];
   const g = (x, n = 3) => typeof x !== 'number' ? '-' : !isFinite(x) ? '&infin;' : Math.abs(x) >= 1e5 || (Math.abs(x) < 1e-3 && x !== 0) ? x.toExponential(n - 1).replace(/e([+-]?)(\d+)/, (_, sg, d) => ` &times; 10<sup>${sg === '-' ? '&minus;' : ''}${d}</sup>`) : x.toFixed(n);
   const neg = x => x < 0 ? `(${g(x)})` : g(x);
   const eq = (why, form, num) => `<div class="eq"><div class="why">${why}</div><div class="f">${form}</div>${num ? `<div class="n">${num}</div>` : ''}</div>`;
-  const sv = k.service, st = k.strength, asd = k.method === 'asd';
-  const kf = asd ? `1 / FS = 1 / ${g(k.factor_of_safety, 2)}` : `&phi; = ${g(k.capacity_factor, 2)}`;
-  const kSym = asd ? '1/FS' : '&phi;';
-  const out = [head, `<div class="muted">Governing load case <b>${esc(k.case)}</b> at its worst seat sample (knees ${k.seats_in.map(x => g(x, 1)).join(', ')} in),
-    ${k.stations} stations along ${g(k.length_in, 1)} in. Units: in, lb, psi, pcf. ${asd ? `Allowable stress design: capacity &times; 1/FS.` : `LRFD: loads &times; ${g(k.dead_factor, 1)}D + ${g(k.live_factor, 1)}L, capacity &times; &phi;.`}
-    Every value below is recomputed by the same code as the checks; each result equals the checks table.</div>`];
+  const table = (hd, rows) => `<table><thead><tr>${hd.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  const ok = pass => pass ? '<b style="color:#24a148">OK</b>' : '<b style="color:#da1e28">FAILS</b>';
+  const asd = k0.method === 'asd', kSym = asd ? '1/FS' : '&phi;';
+  const phiP = P.punching.method === 'aci_22_6' ? 0.75 : 0.60;
+  const dcv = G.dc_verify;
+  const CHECK = { bending_tension: 'Bending tension', bending_compression: 'Bending compression', shear: 'Shear', punching: 'Knee punching', biaxial: 'Biaxial (Kupfer)' };
+  const caseOf = name => (win.cases || []).find(q => q.name === name) || {};
+  const lcOf = name => (P.load_case || []).find(q => q.name === name) || {};
+  const trapz = (f, x) => { let s = 0; for (let i = 1; i < x.length; i++) s += 0.5 * (f[i] + f[i - 1]) * (x[i] - x[i - 1]); return s; };
+  const out = [head, `<div class="muted">This appendix shows that the winning wall carries every load JAGUAR applies:
+    for each load case, each seat sample and each load combination, every demand is at most its factored capacity
+    (D/C &le; ${g(dcv, 2)}, the dc_verify gate; codes require D/C &le; 1), and the floating, stability and handling gates hold.
+    Every number is recomputed by the same code as the checks. Units: in, lb, psi, pcf; x is measured from the bow.</div>`];
 
-  const pm = result.params.material, phiP = result.params.punching.method === 'aci_22_6' ? 0.75 : 0.60;
+  // ---------- 0. summary ----------
+  const rows = [];
+  let allOk = true;
+  const row = (what, where, dem, cap, val, lim, pass) => { allOk = allOk && pass; rows.push(`<tr><td class="l">${what}</td><td class="l">${where}</td><td>${dem}</td><td>${cap}</td><td>${val}</td><td>${lim}</td><td>${ok(pass)}</td></tr>`); };
+  for (const q of win.cases || []) {
+    if (q.error || !q.verdict) { row(esc(q.name), 'equilibrium', '-', '-', '-', '-', false); continue; }
+    for (const ck of q.verdict.checks) {
+      const ratio = ck.name === 'biaxial'; // Kupfer: principal stress over its reduced capacity, worked in section 4
+      row(`${esc(q.name)}: ${CHECK[ck.name] || esc(ck.name)}`, ck.x_in != null ? `x = ${g(ck.x_in, 1)}` : 'knee', ratio ? 'section 4' : `${g(ck.demand, 1)} psi`, ratio ? '' : `${g(ck.capacity, 1)} psi`, g(ck.dc, 3), `&le; ${g(dcv, 2)}`, ck.dc <= dcv);
+    }
+    row(`${esc(q.name)}: freeboard`, 'min over hull', '-', '-', `${g(q.freeboard_in, 2)} in`, `&ge; ${g(G.freeboard_min_in, 2)} in`, q.freeboard_in >= G.freeboard_min_in);
+    row(`${esc(q.name)}: GM<sub>T</sub>`, 'worst seat sample', '-', '-', `${g(q.gm_in, 2)} in`, `&ge; ${g(ST.gm_min_in, 2)} in`, q.gm_in >= ST.gm_min_in);
+  }
+  if (e && !e.error) {
+    row('Empty canoe: freeboard', 'min over hull', '-', '-', `${g(e.freeboard_in, 2)} in`, '&gt; 0', e.freeboard_in > 0);
+    if (typeof e.gm_in === 'number' && ST.gm_empty_min_in != null) row('Empty canoe: GM<sub>T</sub>', '', '-', '-', `${g(e.gm_in, 2)} in`, `&ge; ${g(ST.gm_empty_min_in, 2)} in`, e.gm_in >= ST.gm_empty_min_in);
+  }
+  const cv = win.convergence;
+  row('Station convergence', `${win.verify_stations} stations`, '-', '-', cv && cv.extrapolated != null ? `${g(Math.max(cv.extrapolated, cv.dc[2]), 4)} (extrapolated)` : g(win.verify_dc, 4), `&le; ${g(dcv, 2)}`, cv && cv.extrapolated != null ? Math.max(cv.extrapolated, cv.dc[2]) <= dcv : win.verify_dc <= dcv);
+  const sst = win.stands;
+  if (sst && sst.verdict) row('Empty hull on stands', `${g(sst.x_stand_in, 1)} in from each end`, '-', '-', g(sst.verdict.dc, 3), `&le; ${g(dcv, 2)}`, sst.verdict.dc <= dcv);
+  if (typeof c.air_pocket_in === 'number' && P.flotation) row('Swamped flotation', 'air pocket each end', '-', '-', `${g(c.air_pocket_in, 1)} in`, `&le; ${g(P.flotation.air_pocket_max_in, 1)} in`, c.air_pocket_in <= P.flotation.air_pocket_max_in);
+  out.push('<h3>0. Summary: every check and gate</h3>', `<table><thead><tr><th class="l">check</th><th class="l">where</th><th>demand</th><th>capacity</th><th>D/C or value</th><th>required</th><th></th></tr></thead><tbody>${rows.join('')}</tbody></table>`);
+  out.push(`<div class="note">${allOk && win.verified
+    ? `<b>Conclusion.</b> Every demand is below its factored capacity in every load case (largest D/C ${g(win.verify_dc, 3)} &le; ${g(dcv, 2)}), and every floating, stability and handling gate holds. The wall has enough capacity for the loads below.`
+    : `<b>Not proven.</b> At least one line above fails${win.verify_failure ? ': ' + esc(win.verify_failure) : ''}. Do not build this design as is.`}</div>`);
+
+  // ---------- 1. design basis ----------
+  out.push('<h3>1. Design basis</h3>');
   out.push(eq('Load and resistance factors used by every check:', asd
     ? 'loads &times; 1 (crew &times; DLF), &nbsp; capacity &times; 1/FS'
     : 'U = &gamma;<sub>D</sub> D + &gamma;<sub>L</sub> L (in water: buoyancy re-solved to balance the factored weight), &nbsp; U = &gamma;<sub>D0</sub> D alone; &nbsp; capacity &times; &phi;',
-    asd ? `DLF = ${g(k.dynamic_load_factor, 2)}, FS = ${g(k.factor_of_safety, 2)}`
-      : `&gamma;<sub>D</sub> = ${g(pm.lrfd_dead, 2)} (self weight and buoyancy), &gamma;<sub>L</sub> = ${g(pm.lrfd_live, 2)} (paddlers &times; DLF ${g(k.dynamic_load_factor, 2)}: shear, bending, punching), &gamma;<sub>D0</sub> = ${g(pm.lrfd_dead_only, 2)} (no crew: empty hull, stands); `
-        + `&phi; = 0.60 bending, compression, shear, biaxial (plain concrete), ${g(phiP, 2)} punching${result.params.stands && result.params.stands.orientation === 'inverted' ? ', 0.65 bearing' : ''} (ACI 318-19 21.2.1); no factor of safety on top`));
-  out.push('<h3>1. Hull section and weight</h3>');
-  out.push(eq('Thin shell: wall thickness t along the mold-line girth s of both sides, plus the flat keel strip. Per station:',
-    'A = 2 y<sub>0</sub> t + 2 t &Sigma; &Delta;s<sub>k</sub>, &nbsp; z&#772; = &Sigma; A<sub>k</sub> z<sub>k</sub> / A, &nbsp; I = &Sigma; A<sub>k</sub> [(z<sub>k</sub> &minus; z&#772;)<sup>2</sup> + &Delta;z<sub>k</sub><sup>2</sup>/12] + 2 y<sub>0</sub> t z&#772;<sup>2</sup>',
-    `t = ${g(k.thickness_in, 3)} in; values at the governing stations are listed under each check.`));
+    asd ? `DLF = ${g(k0.dynamic_load_factor, 2)}, FS = ${g(k0.factor_of_safety, 2)}`
+      : `&gamma;<sub>D</sub> = ${g(pm.lrfd_dead, 2)} (self weight and buoyancy), &gamma;<sub>L</sub> = ${g(pm.lrfd_live, 2)} (paddlers &times; DLF ${g(k0.dynamic_load_factor, 2)}), &gamma;<sub>D0</sub> = ${g(pm.lrfd_dead_only, 2)} (no crew: empty hull, stands); `
+        + `&phi; = 0.60 bending, compression, shear, biaxial (plain concrete, ACI 318-19 21.2.1), ${g(phiP, 2)} punching${P.stands && P.stands.orientation === 'inverted' ? ', 0.65 bearing' : ''}`));
+  out.push(`<div class="muted"><b>Model and assumptions.</b> The hull is a thin unreinforced concrete shell (mesh counted only in punching, ${esc(P.punching.method)}) acting as a beam along its length.
+    Each paddler kneels on two ${g(pm.knee_patch_in, 1)} in knee patches; ${P.punching.knees === 2 ? `the heavier knee carries ${g(P.punching.knee_split, 2)} of the paddler` : 'one knee carries the whole paddler'}.
+    Paddler weights carry the dynamic load factor ${g(pm.dynamic_load_factor, 2)}. Water is fresh (62.4 pcf). The crew's centre of gravity is ${g(ST.crew_cg_in, 1)} in above the keel.
+    Seats are checked at the nominal knees and at every corner with each knee moved &plusmn;${g(P.seats.variance_in, 1)} in (${P.seats.variance_in > 0 ? '2<sup>k</sup> + 1 samples' : 'nominal only'}); each case's verdict is its worst sample.
+    Strength comes from the team's lab breaks (section 2). Stresses are checked at every one of the ${k0.stations} stations; the tables show every ${'~'}L/20 plus the critical stations.</div>`);
+
+  // ---------- 2. material ----------
+  out.push('<h3>2. Material strength</h3>');
+  const s0 = result.strength || {};
+  const pts = (s0.points || []).filter(q => typeof q.final_psi === 'number' && typeof q.density_pcf === 'number');
+  if (pm.strength_model === 'fit' && pts.length >= 2) {
+    const n = pts.length, sx = pts.reduce((a, q) => a + q.density_pcf, 0), sy = pts.reduce((a, q) => a + q.final_psi, 0);
+    const sxx = pts.reduce((a, q) => a + q.density_pcf ** 2, 0), sxy = pts.reduce((a, q) => a + q.density_pcf * q.final_psi, 0);
+    const a = (n * sxy - sx * sy) / (n * sxx - sx * sx), b = (sy - a * sx) / n;
+    out.push(eq(`Final split tensile strength f<sub>sp</sub> vs density &rho;: least squares through the ${n} lab points (final = measured / fraction of final):`,
+      'a = (n &Sigma;&rho;f &minus; &Sigma;&rho; &Sigma;f) / (n &Sigma;&rho;<sup>2</sup> &minus; (&Sigma;&rho;)<sup>2</sup>), &nbsp; b = (&Sigma;f &minus; a &Sigma;&rho;) / n',
+      `n = ${n}, &Sigma;&rho; = ${g(sx, 2)}, &Sigma;f = ${g(sy, 1)}, &Sigma;&rho;<sup>2</sup> = ${g(sxx, 1)}, &Sigma;&rho;f = ${g(sxy, 1)} &rarr; a = <b>${g(a, 3)}</b> psi/pcf, b = <b>${g(b, 1)}</b> psi`
+      + (Math.abs(a - k0.split_slope_psi_per_pcf) > 1e-6 * Math.max(1, Math.abs(a)) ? ` <span class="muted">(the run used a = ${g(k0.split_slope_psi_per_pcf, 3)}, b = ${g(k0.split_intercept_psi, 1)}: see the mix data table for the rows it fitted)</span>` : '')));
+  }
+  if (pm.strength_model === 'fit') {
+    out.push(eq('At the winning density:', 'f<sub>sp</sub> = a &rho; + b',
+      `f<sub>sp</sub> = ${g(k0.split_slope_psi_per_pcf, 3)} &times; ${g(k0.density_pcf, 2)} ${k0.split_intercept_psi < 0 ? '&minus;' : '+'} ${g(Math.abs(k0.split_intercept_psi), 1)} = <b>${g(k0.split_psi, 1)} psi</b>`));
+  } else {
+    // tested_mixes: the winning mix's own breaks (rows grouped by mix name), never a fit line.
+    const mine = pts.filter(q => (q.group || q.mix) === c.mix || q.mix === c.mix);
+    out.push(eq(`Tested mixes: the winning mix <b>${esc(c.mix || '')}</b> uses the mean final split tensile strength of its own lab breaks (final = measured / fraction of final):`,
+      'f<sub>sp</sub> = (1/n) &Sigma; f<sub>sp,i</sub>',
+      mine.length ? `f<sub>sp</sub> = (${mine.map(q => g(q.final_psi, 1)).join(' + ')}) / ${mine.length} = <b>${g(k0.split_psi, 1)} psi</b> (rows ${mine.map(q => esc(q.mix)).join(', ')}; density ${g(k0.density_pcf, 2)} pcf)`
+        : `f<sub>sp</sub> = <b>${g(k0.split_psi, 1)} psi</b> at ${g(k0.density_pcf, 2)} pcf (lab rows in the Mix data section)`));
+  }
+  out.push(k0.flexural_source === 'measured'
+    ? eq('Flexural strength (modulus of rupture) from the lab breaks (flexural_psi column):', 'f<sub>r</sub> = lab(&rho;)', `f<sub>r</sub> = <b>${g(k0.flexural_psi, 1)} psi</b>`)
+    : eq('Flexural strength (modulus of rupture) from split tensile (no flexural breaks):', 'f<sub>r</sub> = (f<sub>r</sub>/f<sub>sp</sub>) f<sub>sp</sub>', `f<sub>r</sub> = ${g(k0.flex_over_split, 2)} &times; ${g(k0.split_psi, 1)} = <b>${g(k0.flexural_psi, 1)} psi</b>`));
+  out.push(k0.fc_source === 'measured'
+    ? eq("Compressive strength from the lab data (compressive_psi column):", "f'<sub>c</sub> = lab(&rho;)", `f'<sub>c</sub> = <b>${g(k0.fc_psi, 0)} psi</b>`)
+    : eq("Compressive strength from ACI f<sub>ct</sub> = 6.7 &radic;f'<sub>c</sub> (&lambda; = 1: the lightweight effect is in the measured split strength):", "f'<sub>c</sub> = (f<sub>sp</sub> / 6.7)<sup>2</sup>", `f'<sub>c</sub> = (${g(k0.split_psi, 1)} / 6.7)<sup>2</sup> = <b>${g(k0.fc_psi, 0)} psi</b>`));
+  const kf = k0.capacity_factor;
+  out.push(table(['capacity', 'nominal', 'formula', `&times; ${kSym}`, 'design capacity, psi'], [
+    `<tr><td>Bending tension</td><td>${g(k0.flexural_psi, 1)}</td><td class="l">f<sub>r</sub></td><td>${g(kf, 4)}</td><td>${g(k0.flexural_psi * kf, 1)}</td></tr>`,
+    `<tr><td>Bending compression</td><td>${g(0.85 * k0.fc_psi, 1)}</td><td class="l">0.85 f'<sub>c</sub></td><td>${g(kf, 4)}</td><td>${g(0.85 * k0.fc_psi * kf, 1)}</td></tr>`,
+    `<tr><td>Shear (one-way)</td><td>${g(2 * Math.sqrt(k0.fc_psi), 1)}</td><td class="l">2 &lambda; &radic;f'<sub>c</sub></td><td>${g(kf, 4)}</td><td>${g(2 * Math.sqrt(k0.fc_psi) * kf, 1)}</td></tr>`,
+    `<tr><td>Knee punching</td><td>${g(k0.punching.v_nominal, 1)}</td><td class="l">${k0.punching.method === 'aci_22_6' ? 'ACI 22.6 v<sub>c</sub>' : 'ACI 14.5.5 v<sub>n</sub>'} (section 4)</td><td>${g(k0.punching_factor, 4)}</td><td>${g(k0.punching.capacity_psi, 1)}</td></tr>`]));
+
+  // ---------- 3. section ----------
+  out.push('<h3>3. Hull section and weight</h3>');
+  out.push(eq('Thin shell of thickness t along the mold-line girth of both sides plus the flat keel strip. Per station:',
+    'A = 2 y<sub>0</sub> t + 2 t &Sigma; &Delta;s<sub>k</sub>, &nbsp; z&#772; = &Sigma; A<sub>k</sub> z<sub>k</sub> / A, &nbsp; I = &Sigma; A<sub>k</sub> [(z<sub>k</sub> &minus; z&#772;)<sup>2</sup> + &Delta;z<sub>k</sub><sup>2</sup>/12] + 2 y<sub>0</sub> t z&#772;<sup>2</sup>, &nbsp; S<sub>top</sub> = I / (D &minus; z&#772;), &nbsp; S<sub>bot</sub> = I / z&#772;',
+    `t = ${g(k0.thickness_in, 3)} in, D = ${g(k0.depth_in, 2)} in (mold depth)`));
+  const d0 = (caseOf(k0.case).x_in ? caseOf(k0.case) : win.diagrams) || {};
+  const pick = (n, extra) => { const s = new Set(); for (let j = 0; j <= 20; j++) s.add(Math.round(j * (n - 1) / 20)); for (const i of extra) if (i >= 0) s.add(i); return [...s].sort((a, b) => a - b); };
+  const nearest = (xs, x) => { let b = -1, bd = Infinity; xs.forEach((v, i) => { const dd = Math.abs(v - x); if (dd < bd) { bd = dd; b = i; } }); return b; };
+  if (Array.isArray(d0.x_in) && Array.isArray(d0.zbar_in) && d0.zbar_in.length) {
+    const D = k0.depth_in;
+    out.push(table(['x, in', 'A, in&sup2;', 'z&#772;, in', 'I, in&#8308;', 'S<sub>top</sub>, in&sup3;', 'S<sub>bot</sub>, in&sup3;', 'self weight, lb/in'],
+      pick(d0.x_in.length, []).map(i => `<tr><td>${g(d0.x_in[i], 1)}</td><td>${g(d0.area_in2[i], 3)}</td><td>${g(d0.zbar_in[i], 3)}</td><td>${g(d0.inertia_in4[i], 2)}</td><td>${d0.inertia_in4[i] > 0 ? g(d0.inertia_in4[i] / (D - d0.zbar_in[i]), 2) : '-'}</td><td>${d0.zbar_in[i] > 0 ? g(d0.inertia_in4[i] / d0.zbar_in[i], 2) : '-'}</td><td>${g(d0.area_in2[i] * k0.density_pcf / 1728, 4)}</td></tr>`)));
+  }
   out.push(eq('Wall volume and hull weight (trapezoid rule over the stations, 1728 in<sup>3</sup>/ft<sup>3</sup>):',
     'V<sub>wall</sub> = &int; A(x) dx, &nbsp; W<sub>hull</sub> = V<sub>wall</sub> &rho; / 1728',
-    `W<sub>hull</sub> = ${g(k.wall_volume_in3, 1)} &times; ${g(k.density_pcf, 1)} / 1728 = <b>${g(sv.hull_weight_lb, 2)} lb</b>`));
+    `W<sub>hull</sub> = ${g(k0.wall_volume_in3, 1)} &times; ${g(k0.density_pcf, 2)} / 1728 = <b>${g(k0.service.hull_weight_lb, 2)} lb</b>`));
 
-  out.push('<h3>2. Loads and floating equilibrium</h3>');
-  out.push(eq('Each paddler kneels on a 3 in patch; weights carry the dynamic load factor:',
-    'W<sub>crew</sub> = DLF &Sigma; w<sub>j</sub>',
-    `W<sub>crew</sub> = ${g(k.dynamic_load_factor, 2)} &times; (${k.weights_lb.map(w => g(w, 0)).join(' + ')}) = ${g(sv.crew_lb, 1)} lb; &nbsp; W = ${g(sv.hull_weight_lb, 2)} + ${g(sv.crew_lb, 1)} = <b>${g(sv.weight_lb, 2)} lb</b>`));
-  out.push(eq('Draft d and trim &theta; solve force and moment balance (local waterline d + &theta;(x &minus; L/2)/L, fresh water 62.4 pcf):',
-    '&int; 62.4 A<sub>sub</sub>(x) / 1728 dx = W, &nbsp; &int; 62.4 A<sub>sub</sub>(x) (x &minus; L/2) / 1728 dx = &Sigma; W<sub>i</sub>(x<sub>i</sub> &minus; L/2)',
-    `d = <b>${g(sv.draft_in, 3)} in</b>, &theta; = <b>${g(sv.trim_in, 3)} in</b> (bow to stern difference)`));
-  out.push(eq('Freeboard is the mold depth minus the highest local waterline:',
-    'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
-    `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> &nbsp;(gate &ge; ${g(fbGate, 2)} in)`
-    + (e && !e.error && typeof e.freeboard_in === 'number' ? `<br>No crew: W = ${g(sv.hull_weight_lb, 2)} lb floats at d = ${g(e.draft_in, 3)} in, f = <b>${g(e.freeboard_in, 3)} in</b>` : '')));
-  out.push(eq('Transverse stability: centre of buoyancy KB, metacentric radius BM = I<sub>wp</sub> / V, centre of gravity KG (hull wall at its section centroids, crew at crew_cg):',
-    'KB = &int;&int; z dA dx / V, &nbsp; BM = &int; (2/3) y<sub>wl</sub><sup>3</sup> dx / V, &nbsp; KG = (&int; w<sub>hull</sub> z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W, &nbsp; GM = KB + BM &minus; KG',
-    `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> &nbsp;(z<sub>crew</sub> = ${g(sv.crew_cg_in, 1)} in, gate &ge; ${g(gmGate, 2)} in)`));
-  out.push(eq('Shear and bending moment: net load q(x) = buoyancy &minus; self weight, integrated from the bow; each knee patch subtracts in closed form:',
-    'V(x) = &int;<sub>0</sub><sup>x</sup> q dx &minus; &Sigma; P<sub>j</sub> F<sub>V</sub>(x), &nbsp; M(x) = &int;<sub>0</sub><sup>x</sup> V dx &minus; &Sigma; P<sub>j</sub> F<sub>M</sub>(x), &nbsp; V(L) = M(L) = 0',
-    asd ? 'Stress checks use these service loads.' : `Stress checks re-solve with self weight &times; ${g(k.dead_factor, 1)} and crew &times; ${g(k.live_factor, 1)}: W = ${g(st.weight_lb, 1)} lb, d = ${g(st.draft_in, 3)} in.`));
+  // ---------- 4. every load case ----------
+  calcs.forEach((tr, ci) => {
+    const sec = [`<h2 style="margin-top:0">4.${ci + 1} Load case ${esc(tr.case || (P.load_case[ci] || {}).name || '')}.</h2>`];
+    if (!tr || tr.error || !tr.service) { out.push(`<div class="page">${sec[0]}<div class="note">Not worked: ${esc(tr && tr.error || 'no trace')}</div></div>`); return; }
+    const k = tr, q = caseOf(k.case), lc = lcOf(k.case), sv = k.service, st = k.strength;
+    const pos = lc.positions || [];
+    const order = q.crew_order || [];
+    sec.push(`<div class="muted">Crew ${k.weights_lb.length} paddlers, seats ${esc(q.seat_source || '')}${pos.some(v => v > 0) ? ' (some pinned)' : ''}; the worked checks below are at the worst seat sample, knees ${k.seats_in.map(x => g(x, 1)).join(', ')} in.</div>`);
+    sec.push(table(['paddler', 'weight, lb', 'pinned seat', 'seat, bow to stern', 'knee x nominal, in', 'knee x worst sample, in'],
+      k.weights_lb.map((w, j) => `<tr><td>${j + 1}</td><td>${g(w, 1)}</td><td>${pos[j] ? pos[j] : 'auto'}</td><td>${order.indexOf(j) >= 0 ? order.indexOf(j) + 1 : '-'}</td><td>${g((q.seats_in || [])[j], 1)}</td><td>${g(k.seats_in[j], 1)}</td></tr>`)));
+    sec.push('<h3>Floating equilibrium</h3>');
+    const sumW = k.weights_lb.reduce((a, b) => a + b, 0);
+    sec.push(eq('Weight floated. Service W<sub>s</sub> (freeboard, GM): the real crew. Strength W<sub>u</sub> (stresses): crew &times; DLF, with the load factors of the governing combination:',
+      `W<sub>s</sub> = W<sub>hull</sub> + &Sigma; w<sub>j</sub>, &nbsp; W<sub>u</sub> = ${asd ? '' : '&gamma;<sub>D</sub> '}W<sub>hull</sub> + ${asd ? '' : '&gamma;<sub>L</sub> '}DLF &Sigma; w<sub>j</sub>`,
+      `W<sub>s</sub> = ${g(sv.hull_weight_lb, 2)} + (${k.weights_lb.map(w => g(w, 0)).join(' + ')}) = <b>${g(sv.weight_lb, 2)} lb</b>; &nbsp; W<sub>u</sub> = ${asd ? '' : g(k.dead_factor, 2) + ' &times; '}${g(sv.hull_weight_lb, 2)} + ${asd ? '' : g(k.live_factor, 2) + ' &times; '}${g(k.dynamic_load_factor, 2)} &times; ${g(sumW, 0)} = <b>${g(st.weight_lb, 2)} lb</b>`));
+    sec.push(eq('Draft d and trim &theta; from force and moment balance (local waterline d + &theta;(x &minus; L/2)/L, buoyancy 62.4 A<sub>sub</sub>/1728 per inch):',
+      '&int; b(x) dx = W, &nbsp; &int; b(x) (x &minus; L/2) dx = &Sigma; W<sub>i</sub>(x<sub>i</sub> &minus; L/2)',
+      `service: d = <b>${g(sv.draft_in, 3)} in</b>, &theta; = ${g(sv.trim_in, 3)} in${asd ? '' : `; factored: d = ${g(st.draft_in, 3)} in, &theta; = ${g(st.trim_in, 3)} in`}`));
+    sec.push(eq('Freeboard = mold depth minus the highest local waterline:', 'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
+      `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(sv.freeboard_in >= G.freeboard_min_in)}`));
+    sec.push(eq('Transverse stability:', 'GM = KB + BM &minus; KG, &nbsp; BM = I<sub>wp</sub> / V, &nbsp; KG = (&int; w z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W',
+      `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> at this sample; worst sample ${g(q.gm_in, 3)} in ${q.gm_in >= ST.gm_min_in ? '&ge;' : '&lt;'} ${g(ST.gm_min_in, 2)} in ${ok(q.gm_in >= ST.gm_min_in)}`));
+    // loads along the hull
+    if (Array.isArray(q.x_in) && Array.isArray(q.buoyancy_lbpin) && q.buoyancy_lbpin.length) {
+      const x = q.x_in, n = x.length, crit = (q.verdict ? q.verdict.checks : []).filter(z => z.x_in != null).map(z => nearest(x, z.x_in));
+      const B = trapz(q.buoyancy_lbpin, x), Wd = trapz(q.self_weight_lbpin, x);
+      const vmax = Math.max(...q.shear_lb.map(Math.abs)), mmax = Math.max(...q.moment_lbin.map(Math.abs));
+      sec.push('<h3>Loads, shear and moment along the hull</h3>');
+      sec.push(eq('Net distributed load q = buoyancy b &minus; self weight w, integrated from the bow; each knee patch P<sub>j</sub> (3 in wide) subtracts in closed form:',
+        'V(x) = &int;<sub>0</sub><sup>x</sup> q dx &minus; &Sigma; P<sub>j</sub> F<sub>V</sub>(x), &nbsp; M(x) = &int;<sub>0</sub><sup>x</sup> V dx, &nbsp; equilibrium &rArr; V(L) = M(L) = 0',
+        `Nominal seats, ${asd ? 'service' : 'factored'} loads: &int; b dx = ${g(B, 2)} lb = &int; w dx + &Sigma; P = ${g(Wd, 2)} + ${g(B - Wd, 2)} lb; `
+        + `closure V(L) = ${g(q.shear_lb[n - 1], 4)} lb (${g(100 * Math.abs(q.shear_lb[n - 1]) / vmax, 4)}% of max |V| ${g(vmax, 1)}), M(L) = ${g(q.moment_lbin[n - 1], 3)} lb&middot;in (${g(100 * Math.abs(q.moment_lbin[n - 1]) / mmax, 4)}% of max |M| ${g(mmax, 0)})`));
+      const dcAt = i => Math.max(q.dc_bending_tension[i] || 0, q.dc_bending_compression[i] || 0, q.dc_shear[i] || 0, q.dc_biaxial[i] || 0);
+      sec.push(table(['x, in', 'w, lb/in', 'b, lb/in', 'q, lb/in', 'V, lb', 'M, lb&middot;in', '&sigma;<sub>t</sub>, psi', '&sigma;<sub>c</sub>, psi', '&tau;, psi', 'D/C beam'],
+        pick(n, crit).map(i => `<tr class="${crit.includes(i) ? 'gov' : ''}"><td>${g(x[i], 1)}</td><td>${g(q.self_weight_lbpin[i], 4)}</td><td>${g(q.buoyancy_lbpin[i], 4)}</td><td>${g(q.buoyancy_lbpin[i] - q.self_weight_lbpin[i], 4)}</td><td>${g(q.shear_lb[i], 2)}</td><td>${g(q.moment_lbin[i], 1)}</td><td>${g(q.tension_psi[i], 1)}</td><td>${g(q.compression_psi[i], 1)}</td><td>${g(q.shear_psi[i], 2)}</td><td>${g(dcAt(i), 3)}</td></tr>`)));
+      sec.push(`<div class="muted">Bold rows: the stations where a check peaks. Beam D/C = max(bending tension, compression, shear, biaxial) at that station; the largest over all ${n} stations is ${g(Math.max(...x.map((_, i) => dcAt(i))), 3)}.</div>`);
+    }
+    // worked checks
+    sec.push('<h3>Checks at the critical stations (worst seat sample)</h3>');
+    const fib = (name, b, capForm, capNum) => b ? eq(`${name} at x = ${g(b.x_in, 1)} in (${b.fibre} fibre; A = ${g(b.area_in2, 3)} in<sup>2</sup>, z&#772; = ${g(b.zbar_in, 3)} in, c = ${b.fibre === 'bottom' ? 'z&#772;' : 'D &minus; z&#772;'}):`,
+      `&sigma; = |M| c / I &le; ${capForm}`,
+      `&sigma; = |${g(b.moment_lbin, 1)}| &times; ${g(b.c_in, 3)} / ${g(b.inertia_in4, 2)} = ${g(b.stress_psi, 1)} psi &le; ${capNum} = ${g(b.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(b.dc, 3)}</b> ${ok(b.dc <= dcv)}`) : '';
+    sec.push(fib('Bending tension', k.bending_tension, `f<sub>r</sub> &times; ${kSym}`, `${g(k.flexural_psi, 1)} &times; ${g(k.capacity_factor, 4)}`));
+    sec.push(fib('Bending compression', k.bending_compression, `0.85 f'<sub>c</sub> &times; ${kSym}`, `0.85 &times; ${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)}`));
+    const sh = k.shear;
+    if (sh) sec.push(eq(`Shear at x = ${g(sh.x_in, 1)} in (two walls, b = 2t; Q = first moment of the shell below z&#772; = ${g(sh.zbar_in, 3)} in):`,
+      `&tau; = |V| Q / (I b) &le; 2 &lambda; &radic;f'<sub>c</sub> &times; ${kSym}`,
+      `&tau; = |${g(sh.shear_lb, 2)}| &times; ${g(sh.q_in3, 3)} / (${g(sh.inertia_in4, 2)} &times; ${g(sh.b_in, 3)}) = ${g(sh.stress_psi, 2)} psi &le; 2 &times; &radic;${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)} = ${g(sh.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(sh.dc, 3)}</b> ${ok(sh.dc <= dcv)}`));
+    const pu = k.punching, aci = pu.method === 'aci_22_6';
+    const pLoad = pu.knees === 1 ? `P = ${g(pu.paddler_lb, 1)} lb (whole paddler on one knee)`
+      : pu.merged ? `P = ${g(pu.paddler_lb, 1)} lb (critical circles overlap: whole paddler on the merged perimeter)`
+      : `P = ${g(pu.knee_split, 2)} &times; ${g(pu.paddler_lb, 1)} = ${g(pu.load_lb, 1)} lb on the heavier knee`;
+    sec.push(eq(`Knee punching (${aci ? 'ACI 318-19 22.6, two-way shear' : 'ACI 318-19 14.5.5, plain concrete'}), heaviest paddler &times; DLF${asd ? '' : ' &times; &gamma;<sub>L</sub>'} = ${g(pu.paddler_lb, 1)} lb, round patch with pad, &beta; = 1:`,
+      `d<sub>load</sub> = knee + 2 pad, &nbsp; ${aci ? 'd = (d/t) t' : 'h = t'}, &nbsp; b<sub>0</sub> = &pi;(d<sub>load</sub> + ${aci ? 'd' : 'h'}), &nbsp; v<sub>u</sub> = P / (b<sub>0</sub> ${aci ? 'd' : 'h'})`,
+      `d<sub>load</sub> = ${g(pu.knee_patch_in, 2)} + 2 &times; ${g(pu.pad_in, 3)} = ${g(pu.d_load_in, 3)} in; ${aci ? `d = ${g(pu.depth_over_t, 3)} &times; ${g(k.thickness_in, 3)}` : 'h'} = ${g(pu.depth_in, 4)} in; b<sub>0</sub> = ${g(pu.b0_in, 3)} in<br>${pLoad}; v<sub>u</sub> = ${g(pu.load_lb, 1)} / (${g(pu.b0_in, 3)} &times; ${g(pu.depth_in, 4)}) = <b>${g(pu.v_u, 1)} psi</b>`));
+    if (aci) {
+      const ls = Math.min(1, Math.sqrt(2 / (1 + pu.depth_in / 10)));
+      sec.push(eq('Punching capacity (Table 22.6.5.2; size effect &lambda;<sub>s</sub> = &radic;(2 / (1 + d/10)) &le; 1):',
+        `v<sub>c</sub> = min(4, 2 + 4/&beta;, 2 + 40 d / b<sub>0</sub>) &lambda;<sub>s</sub> &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>c</sub> &times; ${asd ? '1/FS' : '&phi; (0.75)'}`,
+        `&lambda;<sub>s</sub> = ${g(ls, 4)}; v<sub>c</sub> = min(4, 6, ${g(2 + 40 * pu.depth_in / pu.b0_in, 3)}) &times; ${g(ls, 4)} &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; capacity = ${g(pu.v_nominal, 1)} &times; ${g(k.punching_factor, 4)} = ${g(pu.capacity_psi, 1)} psi; D/C = ${g(pu.v_u, 1)} / ${g(pu.capacity_psi, 1)} = <b>${g(pu.dc, 3)}</b> ${ok(pu.dc <= dcv)}`));
+    } else {
+      sec.push(eq('Punching capacity (Table 14.5.5.1):', `v<sub>n</sub> = min((4/3)(1 + 2/&beta;), 8/3) &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>n</sub> &times; ${kSym}`,
+        `v<sub>n</sub> = (8/3) &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; capacity = ${g(pu.capacity_psi, 1)} psi; D/C = <b>${g(pu.dc, 3)}</b> ${ok(pu.dc <= dcv)}`));
+    }
+    // every paddler: v_u is proportional to the paddler's weight (same perimeter and depth)
+    const share = pu.paddler_lb > 0 ? pu.load_lb / pu.paddler_lb : 0, lf = pu.paddler_lb / Math.max(...k.weights_lb);
+    sec.push(table(['paddler', 'weight, lb', 'factored, lb', 'on the knee, lb', 'v<sub>u</sub>, psi', 'capacity, psi', 'D/C', ''],
+      k.weights_lb.map((w, j) => { const pf = w * lf, vu = pf * share / (pu.b0_in * pu.depth_in), dc = vu / pu.capacity_psi;
+        return `<tr><td>${j + 1}</td><td>${g(w, 1)}</td><td>${g(pf, 1)}</td><td>${g(pf * share, 1)}</td><td>${g(vu, 1)}</td><td>${g(pu.capacity_psi, 1)}</td><td>${g(dc, 3)}</td><td>${ok(dc <= dcv)}</td></tr>`; })));
+    const bx = k.biaxial;
+    if (bx) sec.push(eq(`Biaxial (Kupfer-Gerstle) at x = ${g(bx.x_in, 1)} in: fibre stress (tension ${g(bx.tension_psi, 1)}, compression ${g(bx.compression_psi, 1)} psi), transverse &sigma;<sub>y</sub> = ${g(bx.transverse_psi, 1)} psi, shear &tau; = ${g(bx.shear_psi, 2)} psi; worst of the four sign combinations:`,
+      `&sigma;<sub>1,2</sub> = (&sigma;<sub>x</sub> + &sigma;<sub>y</sub>)/2 &plusmn; &radic;(((&sigma;<sub>x</sub> &minus; &sigma;<sub>y</sub>)/2)<sup>2</sup> + &tau;<sup>2</sup>) , &nbsp; &sigma;<sub>1</sub> &le; f<sub>t</sub> (1 &minus; 0.8 |min(&sigma;<sub>2</sub>, 0)| / f'<sub>c</sub>), f<sub>t</sub>, f'<sub>c</sub> &times; ${kSym}`,
+      `&sigma;<sub>x</sub> = ${neg(bx.sigma_x_psi)}, &sigma;<sub>y</sub> = ${neg(bx.sigma_y_psi)} &rarr; &sigma;<sub>1</sub> = ${g(bx.sigma_1_psi, 2)}, &sigma;<sub>2</sub> = ${g(bx.sigma_2_psi, 2)} psi; capacity = ${g(bx.ft_psi, 1)} &times; (1 &minus; 0.8 &times; ${g(Math.abs(Math.min(bx.sigma_2_psi, 0)), 2)} / ${g(bx.fc_psi, 1)}) = ${g(bx.capacity_psi, 1)} psi; D/C = <b>${g(bx.dc, 3)}</b> ${ok(bx.dc <= dcv)}`));
+    const vd = q.verdict;
+    if (vd) sec.push(`<div class="note"><b>${esc(k.case)}:</b> largest D/C ${g(vd.dc, 3)} (${esc(CHECK[vd.governing_check] || vd.governing_check)}) &le; ${g(dcv, 2)}, freeboard ${g(q.freeboard_in, 2)} in, GM ${g(q.gm_in, 2)} in: ${ok(vd.dc <= dcv && q.freeboard_in >= G.freeboard_min_in && q.gm_in >= ST.gm_min_in)}</div>`);
+    out.push(`<div class="page">${sec.join('')}</div>`);
+  });
 
-  out.push('<h3>3. Material strength</h3>');
-  out.push(eq('Split tensile strength from the lab fit (linear in density):',
-    'f<sub>sp</sub> = a &rho; + b',
-    `f<sub>sp</sub> = ${g(k.split_slope_psi_per_pcf, 3)} &times; ${g(k.density_pcf, 1)} ${k.split_intercept_psi < 0 ? '&minus;' : '+'} ${g(Math.abs(k.split_intercept_psi), 1)} = <b>${g(k.split_psi, 1)} psi</b>`));
-  out.push(k.flexural_source === 'measured'
-    ? eq('Flexural strength (modulus of rupture), measured fit:', 'f<sub>r</sub> = fit(&rho;)', `f<sub>r</sub> = <b>${g(k.flexural_psi, 1)} psi</b>`)
-    : eq('Flexural strength (modulus of rupture) from split tensile:', 'f<sub>r</sub> = (f<sub>r</sub>/f<sub>sp</sub>) f<sub>sp</sub>', `f<sub>r</sub> = ${g(k.flex_over_split, 2)} &times; ${g(k.split_psi, 1)} = <b>${g(k.flexural_psi, 1)} psi</b>`));
-  out.push(k.fc_source === 'measured'
-    ? eq("Compressive strength, measured fit:", "f'<sub>c</sub> = fit(&rho;)", `f'<sub>c</sub> = <b>${g(k.fc_psi, 0)} psi</b>`)
-    : eq("Compressive strength from ACI f<sub>ct</sub> = 6.7 &radic;f'<sub>c</sub> (lightweight effect already in the data, &lambda; = 1):", "f'<sub>c</sub> = (f<sub>sp</sub> / 6.7)<sup>2</sup>", `f'<sub>c</sub> = (${g(k.split_psi, 1)} / 6.7)<sup>2</sup> = <b>${g(k.fc_psi, 0)} psi</b>`));
-
-  out.push('<h3>4. Checks</h3>');
-  const fib = (name, b, capForm, capNum) => b ? eq(`${name} at x = ${g(b.x_in, 1)} in (${b.fibre} fibre; A = ${g(b.area_in2, 3)} in<sup>2</sup>, z&#772; = ${g(b.zbar_in, 3)} in, c = ${b.fibre === 'bottom' ? 'z&#772;' : 'D &minus; z&#772;'}):`,
-    `&sigma; = |M| c / I, &nbsp; capacity = ${capForm}`,
-    `&sigma; = |${g(b.moment_lbin, 1)}| &times; ${g(b.c_in, 3)} / ${g(b.inertia_in4, 2)} = ${g(b.stress_psi, 1)} psi; &nbsp; capacity = ${capNum} = ${g(b.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(b.dc, 3)}</b>`) : '';
-  out.push(fib('Bending tension', k.bending_tension, `f<sub>r</sub> &times; ${kSym}`, `${g(k.flexural_psi, 1)} &times; ${g(k.capacity_factor, 4)}`));
-  out.push(fib('Bending compression', k.bending_compression, `0.85 f'<sub>c</sub> &times; ${kSym}`, `0.85 &times; ${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)}`));
-  const sh = k.shear;
-  if (sh) out.push(eq(`Shear at x = ${g(sh.x_in, 1)} in (two walls, b = 2t; Q = first moment of the shell below z&#772; = ${g(sh.zbar_in, 3)} in; ACI one-way shear):`,
-    `&tau; = |V| Q / (I b), &nbsp; capacity = 2 &lambda; &radic;f'<sub>c</sub> &times; ${kSym}`,
-    `&tau; = |${g(sh.shear_lb, 2)}| &times; ${g(sh.q_in3, 3)} / (${g(sh.inertia_in4, 2)} &times; ${g(sh.b_in, 3)}) = ${g(sh.stress_psi, 2)} psi; &nbsp; capacity = 2 &times; &radic;${g(k.fc_psi, 0)} &times; ${g(k.capacity_factor, 4)} = ${g(sh.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(sh.dc, 3)}</b>`));
-  const pu = k.punching, aci = pu.method === 'aci_22_6';
-  const pLoad = pu.knees === 1 ? `P = ${g(pu.paddler_lb, 1)} lb (whole paddler on one knee)`
-    : pu.merged ? `P = ${g(pu.paddler_lb, 1)} lb (critical circles overlap: whole paddler on the merged perimeter b<sub>0</sub> = 2 s + &pi;(d<sub>load</sub> + d))`
-    : `P = ${g(pu.knee_split, 2)} &times; ${g(pu.paddler_lb, 1)} = ${g(pu.load_lb, 1)} lb per knee`;
-  out.push(eq(`Knee punching (${aci ? 'ACI 318-19 22.6, two-way shear' : 'ACI 318-19 14.5.5, plain concrete'}). Heaviest paddler &times; DLF${asd ? '' : ' &times; live factor'} = ${g(pu.paddler_lb, 1)} lb; round knee patch with pad, &beta; = 1:`,
-    `d<sub>load</sub> = knee + 2 pad, &nbsp; ${aci ? 'd = (d/t) t' : 'h = t'}, &nbsp; b<sub>0</sub> = &pi;(d<sub>load</sub> + ${aci ? 'd' : 'h'}), &nbsp; v<sub>u</sub> = P / (b<sub>0</sub> ${aci ? 'd' : 'h'})`,
-    `d<sub>load</sub> = ${g(pu.knee_patch_in, 2)} + 2 &times; ${g(pu.pad_in, 3)} = ${g(pu.d_load_in, 3)} in; &nbsp; ${aci ? `d = ${g(pu.depth_over_t, 3)} &times; ${g(k.thickness_in, 3)}` : 'h'} = ${g(pu.depth_in, 4)} in; &nbsp; b<sub>0</sub> = ${g(pu.b0_in, 3)} in<br>${pLoad}; &nbsp; v<sub>u</sub> = ${g(pu.load_lb, 1)} / (${g(pu.b0_in, 3)} &times; ${g(pu.depth_in, 4)}) = <b>${g(pu.v_u, 1)} psi</b>`));
-  if (aci) {
-    const ls = Math.min(1, Math.sqrt(2 / (1 + pu.depth_in / 10)));
-    out.push(eq('Punching capacity (Table 22.6.5.2, size effect &lambda;<sub>s</sub> = &radic;(2 / (1 + d/10)) &le; 1):',
-      `v<sub>c</sub> = min(4, 2 + 4/&beta;, 2 + 40 d / b<sub>0</sub>) &lambda;<sub>s</sub> &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>c</sub> &times; ${asd ? '1/FS' : '&phi; (0.75)'}`,
-      `&lambda;<sub>s</sub> = ${g(ls, 4)}; &nbsp; v<sub>c</sub> = min(4, 6, ${g(2 + 40 * pu.depth_in / pu.b0_in, 3)}) &times; ${g(ls, 4)} &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; &nbsp; capacity = ${g(pu.v_nominal, 1)} &times; ${g(k.punching_factor, 4)} = ${g(pu.capacity_psi, 1)} psi`
-      + `<br>D/C = ${g(pu.v_u, 1)} / ${g(pu.capacity_psi, 1)} = <b>${g(pu.dc, 3)}</b>`));
-  } else {
-    out.push(eq('Punching capacity (Table 14.5.5.1):',
-      `v<sub>n</sub> = min((4/3)(1 + 2/&beta;), 8/3) &lambda; &radic;f'<sub>c</sub>, &nbsp; capacity = v<sub>n</sub> &times; ${kSym}`,
-      `v<sub>n</sub> = (8/3) &times; &radic;${g(k.fc_psi, 0)} = ${g(pu.v_nominal, 1)} psi; &nbsp; capacity = ${g(pu.capacity_psi, 1)} psi; &nbsp; D/C = <b>${g(pu.dc, 3)}</b>`));
-  }
-  const bx = k.biaxial;
-  if (bx) out.push(eq(`Biaxial (Kupfer-Gerstle) at x = ${g(bx.x_in, 1)} in: longitudinal fibre stress (tension ${g(bx.tension_psi, 1)}, compression ${g(bx.compression_psi, 1)} psi), transverse turning stress &sigma;<sub>y</sub> = ${g(bx.transverse_psi, 1)} psi at both signs, peak shear &tau; = ${g(bx.shear_psi, 2)} psi; worst of the four combinations:`,
-    `&sigma;<sub>1,2</sub> = (&sigma;<sub>x</sub> + &sigma;<sub>y</sub>)/2 &plusmn; &radic;(((&sigma;<sub>x</sub> &minus; &sigma;<sub>y</sub>)/2)<sup>2</sup> + &tau;<sup>2</sup>), &nbsp; capacity = f<sub>t</sub> (1 &minus; 0.8 |min(&sigma;<sub>2</sub>, 0)| / f'<sub>c</sub>), &nbsp; f<sub>t</sub>, f'<sub>c</sub> &times; ${kSym}`,
-    `&sigma;<sub>x</sub> = ${neg(bx.sigma_x_psi)}, &sigma;<sub>y</sub> = ${neg(bx.sigma_y_psi)} &rarr; &sigma;<sub>1</sub> = ${g(bx.sigma_1_psi, 2)}, &sigma;<sub>2</sub> = ${g(bx.sigma_2_psi, 2)} psi; &nbsp; capacity = ${g(bx.ft_psi, 1)} &times; (1 &minus; 0.8 &times; ${g(Math.abs(Math.min(bx.sigma_2_psi, 0)), 2)} / ${g(bx.fc_psi, 1)}) = ${g(bx.capacity_psi, 1)} psi; &nbsp; D/C = max(&sigma;<sub>1</sub>, 0) / capacity = <b>${g(bx.dc, 3)}</b>`));
-  out.push(eq('Governing D/C is the largest over all checks, load cases and seat samples:', 'D/C = max(D/C<sub>i</sub>)',
-    `D/C = <b>${g(c.verdict && c.verdict.dc, 3)}</b> at search resolution (gate &le; ${g(dcGate, 2)}), ${g(win.verify_dc, 3)} at ${win.verify_stations} stations`));
-
-  out.push('<h3>5. Verification and flotation</h3>');
-  out.push(eq('Station convergence: the winner is re-run at n, 2n &minus; 1 and 4n &minus; 3 stations (spacing halves); per (case, check) series D<sub>1</sub>, D<sub>2</sub>, D<sub>3</sub>, Richardson extrapolation:',
+  // ---------- 5. verification, empty canoe, stands, flotation ----------
+  const tail = ['<h2 style="margin-top:0">5. Verification, empty canoe, stands and flotation.</h2>'];
+  tail.push(eq('Station convergence: the winner is re-run at n, 2n &minus; 1 and 4n &minus; 3 stations (spacing halves); per (case, check) series D<sub>1</sub>, D<sub>2</sub>, D<sub>3</sub>, Richardson extrapolation:',
     'p = log<sub>2</sub>[(D<sub>2</sub> &minus; D<sub>1</sub>) / (D<sub>3</sub> &minus; D<sub>2</sub>)], &nbsp; D<sub>&infin;</sub> = D<sub>3</sub> + (D<sub>3</sub> &minus; D<sub>2</sub>) / (2<sup>p</sup> &minus; 1), &nbsp; verified: max(D<sub>&infin;</sub>, D<sub>3</sub>) &le; dc_verify',
-    win.convergence && win.convergence.extrapolated != null
-      ? `Governing series ${esc(win.convergence.governing || '')}: ${win.convergence.order != null ? `p = ${g(win.convergence.order, 2)}, D<sub>&infin;</sub>` : `already converged (D<sub>2</sub> = D<sub>3</sub>), D<sub>&infin;</sub> = D<sub>3</sub>`} = <b>${g(win.convergence.extrapolated, 4)}</b> (gate &le; ${g(result.params.gates.dc_verify, 2)})`
-      : `Series irregular: the ${win.verify_stations}-station D/C ${g(win.verify_dc, 3)} is gated instead.`));
+    cv && cv.extrapolated != null
+      ? `D = ${cv.dc.map(z => g(z, 4)).join(', ')} at ${cv.stations.join(', ')} stations; governing series ${esc(cv.governing || '')}: ${cv.order != null ? `p = ${g(cv.order, 2)}, D<sub>&infin;</sub>` : 'already converged, D<sub>&infin;</sub> = D<sub>3</sub>'} = <b>${g(cv.extrapolated, 4)}</b> &le; ${g(dcv, 2)} ${ok(Math.max(cv.extrapolated, cv.dc[2]) <= dcv)}`
+      : `Series irregular: the ${win.verify_stations}-station D/C ${g(win.verify_dc, 3)} is gated instead ${ok(win.verify_dc <= dcv)}.`));
+  if (e && !e.error) tail.push(eq('Empty canoe (no crew) floats on its own weight:', 'f<sub>0</sub> = D &minus; max waterline, &nbsp; GM<sub>0</sub> = KB + BM &minus; KG',
+    `W = ${g(k0.service.hull_weight_lb, 2)} lb: d = ${g(e.draft_in, 3)} in, f<sub>0</sub> = <b>${g(e.freeboard_in, 3)} in</b>${typeof e.gm_in === 'number' ? `, GM<sub>0</sub> = <b>${g(e.gm_in, 3)} in</b>${ST.gm_empty_min_in != null ? ` &ge; ${g(ST.gm_empty_min_in, 2)} in ${ok(e.gm_in >= ST.gm_empty_min_in)}` : ''}` : ''}`));
   const ss = win.stands;
   if (ss && ss.x_in) {
-    const lo = ss.local, lc = ss.verdict.checks;
-    out.push('<h3>6. Stands (empty hull, after the search)</h3>');
-    out.push(eq(`Self weight w(x) = A(x) &rho; / 1728 &times; ${g(ss.dead_factor, 2)}; two ${g(ss.pad_in, 1)} in pads centred x<sub>s</sub> from each end (a = x<sub>s</sub>, b = L &minus; x<sub>s</sub>); reactions from force and moment balance about the weight centroid x<sub>g</sub>:`,
+    const lo = ss.local, lcs = ss.verdict.checks;
+    tail.push('<h3>Stands (empty hull, after the search)</h3>');
+    tail.push(eq(`Self weight w(x) = A(x) &rho; / 1728 &times; ${g(ss.dead_factor, 2)}; two ${g(ss.pad_in, 1)} in pads centred x<sub>s</sub> from each end (a = x<sub>s</sub>, b = L &minus; x<sub>s</sub>); reactions from force and moment balance about the weight centroid x<sub>g</sub>:`,
       'R<sub>1</sub> = W (b &minus; x<sub>g</sub>) / (b &minus; a), &nbsp; R<sub>2</sub> = W (x<sub>g</sub> &minus; a) / (b &minus; a), &nbsp; V(x) = &minus;&int;<sub>0</sub><sup>x</sup> w dx + &Sigma; R<sub>j</sub> F<sub>V</sub>(x), &nbsp; M(x) = &int;<sub>0</sub><sup>x</sup> V dx',
-      `W = ${g(ss.factored_weight_lb, 2)} lb; x<sub>s</sub> = <b>${g(ss.x_stand_in, 1)} in</b> (${g(ss.x_over_l, 3)} L; uniform weight would give 0.207 L), spacing ${g(ss.spacing_in, 1)} in; R = ${g(ss.reactions_lb[0], 2)} / ${g(ss.reactions_lb[1], 2)} lb;`
+      `W = ${g(ss.factored_weight_lb, 2)} lb; x<sub>s</sub> = <b>${g(ss.x_stand_in, 1)} in</b> (${g(ss.x_over_l, 3)} L), spacing ${g(ss.spacing_in, 1)} in; R = ${g(ss.reactions_lb[0], 2)} / ${g(ss.reactions_lb[1], 2)} lb (sum ${g(ss.reactions_lb[0] + ss.reactions_lb[1], 2)} = W);`
       + ` M<sub>sag</sub> = ${typeof ss.sag_max_lbin === 'number' ? `${g(ss.sag_max_lbin, 1)} lb&middot;in at ${g(ss.x_sag_in, 1)} in` : 'none'}, M<sub>hog</sub> = ${typeof ss.hog_max_lbin === 'number' ? `${g(ss.hog_max_lbin, 1)} lb&middot;in at ${g(ss.x_hog_in, 1)} in` : 'none'}`
       + `${ss.orientation === 'inverted' ? '<br>Inverted: the gunwale is the lower fibre, so the checks use &minus;M.' : ''}`));
-    out.push(eq('Beam checks use the same formulas and capacities as section 4 on this V(x), M(x) (no turning):', 'D/C<sub>beam</sub> = max(bending tension, compression, shear, biaxial)',
-      lc.filter(q => !q.name.startsWith('stand_')).map(q => `${esc(q.name)} ${g(q.demand, 1)} / ${g(q.capacity, 1)} = ${g(q.dc, 3)}`).join('; ')));
-    out.push(lo.name === 'stand_punching'
+    tail.push(table(['check', 'demand psi', 'capacity psi', 'D/C', 'at x, in', ''], lcs.map(z => `<tr><td>${esc(z.name)}</td><td>${g(z.demand, 2)}</td><td>${g(z.capacity, 1)}</td><td>${g(z.dc, 3)}</td><td>${z.x_in != null ? g(z.x_in, 1) : '-'}</td><td>${ok(z.dc <= dcv)}</td></tr>`)));
+    tail.push(lo.name === 'stand_punching'
       ? eq(`Pad punching (ACI 318-19 22.6), heavier reaction on a ${g(lo.pad_in, 1)} in square pad, &beta; = 1:`,
-        'b<sub>0</sub> = 4 (c + d), &nbsp; v<sub>u</sub> = R / (b<sub>0</sub> d), &nbsp; capacity = v<sub>c</sub> &times; &phi;',
-        `b<sub>0</sub> = 4 (${g(lo.pad_in, 2)} + ${g(lo.depth_in, 4)}) = ${g(lo.b0_in, 3)} in; v<sub>u</sub> = ${g(lo.load_lb, 2)} / (${g(lo.b0_in, 3)} &times; ${g(lo.depth_in, 4)}) = ${g(lo.demand_psi, 2)} psi; v<sub>c</sub> = ${g(lo.nominal_psi, 1)} psi &times; ${g(lo.factor, 3)} = ${g(lo.capacity_psi, 1)} psi; D/C = <b>${g(lo.dc, 3)}</b>`)
+        'b<sub>0</sub> = 4 (c + d), &nbsp; v<sub>u</sub> = R / (b<sub>0</sub> d) &le; v<sub>c</sub> &times; &phi;',
+        `b<sub>0</sub> = 4 (${g(lo.pad_in, 2)} + ${g(lo.depth_in, 4)}) = ${g(lo.b0_in, 3)} in; v<sub>u</sub> = ${g(lo.load_lb, 2)} / (${g(lo.b0_in, 3)} &times; ${g(lo.depth_in, 4)}) = ${g(lo.demand_psi, 2)} psi &le; ${g(lo.nominal_psi, 1)} &times; ${g(lo.factor, 3)} = ${g(lo.capacity_psi, 1)} psi; D/C = <b>${g(lo.dc, 3)}</b>`)
       : eq('Gunwale bearing (ACI 318-19 22.8.3.2), heavier reaction on the two gunwale edges:',
-        "A<sub>1</sub> = 2 t c, &nbsp; f<sub>b</sub> = R / A<sub>1</sub>, &nbsp; capacity = 0.85 f'<sub>c</sub> &times; &phi;",
-        `A<sub>1</sub> = ${g(lo.area_in2, 3)} in<sup>2</sup>; f<sub>b</sub> = ${g(lo.demand_psi, 2)} psi; capacity = ${g(lo.nominal_psi, 1)} &times; ${g(lo.factor, 3)} = ${g(lo.capacity_psi, 1)} psi; D/C = <b>${g(lo.dc, 3)}</b>`));
-    out.push(eq('Stands D/C, gated at dc_verify (a failure marks the winner unverified):', 'D/C<sub>stands</sub> = max(D/C<sub>beam</sub>, D/C<sub>pad</sub>)',
-      `D/C = <b>${g(ss.verdict.dc, 3)}</b> (${esc(ss.verdict.governing_check)}), gate &le; ${g(result.params.gates.dc_verify, 2)}`));
+        "A<sub>1</sub> = 2 t c, &nbsp; f<sub>b</sub> = R / A<sub>1</sub> &le; 0.85 f'<sub>c</sub> &times; &phi;",
+        `A<sub>1</sub> = ${g(lo.area_in2, 3)} in<sup>2</sup>; f<sub>b</sub> = ${g(lo.demand_psi, 2)} psi &le; ${g(lo.nominal_psi, 1)} &times; ${g(lo.factor, 3)} = ${g(lo.capacity_psi, 1)} psi; D/C = <b>${g(lo.dc, 3)}</b>`));
   }
-  const fl = k.flotation;
-  if (fl) out.push(eq('Swamped flotation: submerged wall plus sealed bow and stern air pockets of equal length l must float the bare hull with a reserve:',
-    '(V<sub>wall</sub> + V<sub>pockets</sub>(l)) &times; 62.4 / 1728 &ge; SF &times; W<sub>hull</sub>, &nbsp; V<sub>pockets</sub> needed = SF W<sub>hull</sub> 1728 / 62.4 &minus; V<sub>wall</sub>',
-    `V<sub>pockets</sub> = ${g(k.swamp_factor, 2)} &times; ${g(fl.weight_lb, 2)} &times; 1728 / 62.4 &minus; ${g(fl.wall_in3, 1)} = ${g(fl.pocket_in3, 1)} in<sup>3</sup> &rarr; l = <b>${g(fl.pocket_len_in, 1)} in</b> each end`));
+  const fl = k0.flotation;
+  if (fl) tail.push(eq('Swamped flotation: submerged wall plus sealed bow and stern air pockets of equal length l must float the bare hull with a reserve:',
+    '(V<sub>wall</sub> + V<sub>pockets</sub>(l)) &times; 62.4 / 1728 &ge; SF &times; W<sub>hull</sub>',
+    `V<sub>pockets</sub> = ${g(k0.swamp_factor, 2)} &times; ${g(fl.weight_lb, 2)} &times; 1728 / 62.4 &minus; ${g(fl.wall_in3, 1)} = ${g(fl.pocket_in3, 1)} in<sup>3</sup> &rarr; l = <b>${g(fl.pocket_len_in, 1)} in</b> each end`));
+  const ks = win.knee_split_sensitivity || [];
+  if (ks.length) tail.push('<h3>Sensitivity: knee punching by knee split</h3>', table(['knee split', 'load on the knee, lb', 'demand psi', 'capacity psi', 'D/C'],
+    ks.map(z => `<tr><td>${g(z.knee_split, 1)}</td><td>${g(z.load_lb, 1)}</td><td>${g(z.demand_psi, 1)}</td><td>${g(z.capacity_psi, 1)}</td><td>${g(z.dc, 3)}</td></tr>`)));
+  out.push(`<div class="page">${tail.join('')}</div>`);
   return out.join('');
 }
 function exportPdf() {
@@ -2396,6 +2538,13 @@ async function loadResult() {
   }
   showWinner(); buildCanoe(); buildTabs(); drawPlot();
 }
+// Seconds as "45 s", "12 min", "1 h 05 min".
+function dur(s) {
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
 // Pause / End while a run is going (long shape searches).
 function runCtl(s) {
   const on = s.state === 'running';
@@ -2424,7 +2573,15 @@ async function poll() {
   cands = cands.concat(s.candidates);
   runCtl(s);
   const word = s.stopping ? 'Ending (finishing the shapes in progress, then verifying)' : s.paused ? 'Paused' : s.state === 'stopped' ? 'Ended' : s.state[0].toUpperCase() + s.state.slice(1);
-  $('status').textContent = `${word}  ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
+  let time = '';
+  if (s.state === 'running' && s.elapsed_s != null) {
+    time = ` · ${dur(s.elapsed_s)}`;
+    if (s.paused || s.stopping) { /* no estimate while held or ending */ }
+    else if (s.eta_s == null) time += ' · estimating time left';
+    else time += ` · about ${dur(s.eta_s)} left`;
+  }
+  $('status').textContent = `${word} ${s.done}/${s.total}` + time;
+  $('status').title = s.state === 'running' ? 'Time left = what is left at the speed so far (pauses not counted), plus a short final check of the winner. A hull shape search counts every refine round at full size, so it usually finishes a little sooner.' : '';
   $('prog').max = s.total || 1; $('prog').value = s.done;
   $('err').textContent = s.error || '';
   drawPlot();

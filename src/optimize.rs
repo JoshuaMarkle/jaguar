@@ -133,6 +133,9 @@ pub struct Winner {
     /// Every intermediate value behind the governing load case's checks
     /// (the report's calculation appendix).
     pub calc: CalcTrace,
+    /// The same worked calculation for every load case (`params.load_cases` order), each at
+    /// its own worst seat sample and strength combination: the PDF report's full proof.
+    pub case_calcs: Vec<CalcTrace>,
     /// Why `verified` is false (station convergence or the stands case); None when verified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verify_failure: Option<String>,
@@ -623,6 +626,12 @@ pub struct Diagrams {
     pub inertia_in4: Vec<f64>,
     /// Local waterline height above keel, in.
     pub waterline_in: Vec<f64>,
+    /// Neutral axis height above the keel, in (transformed section for a two-mix wall).
+    pub zbar_in: Vec<f64>,
+    /// Distributed loads of the strength combination, lb/in: buoyancy and self weight
+    /// (as factored); their difference integrates to shear_lb (knee patches added in closed form).
+    pub buoyancy_lbpin: Vec<f64>,
+    pub self_weight_lbpin: Vec<f64>,
 }
 
 /// End of a searched range.
@@ -1666,6 +1675,8 @@ fn finish_winner(
         cases,
         empty,
         calc,
+        // Once on the final winner (`winner_case_calcs`), not on every shape's inner winner.
+        case_calcs: Vec::new(),
         verify_failure,
         stands: None,
         knee_split_sensitivity: Vec::new(),
@@ -1676,6 +1687,52 @@ fn finish_winner(
 /// Power-speed and righting-lever (GZ) curves of the winner, once after the search (called by
 /// [`crate::run`]): one power curve per load case (hull + real crew), one GZ curve per load case
 /// and the empty canoe, on the search-resolution grid. Pictures only: nothing is gated on them.
+/// The worked calculation of every load case of the final winner (`Winner.case_calcs`, the PDF
+/// report's proof), once after the search (called by [`crate::run`]): at verification
+/// resolution, each case at its resolved seats, with the winning mix's strength. Single-mix
+/// walls only (a zoned wall keeps an empty list; its `calc` says why).
+pub fn winner_case_calcs(params: &Params, r: &mut RunResult) {
+    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let c = &w.candidate;
+    if c.zones.is_some() {
+        return;
+    }
+    let mut wp = params.clone();
+    if let Some(gr) = c.shape.as_ref().and_then(|s| s.gunwale_radius_in) {
+        wp.hull.gunwale_radius_in = Some(gr);
+    }
+    let err = |e: String| vec![CalcTrace { error: Some(e), calc: None }; params.load_cases.len()];
+    let fit = match density_axis(&wp, &r.strength) {
+        Ok(axis) => match axis.into_iter().find(|a| a.0 == c.density_pcf && a.2 == c.mix) {
+            Some(a) => a.1,
+            None => {
+                w.case_calcs = err("winner mix not on the density axis".into());
+                return;
+            }
+        },
+        Err(e) => {
+            w.case_calcs = err(format!("{e:#}"));
+            return;
+        }
+    };
+    let stations = 2 * params.hull.stations - 1;
+    let grid = Grid::build_topsides(hull, c.depth_in, stations, candidate_topsides(&wp, c)).0;
+    let sec = sections(&grid, c.thickness_in);
+    w.case_calcs = params
+        .load_cases
+        .iter()
+        .zip(&w.cases)
+        .map(|(lc, k)| {
+            let seats = CaseSeats {
+                seats_in: k.seats_in.clone(),
+                crew_order: k.crew_order.clone(),
+                source: k.seat_source.unwrap_or(SeatSource::Given),
+            };
+            calc_trace(&wp, &fit, &grid, &sec, c.thickness_in, c.density_pcf, &lc.name, &seats)
+        })
+        .collect();
+}
+
 pub fn winner_curves(params: &Params, r: &mut RunResult) {
     let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
     let c = &w.candidate;
@@ -1806,14 +1863,12 @@ fn stands_case(
     }
 }
 
-/// Knee x per paddler for `case` without auto seats: `seats_in`, or evenly spaced.
+/// Knee x per paddler for `case` without auto seats: `seats_in`, or evenly spaced (pinned
+/// `positions` kept).
 pub fn resolved_seats(case: &crate::params::LoadCase, grid: &Grid) -> Vec<f64> {
-    let n = grid.nx();
-    let length = grid.x[n - 1] - grid.x[0];
-    let k = case.weights_lb.len();
     match &case.seats_in {
         Some(s) => s.clone(),
-        None => (0..k).map(|i| grid.x[0] + length * (i + 1) as f64 / (k + 1) as f64).collect(),
+        None => seats::even_placed(case, grid),
     }
 }
 
@@ -2306,13 +2361,16 @@ pub fn case_diagrams_wall(
         }
         out.diagrams = Diagrams {
             x_in: grid.x.clone(),
-            shear_lb: loads.shear,
-            moment_lbin: loads.moment,
             tension_psi,
             tension_allow_psi: ft_cap,
             area_in2: sec.area.clone(),
             inertia_in4: z.zs.inertia.clone(),
             waterline_in: waterline(grid, &service),
+            zbar_in: z.zs.zbar.clone(),
+            buoyancy_lbpin: loads.buoyancy,
+            self_weight_lbpin: loads.self_weight,
+            shear_lb: loads.shear,
+            moment_lbin: loads.moment,
         };
         out.verdict = Some(verdict);
         return Ok(out);
@@ -2352,13 +2410,16 @@ pub fn case_diagrams_wall(
     let waterline_in = waterline(grid, &service);
     out.diagrams = Diagrams {
         x_in: grid.x.clone(),
-        shear_lb: loads.shear,
-        moment_lbin: loads.moment,
         tension_psi,
         tension_allow_psi: ft_cap,
         area_in2: sec.area.clone(),
         inertia_in4: sec.inertia.clone(),
         waterline_in,
+        zbar_in: sec.zbar.clone(),
+        buoyancy_lbpin: loads.buoyancy,
+        self_weight_lbpin: loads.self_weight,
+        shear_lb: loads.shear,
+        moment_lbin: loads.moment,
     };
     out.verdict = Some(verdict);
     Ok(out)

@@ -27,6 +27,7 @@ flare_deg = 0.0           # outward lean of the sides above the waterline, deg f
 name = "2M"
 weights_lb = [175.0, 165.0]
 # seats_in = [80.0, 160.0]
+# positions = [0, 2]      # pin paddlers to seats: 1 = bow ... k = stern, 0 = auto chooses (not with seats_in)
 
 [[load_case]]
 name = "2F"

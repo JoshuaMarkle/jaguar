@@ -132,3 +132,42 @@ fn auto_seats_are_scored_at_their_worst_shift() {
     assert!(sh.iter().flatten().all(|&x| (0.0..=l).contains(&x)));
     assert_eq!(seats::shifted(&[50.0], 0.0, &g), vec![vec![50.0]]);
 }
+
+#[test]
+fn pinned_paddlers_keep_their_seat_and_the_rest_are_chosen() {
+    let (mut p, _, fit, g, s) = setup();
+    // Three paddlers. Unpinned, auto seats put paddler 2 somewhere other than the bow ...
+    p.load_cases[1].weights_lb = vec![250.0, 120.0, 130.0];
+    let free = plan_seats(&p, &fit, &g, &s, 0.375, 58.0).unwrap();
+    assert_ne!(free[1].crew_order[0], 2, "{:?}", free[1].crew_order);
+    // ... pinned to the bow seat, it is there, and the other two are still chosen.
+    p.load_cases[1].positions = Some(vec![0, 0, 1]);
+    let plan = plan_seats(&p, &fit, &g, &s, 0.375, 58.0).unwrap();
+    assert_eq!(plan[1].source, SeatSource::Auto);
+    assert_eq!(plan[1].crew_order[0], 2, "pinned bow paddler moved: {:?}", plan[1].crew_order);
+    // Evenly spaced seats keep the pin and fill the rest in entered order.
+    p.seats.auto = false;
+    p.load_cases[1].positions = Some(vec![0, 0, 1]);
+    let even = plan_seats(&p, &fit, &g, &s, 0.375, 58.0).unwrap();
+    assert_eq!(even[1].crew_order, vec![2, 0, 1]);
+    // Invalid pins are input errors.
+    let base = std::fs::read_to_string("examples/canoe.toml").unwrap().replace("\r\n", "\n");
+    let bad = |pos: &str| {
+        let t = base.replacen(
+            "weights_lb = [175.0, 165.0]\n",
+            &format!("weights_lb = [175.0, 165.0]\npositions = {pos}\n"),
+            1,
+        );
+        assert_ne!(t, base);
+        Params::parse(&t, Path::new("examples")).unwrap_err().to_string()
+    };
+    assert!(bad("[1, 1]").contains("same seat"));
+    assert!(bad("[3, 0]").contains("seat numbers"));
+    assert!(bad("[1]").contains("differ in length"));
+    let ok = base.replacen(
+        "weights_lb = [175.0, 165.0]\n",
+        "weights_lb = [175.0, 165.0]\npositions = [0, 1]\n",
+        1,
+    );
+    assert_eq!(Params::parse(&ok, Path::new("examples")).unwrap().load_cases[0].positions, Some(vec![0, 1]));
+}

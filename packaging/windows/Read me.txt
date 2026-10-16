@@ -14,8 +14,9 @@ USE
   * Edit the inputs on the left, press "Run optimization", read the result on the right.
     Hover any label for help.
   * It starts with the team's settings: the hull shape is searched too (thousands of hull
-    shapes, each with a full wall search), so a run can take hours. For a quick look, lower
-    "Samples" under the hull shape search (e.g. 96: a few minutes).
+    shapes, each with a full wall search): about 12 minutes on a recent laptop, longer on older
+    ones. The status line at the top shows the time left. For a quick look, lower "Samples"
+    under the hull shape search (e.g. 96: about a minute).
   * While a run is going, "Pause" holds it (Resume carries on) and "End" finishes it early:
     the best hull found so far is checked and shown as the result.
   * Your files are in Documents\JAGUAR: canoe.toml (the settings), the hull, the lab data

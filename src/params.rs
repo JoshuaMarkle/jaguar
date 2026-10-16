@@ -433,11 +433,17 @@ impl HullParams {
 #[serde(deny_unknown_fields)]
 pub struct LoadCase {
     pub name: String,
-    /// Paddler weights, lb, bow to stern.
+    /// Paddler weights, lb. Bow to stern only when the order is fixed (`seats_in`, or evenly
+    /// spaced seats with every paddler unpinned); auto seats choose the order.
     pub weights_lb: Vec<f64>,
     /// Knee positions, inches from the bow. Omitted = evenly spaced.
     #[serde(default)]
     pub seats_in: Option<Vec<f64>>,
+    /// Pinned seat per paddler (`weights_lb` order): 1 = bow seat ... k = stern seat, 0 = free
+    /// (auto seats choose it; evenly spaced seats fill the free seats in entered order).
+    /// E.g. [0, 0, 0, 4] = the 4th paddler steers in the stern. Not with `seats_in`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positions: Option<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -913,6 +919,28 @@ impl Params {
             {
                 bail!("load_case '{}': seats_in and weights_lb differ in length", lc.name);
             }
+            if let Some(p) = &lc.positions {
+                let k = lc.weights_lb.len();
+                if lc.seats_in.is_some() {
+                    bail!(
+                        "load_case '{}': give positions or seats_in, not both (seats_in fixes every seat)",
+                        lc.name
+                    );
+                }
+                if p.len() != k {
+                    bail!("load_case '{}': positions and weights_lb differ in length", lc.name);
+                }
+                let pinned: Vec<usize> = p.iter().copied().filter(|&s| s > 0).collect();
+                if pinned.iter().any(|&s| s > k) {
+                    bail!(
+                        "load_case '{}': positions are seat numbers 1 (bow) to {k} (stern), or 0 = free",
+                        lc.name
+                    );
+                }
+                if (1..pinned.len()).any(|i| pinned[..i].contains(&pinned[i])) {
+                    bail!("load_case '{}': two paddlers pinned to the same seat", lc.name);
+                }
+            }
         }
         let st = &self.seats;
         if ![st.spacing_min_in, st.bow_clear_in, st.stern_clear_in, st.variance_in]
@@ -923,9 +951,11 @@ impl Params {
         }
         for lc in &self.load_cases {
             let k = lc.weights_lb.len();
-            if st.auto && lc.seats_in.is_none() && k > 4 {
+            let free = lc.positions.as_ref().map_or(k, |p| p.iter().filter(|&&s| s == 0).count());
+            if st.auto && lc.seats_in.is_none() && free > 4 {
                 bail!(
-                    "load_case '{}': auto seats try every crew order, so at most 4 paddlers; give seats_in",
+                    "load_case '{}': auto seats try every crew order, so at most 4 unpinned paddlers; pin some \
+                     (positions) or give seats_in",
                     lc.name
                 );
             }

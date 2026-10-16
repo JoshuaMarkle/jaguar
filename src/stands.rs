@@ -240,6 +240,8 @@ pub fn evaluate(
         kb_in: f64::NAN,
         bm_in: f64::NAN,
         kg_in: f64::NAN,
+        buoyancy: Vec::new(),
+        self_weight: w.clone(),
     };
     let mut v = check::check(grid, sec, &loads, rho, mat, fit, 0.0, pu, None);
     let t = check::thickness(grid, sec).unwrap_or(f64::NAN);

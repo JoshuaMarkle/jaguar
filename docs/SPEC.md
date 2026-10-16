@@ -29,7 +29,9 @@ While a run is going the top bar has **Pause** (workers hold before their next c
 shape; **Resume** goes on) and **End** (`optimize::RunControl`). End on a shape search starts no new
 shapes, lets those in progress finish, then verifies and reports the best one with `ended_early`;
 on a fixed hull (or before the first shape finished) it cancels: no result, the last one stays.
-The CLI has neither (Ctrl-C stops it).
+The CLI has neither (Ctrl-C stops it). The status line shows the running time (pauses excluded)
+and the time left: what is left at the rate so far, a shape search counting every refine round at
+full size (`shapeopt::planned_shapes`, an upper bound), the final verification not included.
 
 No command (double-clicking JAGUAR.exe / JAGUAR.app, `src/launch.rs`): the canoe folder is
 `Documents/JAGUAR` (Windows: the Documents folder Explorer shows, also when OneDrive moved it).
@@ -146,11 +148,16 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    Also gives loaded freeboard (D minus local draft, min over stations) and transverse GM_T
    (crew CG at `stability.crew_cg_in`).
    **Seats** (`src/seats.rs`): `seats_in` if given; else `[seats] auto = true` (default) picks knee
-   positions and crew order (every distinct order, <= 4 paddlers) minimizing the highest
+   positions and crew order (every distinct order, <= 4 unpinned paddlers) minimizing the highest
    seat-dependent utilization max(D/C without punching / dc_search, 1 - (fb - fb_min)/s,
    1 - (GM - gm_min)/s), s = max(min, 1 in); knees >= `spacing_min_in` apart within
    [`bow_clear_in`, L - `stern_clear_in`]. Solved once per (t, depth) at the middle density of the
    axis and reused for every density and for verify. `auto = false`: evenly spaced L(i+1)/(k+1).
+   `positions` (per paddler, `weights_lb` order; not with `seats_in`): seat number 1 = bow ... k =
+   stern pins that paddler there, 0 = free. Auto tries only orders that keep the pins (and even
+   spacing in the entered order first); evenly spaced seats fill the free seats with the free
+   paddlers in entered order. Pinned to the same seat, a number outside 0..k, or a length other
+   than weights_lb: input error.
    Every case is then checked at the nominal seats and all 2^k corners with each knee moved
    +/- `variance_in` (default 3 in); the case verdict is the worst sample, freeboard and GM the
    minimum. Search candidates stop sampling at the first sample that misses a gate.
@@ -309,7 +316,9 @@ not flagged. `diagrams` is the governing case at verification resolution. `cases
 per `[[load_case]]` (input order): name, nominal `seats_in` (`weights_lb` order), `crew_order`
 (paddler indices bow to stern), `seat_source` (given/even/auto), `seat_variance_in`,
 `verdict_seats_in` (the sample the verdict comes from), weights, draft, trim (nominal seats), GM,
-freeboard (worst sample), x, V, M, tension/compression/shear stress, waterline, and
+freeboard (worst sample), x, V, M, tension/compression/shear stress, waterline, `zbar_in`,
+`buoyancy_lbpin` and `self_weight_lbpin` (strength combination, lb/in; their difference integrates
+to V, the knee patches added in closed form), and
 per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at
 masked tip stations, same formulas as the checks; nominal seats), plus that case's verdict. A case whose equilibrium fails carries `error`
 and no numbers. `empty` floats the bare hull (no crew): draft, trim, min freeboard, x and
@@ -317,7 +326,8 @@ waterline, or `error` and no numbers. `calc` is the worked calculation of the go
 its worst seat sample and governing combination: factors, weights, both equilibria (with KB, BM,
 KG), strength fit values, and per check the station, section values (M, V, A, zbar, I, c, Q, b)
 or punching intermediates (d_load, depth, b0, P, v_u, v_c) with capacity and D/C; recomputed by
-the checks' own code so each demand and capacity equals that case's verdict (or `error`). The terminal prints one line per case under the winner (seats bow to stern as
+the checks' own code so each demand and capacity equals that case's verdict (or `error`).
+`case_calcs` is the same for every load case (input order; empty for a zoned wall). The terminal prints one line per case under the winner (seats bow to stern as
 knee@lb, source, variance, D/C), the mix provenance
 line and the search-space table (shape factors inside their bounds are counted, not listed). Each candidate has t, rho, mix, depth, flare, length, beam (overall, gunwale included; a shape run's `shape.beam_in` is its waterline beam), shape, weight, GM, drag, race_s and the
 per-case verdict (every check's demand, capacity, D/C). Shape runs list one candidate per shape.
@@ -387,8 +397,18 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   result and printed via the print dialog's "Save as PDF" (no server endpoint, no dependency).
   Page 1: snapshot of the 3D canoe top left, weight and verification, winner stats, checks, load
   cases. Then search space, station convergence, mix fit and lab points, every input and every
-  chart (all cases shown), then a calculations appendix: each governing equation and the same
-  equation with `winner.calc`'s numbers. No per-candidate table: result.json is the full record.
+  chart (all cases shown), then the design proof: (0) every check of every case and every gate
+  (freeboard, GM, empty GM, convergence, stands, flotation) with demand, capacity, D/C or value,
+  the requirement and OK/FAILS, and a conclusion; (1) design basis: load and resistance factors,
+  model and assumptions; (2) the split tensile least-squares fit worked from the lab points, the
+  strengths at the winning density and every design capacity; (3) section properties (A, zbar, I,
+  S top/bottom, self weight) every L/20; (4) one page per load case from `case_calcs`: crew
+  (weights, pinned seats, order, nominal and worst-sample knees), service and factored weight,
+  draft, trim, freeboard and GM worked, the load table every L/20 plus each critical station
+  (w, b, q, V, M, stresses, beam D/C) with the equilibrium closure V(L), M(L), every check worked
+  with its numbers, and punching for every paddler; (5) station convergence, empty canoe, stands
+  and flotation worked, and the knee-split sensitivity. No per-candidate table: result.json is
+  the full record.
   Each page carries a small "Generated by JAGUAR" footer.
 
 ## Race simulator (`src/race.rs`)

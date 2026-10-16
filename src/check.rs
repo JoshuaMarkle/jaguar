@@ -578,6 +578,8 @@ mod tests {
             kb_in: 0.0,
             bm_in: 0.0,
             kg_in: 0.0,
+            buoyancy: Vec::new(),
+            self_weight: Vec::new(),
         }
     }
 

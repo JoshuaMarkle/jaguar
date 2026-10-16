@@ -71,6 +71,7 @@ pub fn run_controlled(
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     };
     optimize::verify_stands(params, &mut r);
+    optimize::winner_case_calcs(params, &mut r);
     optimize::winner_curves(params, &mut r);
     Ok(r)
 }

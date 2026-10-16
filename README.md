@@ -13,8 +13,9 @@ survives the crew, and can optionally search the hull shape too.
    **Documents/JAGUAR** (button **Open folder**); **Quit** stops it.
 
 It starts with the team's settings (`packaging/starter/canoe.toml`): hull shape search with the
-race-time objective, 4000 shapes, which takes hours. For a quick look set **Samples** to 96
-(minutes). **Pause** holds a run; **End** finishes it early with the best hull found so far.
+race-time objective, 4000 shapes: about 12 minutes on a recent laptop, longer on older ones (the
+status line shows the time left). For a quick look set **Samples** to 96 (about a minute).
+**Pause** holds a run; **End** finishes it early with the best hull found so far.
 
 The first open shows a security warning because the app is not signed by a paid certificate.
 Windows: **More info** > **Run anyway**. Mac: System Settings > Privacy & Security > **Open

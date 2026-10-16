@@ -48,6 +48,11 @@
 //!   written, the previous one kept. 200 {"ok":true}, 409 if no run is going.
 //! * `GET  /api/status`    -> {"state": "idle"|"running"|"done"|"error"|"stopped",
 //!   "paused": bool, "stopping": bool, "done": n, "total": n, "error": str|null,
+//!   "elapsed_s": running time without pauses | null, "eta_s": estimated seconds left | null
+//!   (running, not ending, the first wave done (one per worker thread): done per running second x
+//!   what is left; a shape search
+//!   counts every refine round at full size, `shapeopt::planned_shapes`, so it tends to finish
+//!   sooner; the final verification is not included),
 //!   "shape": {"index": i, "shapes": n} | null (shape search only), "candidates": [...new since ?since=k...]}
 //!   Poll every ~250 ms with `?since=<count already seen>` to get only new
 //!   candidates (cheap incremental updates; no websockets needed).
@@ -66,7 +71,7 @@
 //!   `export.rs`). 404 if no result yet, 409 if that result has no winner, 400 bad format.
 //! * `POST /api/race`      body = canoe.toml text (the form; its `[race]` section, else 400).
 //!   Races the last result's winner (`race::run`, docs/SPEC.md "Race simulator") and returns
-//!   the jaguar-race/1 JSON. Synchronous (a few seconds; other requests wait). 404 if no
+//!   the jaguar-race/1 JSON. Synchronous (a few seconds). 404 if no
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //!
 //! * `GET  /api/session`   -> {"app": "jaguar", "version", "desktop": bool, "folder": str|null}.
@@ -112,6 +117,45 @@ struct Shared {
     params: Option<Params>,
     /// Pause / stop of the current run (a fresh one per run).
     ctl: Arc<optimize::RunControl>,
+    /// Run start, start of the current pause, total paused seconds (time estimate).
+    started: Option<Instant>,
+    paused_at: Option<Instant>,
+    paused_s: f64,
+    /// Shape search: most shapes it can evaluate (`shapeopt::planned_shapes`).
+    planned: Option<usize>,
+    /// Size of the first wave of work (worker threads, at most the total): no estimate before.
+    wave: usize,
+}
+
+impl Shared {
+    /// Running seconds without pauses.
+    fn active_s(&self) -> Option<f64> {
+        let t = self.started?.elapsed().as_secs_f64() - self.paused_s;
+        Some(t - self.paused_at.map_or(0.0, |p| p.elapsed().as_secs_f64()))
+    }
+
+    /// Seconds left at the rate so far (see `GET /api/status`).
+    fn eta_s(&self) -> Option<f64> {
+        let t = self.active_s()?;
+        // The first wave (one shape or candidate per worker thread) finishes together, so the
+        // rate means something only after it.
+        if self.state != "running"
+            || self.ctl.stopped()
+            || self.done == 0
+            || self.done < self.wave
+            || t <= 0.0
+        {
+            return None;
+        }
+        let left = self.planned.unwrap_or(0).max(self.total).saturating_sub(self.done);
+        Some(left as f64 * t / self.done as f64)
+    }
+
+    fn end_pause(&mut self) {
+        if let Some(p) = self.paused_at.take() {
+            self.paused_s += p.elapsed().as_secs_f64();
+        }
+    }
 }
 
 /// Request handler, independent of the socket so it can be unit tested.
@@ -230,14 +274,23 @@ impl App {
             ("POST", "/api/run") => self.start_run(body),
             ("POST", "/api/race") => self.race(body),
             ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/stop") => {
-                let s = self.lock();
+                let mut s = self.lock();
                 if s.state != "running" {
                     return err_reply(409, "no run is going");
                 }
                 match path {
-                    "/api/pause" => s.ctl.set_paused(true),
-                    "/api/resume" => s.ctl.set_paused(false),
-                    _ => s.ctl.stop(),
+                    "/api/pause" => {
+                        s.ctl.set_paused(true);
+                        s.paused_at.get_or_insert_with(Instant::now);
+                    }
+                    "/api/resume" => {
+                        s.ctl.set_paused(false);
+                        s.end_pause();
+                    }
+                    _ => {
+                        s.ctl.stop();
+                        s.end_pause();
+                    }
                 }
                 json_reply(200, serde_json::json!({ "ok": true }))
             }
@@ -551,6 +604,8 @@ impl App {
                 "stopping": s.state == "running" && s.ctl.stopped(),
                 "done": s.done,
                 "total": s.total,
+                "elapsed_s": s.active_s(),
+                "eta_s": s.eta_s(),
                 "error": s.error,
                 "shape": s.shape.map(|(i, n)| serde_json::json!({ "index": i, "shapes": n })),
                 "candidates": new,
@@ -613,6 +668,9 @@ impl App {
                 hull_file: params.hull.file.clone().unwrap_or_default(),
                 result,
                 params: Some(params.clone()),
+                started: Some(Instant::now()),
+                planned: params.shape_search.as_ref().map(crate::shapeopt::planned_shapes),
+                wave: rayon::current_num_threads(),
                 ..Default::default()
             };
         }
@@ -658,8 +716,10 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
     if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
     }
+    // Unique per write: requests run on their own threads.
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp{}", std::process::id()));
+    tmp.push(format!(".tmp{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming to {}", path.display()))?;
@@ -743,48 +803,58 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf, ctl: &optim
     }
 }
 
-/// Answer requests until the server is unblocked or `POST /api/quit` (desktop) is answered.
-fn serve_on(server: &tiny_http::Server, app: &App) {
-    for mut req in server.incoming_requests() {
-        *app.seen.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
-        let mut raw = Vec::new();
-        if req.as_reader().read_to_end(&mut raw).is_err() {
-            raw.clear();
-        }
-        let url = req.url().to_string();
-        // A mesh upload is binary; every other body is text.
-        if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/import-mesh") {
-            let (status, ctype, text) = app.import_mesh(url.split_once('?').map_or("", |q| q.1), &raw);
-            let header =
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header");
-            let _ = req
-                .respond(tiny_http::Response::from_string(text).with_status_code(status).with_header(header));
-            continue;
-        }
-        let body = String::from_utf8_lossy(&raw).into_owned();
-        if req.method().as_str() == "GET" && url.split('?').next() == Some("/api/export") {
-            let (status, ctype, file, bytes) = app.export(url.split_once('?').map_or("", |q| q.1));
-            let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
-            );
-            if let Some(f) = file {
-                let cd = format!("attachment; filename=\"{f}\"");
-                if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
-                    resp = resp.with_header(h);
-                }
+/// Answer requests until the server is unblocked (`POST /api/quit` in desktop mode, or the
+/// desktop idle watcher). One thread per request: a local client that never finishes its request
+/// (some vendor tools probe localhost ports) must not block the page's requests.
+fn serve_on(server: Arc<tiny_http::Server>, app: Arc<App>) {
+    for req in server.incoming_requests() {
+        let (app, srv) = (Arc::clone(&app), Arc::clone(&server));
+        std::thread::spawn(move || {
+            respond(req, &app);
+            if app.quit.load(Ordering::SeqCst) {
+                srv.unblock();
             }
-            let _ = req.respond(resp);
-            continue;
-        }
-        let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
-        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
-            .expect("static header is valid");
-        let resp = tiny_http::Response::from_string(text).with_status_code(status).with_header(header);
-        let _ = req.respond(resp);
-        if app.quit.load(Ordering::SeqCst) {
-            return;
-        }
+        });
     }
+}
+
+/// Read one request, answer it.
+fn respond(mut req: tiny_http::Request, app: &App) {
+    *app.seen.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
+    let mut raw = Vec::new();
+    if req.as_reader().read_to_end(&mut raw).is_err() {
+        raw.clear();
+    }
+    let url = req.url().to_string();
+    // A mesh upload is binary; every other body is text.
+    if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/import-mesh") {
+        let (status, ctype, text) = app.import_mesh(url.split_once('?').map_or("", |q| q.1), &raw);
+        let header =
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header");
+        let _ =
+            req.respond(tiny_http::Response::from_string(text).with_status_code(status).with_header(header));
+        return;
+    }
+    let body = String::from_utf8_lossy(&raw).into_owned();
+    if req.method().as_str() == "GET" && url.split('?').next() == Some("/api/export") {
+        let (status, ctype, file, bytes) = app.export(url.split_once('?').map_or("", |q| q.1));
+        let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
+        );
+        if let Some(f) = file {
+            let cd = format!("attachment; filename=\"{f}\"");
+            if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
+                resp = resp.with_header(h);
+            }
+        }
+        let _ = req.respond(resp);
+        return;
+    }
+    let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
+    let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
+        .expect("static header is valid");
+    let resp = tiny_http::Response::from_string(text).with_status_code(status).with_header(header);
+    let _ = req.respond(resp);
 }
 
 pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()> {
@@ -796,7 +866,7 @@ pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
     println!("JAGUAR serving http://127.0.0.1:{port}/  (prefs {}, Ctrl-C to stop)", prefs.display());
-    serve_on(&server, &app);
+    serve_on(Arc::new(server), Arc::new(app));
     Ok(())
 }
 
@@ -824,7 +894,7 @@ pub fn serve_desktop(
             }
         }
     });
-    serve_on(&server, &app);
+    serve_on(server, Arc::new(app));
     Ok(())
 }
 
@@ -1297,6 +1367,37 @@ mod tests {
     }
 
     #[test]
+    fn time_left_is_the_rate_so_far_times_what_is_left_without_pauses() {
+        let ago = |s: u64| Instant::now().checked_sub(Duration::from_secs(s)).unwrap();
+        let mut s =
+            Shared { state: "running", started: Some(ago(10)), done: 10, total: 20, ..Default::default() };
+        let near = |a: Option<f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 0.5);
+        assert!(near(s.eta_s(), 10.0), "{:?}", s.eta_s()); // 10 left at 1 per second
+        // A shape search counts what it may still plan (refine rounds at full size).
+        s.planned = Some(100);
+        assert!(near(s.eta_s(), 90.0), "{:?}", s.eta_s());
+        // 4 s of the 10 were paused: 10 done in 6 running seconds.
+        s.paused_s = 4.0;
+        assert!(near(s.active_s(), 6.0) && near(s.eta_s(), 54.0), "{:?}", s.eta_s());
+        // A pause going on now does not count either.
+        s.paused_at = Some(ago(2));
+        assert!(near(s.active_s(), 4.0));
+        s.end_pause();
+        assert!(s.paused_at.is_none() && (s.paused_s - 6.0).abs() < 0.5);
+        // Fewer done than the first wave (they land together): no estimate yet.
+        s.wave = 11;
+        assert!(s.eta_s().is_none());
+        s.wave = 0;
+        // Nothing done yet, ending, or not running: no estimate.
+        s.done = 0;
+        assert!(s.eta_s().is_none());
+        s.done = 10;
+        s.ctl.stop();
+        assert!(s.eta_s().is_none());
+        assert!(Shared::default().eta_s().is_none());
+    }
+
+    #[test]
     fn pause_resume_stop_need_a_run_and_stop_ends_it() {
         let a = app();
         for path in ["/api/pause", "/api/resume", "/api/stop"] {
@@ -1345,17 +1446,36 @@ mod tests {
         let canoe = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml")).to_path_buf();
         let prefs = tmpdir().join("prefs.toml");
         let t = std::thread::spawn(move || {
-            serve_desktop(&canoe, prefs, server, tmpdir(), Duration::from_millis(300)).unwrap()
+            serve_desktop(&canoe, prefs, server, tmpdir(), Duration::from_secs(2)).unwrap()
         });
         // The launcher recognises it (and the probe itself counts as activity) ...
         assert!(crate::launch::running_desktop(port));
         // ... and with no page asking, it stops by itself.
         let t0 = Instant::now();
         while !t.is_finished() {
-            assert!(t0.elapsed() < Duration::from_secs(10), "desktop server did not quit when idle");
+            assert!(t0.elapsed() < Duration::from_secs(30), "desktop server did not quit when idle");
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(!crate::launch::running_desktop(port));
+    }
+
+    #[test]
+    fn a_stuck_client_does_not_block_other_requests() {
+        // Some local tools probe localhost ports and never finish their request.
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let a = app();
+        std::thread::spawn(move || serve_on(Arc::new(server), Arc::new(a)));
+        let mut stuck = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(stuck, "POST /api/prefs HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npartial").unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        write!(s, "GET /api/session HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).expect("answered while another request hangs");
+        assert!(out.starts_with("HTTP/1.1 200") && out.contains("\"app\":\"jaguar\""), "{out}");
+        drop(stuck);
     }
 
     #[test]
@@ -1363,7 +1483,7 @@ mod tests {
         let a = app();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
-        std::thread::spawn(move || serve_on(&server, &a));
+        std::thread::spawn(move || serve_on(Arc::new(server), Arc::new(a)));
         let get = |path: &str| {
             let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
             write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();
