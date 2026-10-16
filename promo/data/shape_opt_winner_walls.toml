@@ -1,0 +1,75 @@
+# canoe.toml: everything one JAGUAR run needs. Units: in, lb, psi, pcf.
+# Unknown keys are an error, so a typo cannot silently become a default.
+#
+#   jaguar check examples/canoe.toml     # validate only
+#   jaguar run   examples/canoe.toml     # optimize -> result.json
+#   jaguar serve examples/canoe.toml     # optional web UI
+
+[hull]
+file = "shape_opt_winner_hull.json"   # the shape search winner (shape_opt_result.json winner_hull)
+stations = 161            # search resolution; the winner is re-checked at 2n-1
+# templates = 11          # search the buildable loft of 11 cross-section templates (docs/HULLS.md)
+flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical
+
+# A design must pass EVERY load case. Seats are knee positions from the bow;
+# omit seats_in to space the paddlers evenly.
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 165.0]
+# seats_in = [80.0, 160.0]
+
+[material]
+strength_model = "fit"          # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
+# Strength comes from lab breaks (examples/mix_tests.csv, a frozen copy of the team's
+# data; ../data/mix_tests.csv is the current one): final split
+# tensile strength is fitted against density; flexural and compressive strength
+# are derived from it (see src/mix.rs). 7-day breaks are scaled by 1/0.6.
+mix_data = "../../examples/mix_tests.csv"
+flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
+density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
+factor_of_safety = 1.5
+dynamic_load_factor = 1.2
+knee_patch_in = 3.0       # never 0: a point load does not converge
+
+[search]                  # [min, max, step], inclusive
+thickness_in = [0.375, 0.75, 0.0625]
+density_pcf  = [50.0, 64.0, 1.0]
+depth_in     = [10.0, 16.0, 1.0]
+
+[gates]
+dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)
+dc_verify = 0.95          # numerical margin, not a safety factor
+freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+
+[punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
+method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)
+knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on one knee, very conservative)
+knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
+knee_spacing_in = 8.0     # centre-to-centre knee spacing
+pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
+layers = 2                # equal casting passes (mesh fits between two)
+mesh_after_layer = 1      # mesh laid after this pass (1..layers-1); two meshes: [1, 2]
+mold = "male"             # "male": pass 1 is the inside (knee) face; "female": pass 1 is the outside
+                          # d = knee face to mesh: male k/layers * t, female (layers-k)/layers * t.
+                          # 3 passes, mesh after 2, t 0.375: male d 0.25, female d 0.125 in.
+                          # Several meshes: the one farthest from the knee face sets d
+                          # (3 passes, mesh_after_layer = [1, 2]: d = 2t/3 either mold).
+                          # Or instead of these three: d_over_t = 0.5 (explicit override)
+
+[stability]
+crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)
+gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself). GM is very sensitive to crew_cg_in (assumed)
+
+[objective]
+kind = "weight"           # "weight" = lightest hull, "drag" = least water resistance
+speed_mps = 2.5           # race speed for the drag objective
+# Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
+# Absent = heaviest load case. Weights must sum to 1. Presets:
+#   Regionals: [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+#   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]
+#   Total:     [{ crew_lb = 350, weight = 0.675 }, { crew_lb = 525, weight = 0.10 }, { crew_lb = 700, weight = 0.225 }]
+# displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = steady-turn drag (docs/SHAPE_SEARCH.md)
+# turn_radius_in = 600.0  # turn radius for the turning drag, in (50 ft)
+

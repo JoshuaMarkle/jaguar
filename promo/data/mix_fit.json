@@ -1,0 +1,63 @@
+{
+ "compressive_fit": {
+  "density_max_pcf": 65.35031847,
+  "density_min_pcf": 54.85987261,
+  "intercept_psi": -2113.518090982352,
+  "n": 5,
+  "rms_residual_psi": 33.975814957729185,
+  "slope_psi_per_pcf": 53.74732526871256
+ },
+ "density_max_pcf": 65.35031847,
+ "density_min_pcf": 54.85987261,
+ "flex_over_split": 1,
+ "points": [
+  {
+   "compressive_psi": 866.3893333,
+   "density_pcf": 56.40764331,
+   "final_psi": 190.6666667,
+   "fraction_of_final": 1,
+   "group": "M2 A",
+   "measured_psi": 190.6666667,
+   "mix": "M2 A"
+  },
+  {
+   "compressive_psi": 878.5066667,
+   "density_pcf": 54.85987261,
+   "final_psi": 193.3333333,
+   "fraction_of_final": 1,
+   "group": "M2 B",
+   "measured_psi": 193.3333333,
+   "mix": "M2 B"
+  },
+  {
+   "compressive_psi": 1284.437333,
+   "density_pcf": 63.65,
+   "final_psi": 282.6666667,
+   "fraction_of_final": 1,
+   "group": "M2 A.2",
+   "measured_psi": 282.6666667,
+   "mix": "M2 A.2"
+  },
+  {
+   "compressive_psi": 1423.786667,
+   "density_pcf": 65.35031847,
+   "final_psi": 313.3333333,
+   "fraction_of_final": 1,
+   "group": "M4 A",
+   "measured_psi": 313.3333333,
+   "mix": "M4 A"
+  },
+  {
+   "compressive_psi": 1019.875556,
+   "density_pcf": 58.17652411,
+   "final_psi": 224.4444444,
+   "fraction_of_final": 1,
+   "group": "M5",
+   "measured_psi": 224.4444444,
+   "mix": "M5"
+  }
+ ],
+ "rms_residual_psi": 7.477071895293551,
+ "split_intercept_psi": -465.12281941535156,
+ "split_slope_psi_per_pcf": 11.828196583172328
+}

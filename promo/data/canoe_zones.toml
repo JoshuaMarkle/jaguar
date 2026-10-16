@@ -1,0 +1,257 @@
+# canoe.toml: everything one JAGUAR run needs. Units: in, lb, psi, pcf.
+# Unknown keys are an error, so a typo cannot silently become a default.
+#
+#   jaguar check examples/canoe.toml     # validate only
+#   jaguar run   examples/canoe.toml     # optimize -> result.json
+#   jaguar serve examples/canoe.toml     # optional web UI
+
+[hull]
+file = "../../examples/off1_hull.json"   # jaguar-hull/1, relative to this file
+stations = 161            # search resolution; the winner is re-checked at 2n-1
+# doubly_symmetric = true      # bow = stern (and port = starboard): one end mold makes both ends; a hull file is averaged with its mirror
+stem_radius_in = 4.0      # side-view radius where the stem meets the keel, bow and stern, in (0 = sharp); the top of the
+#                         # stem, the waterline entry and the sections stay; the arc may run above the waterline
+# templates = 11          # constructable mold: the hull as 11 cross-section templates, straight between
+#                         # (docs/SPEC.md Physics 0; with [shape_search] the search tunes that loft)
+flare_deg = 0.0           # outward lean of the sides above the waterline, deg from vertical (demolding draft, e.g. 3-5)
+# gunwale_radius_in = 200.0  # constructable gunwale: top view straight from the bow, one arc of this radius,
+#                            # straight to the stern; sides straight from the waterline up to it (narrowest
+#                            # such outline that encloses the waterline). Full-ended hulls like off1 need a very
+#                            # wide gunwale, which gunwale_max_flare_deg rejects (every design then fails, with why).
+# gunwale_max_flare_deg = 30.0  # steepest side lean allowed with a gunwale outline (default 30)
+
+# A design must pass EVERY load case. Seats are knee positions from the bow, one per paddler;
+# omit seats_in for auto seats ([seats] below).
+# ASCE race crews. Weights other than 2M are PLACEHOLDERS: replace with team weights.
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 165.0]
+# seats_in = [80.0, 160.0]
+
+[[load_case]]
+name = "2F"
+weights_lb = [140.0, 130.0]     # placeholder: replace with team weights
+
+# 3M, 3F and 4_coed: ready to enable. Off with the current inputs because off1 then fails the
+# GM gate even with auto seats (best GM 3M -0.71, 3F -0.01, 4_coed -1.10 in < gm_min 0.25 at the
+# assumed crew_cg_in = 12).
+# [[load_case]]
+# name = "3M"
+# weights_lb = [175.0, 165.0, 170.0]   # placeholder: replace with team weights
+#
+# [[load_case]]
+# name = "3F"
+# weights_lb = [140.0, 130.0, 135.0]   # placeholder: replace with team weights
+#
+# [[load_case]]
+# name = "4_coed"
+# weights_lb = [175.0, 140.0, 130.0, 165.0]   # placeholder: replace with team weights
+
+[seats]                   # optional; these are the defaults
+auto = true               # no seats_in: seats + crew order with the most margin on bending, freeboard, GM (false = evenly spaced)
+spacing_min_in = 30.0     # auto: min knee-to-knee spacing
+bow_clear_in = 36.0       # auto: no knee closer to the bow tip
+stern_clear_in = 36.0     # auto: no knee closer to the stern tip
+variance_in = 3.0         # every case (auto or given) must also pass with each knee +/- this (all corners)
+
+[material]
+strength_model = "fit"          # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
+# Strength comes from lab breaks (examples/mix_tests.csv, a frozen copy of the team's
+# data; ../data/mix_tests.csv is the current one): final split
+# tensile strength is fitted against density; flexural and compressive strength
+# are derived from it (see src/mix.rs). 7-day breaks are scaled by 1/0.6.
+mix_data = "../../examples/mix_tests.csv"
+flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
+density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
+method = "asd"            # "asd": capacity / factor_of_safety. "lrfd": 1.2D+1.6L & 0.9D+1.6L, phi 0.60 (0.75 aci_22_6 punching). lrfd -> 120.7 lb here
+# lrfd_dead = 1.2         # lrfd: factor on self weight (buoyancy balances the factored weight, so it carries it too)
+# lrfd_dead_only = 1.4    # lrfd: self-weight factor of the dead-load-only combination (ASCE 7 1.4D)
+# lrfd_live = 1.6         # lrfd: factor on paddler loads (crew x dynamic_load_factor, ASCE 7 1.2D + 1.6L)
+factor_of_safety = 1.5
+dynamic_load_factor = 1.2
+knee_patch_in = 3.0       # never 0: a point load does not converge
+
+[search]                  # [min, max, step], inclusive
+thickness_in = [0.375, 0.75, 0.0625]
+density_pcf  = [50.0, 64.0, 1.0]
+depth_in     = [10.0, 16.0, 1.0]
+# flare_deg    = [3.0, 5.0, 1.0]   # optional: search the flare too (hull.flare_deg = 0 then); more flare
+#                                  # = more concrete, so it is chosen only when a check needs it
+
+[gates]
+dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)
+dc_verify = 0.95          # numerical margin, not a safety factor
+freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+
+[punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
+method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)
+knees = 2                 # knees carrying one paddler (2 = kneeling; 1 = all on one knee, very conservative)
+knee_split = 0.6          # share on the heavier knee (0.6 = allows uneven kneeling)
+knee_spacing_in = 8.0     # centre-to-centre knee spacing
+pad_in = 0.0              # knee pad thickness (ASCE max 0.5 in)
+layers = 2                # equal casting passes (mesh fits between two); air pocket bulkheads are one pass, t / layers
+mesh_after_layer = 1      # mesh laid after this pass (1..layers-1); two meshes: [1, 2]
+mold = "male"             # "male": pass 1 is the inside (knee) face; "female": pass 1 is the outside
+                          # d = knee face to mesh: male k/layers * t, female (layers-k)/layers * t.
+                          # 3 passes, mesh after 2, t 0.375: male d 0.25, female d 0.125 in.
+                          # Several meshes: the one farthest from the knee face sets d
+                          # (3 passes, mesh_after_layer = [1, 2]: d = 2t/3 either mold).
+                          # Or instead of these three: d_over_t = 0.5 (explicit override)
+
+[stability]
+crew_cg_in = 12.0         # crew centre of gravity above the keel (kneeling, assumed)
+gm_min_in = 0.25          # min GM of EVERY load case (> 0 = rights itself). GM is very sensitive to crew_cg_in (assumed)
+gm_empty_min_in = 6.0     # min GM of the empty canoe (no crew); optional. off1 designs: 6.4 to 11.5 in (placeholder: set yours)
+
+[flotation]               # optional: ASCE swamped flotation gate (omit = no gate)
+air_pocket_max_in = 36.0  # max sealed air pocket length at each end (bow and stern)
+swamp_factor = 1.1        # wall + pockets must displace >= this x canoe weight
+
+# [turning]               # optional: add the transverse wall stress of a steady turn to the biaxial check
+# speed_mps = 2.5         # boat speed through the turn (lateral acceleration V^2 / R)
+# radius_in = 394.0       # turn radius (394 in = 10 m)
+
+[zones]                 # optional: also search two-mix walls. The light mix is search.density_pcf;
+#                         # the dense mix goes only where a check needs it (under the knees, at a
+#                         # failing fibre, a keel strip for GM), as side-view rectangles
+#                         # (x from the bow, z above the keel) you can mark on the mold.
+dense_pcf = [56.0, 64.0, 2.0]   # dense mix [min, max, step] (only ones heavier than the light mix)
+increment_in = 0.125            # rectangle edges on multiples of this (default 1/8 in)
+max_checks = 400                # most (wall, light, dense) combinations placed, lightest first
+# Re-sweep a fixed mold with new mixes: update the mix data and run again with [zones].
+
+[objective]
+kind = "drag"             # "drag" (default) = least water resistance, "weight" = lightest hull,
+                          # "race" = shortest weighted race time over [race] (needs [shape_search]; examples/shape_race.toml)
+speed_mps = 2.5           # race speed for the drag objective
+# Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
+# Absent = heaviest load case. Weights must sum to 1. Presets:
+#   Regionals: [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+#   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]
+#   Total:     [{ crew_lb = 350, weight = 0.675 }, { crew_lb = 525, weight = 0.10 }, { crew_lb = 700, weight = 0.225 }]
+# displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
+# straight_weight = 1.0   # drag + [shape_search]: share of straight drag; rest = steady-turn drag (docs/SHAPE_SEARCH.md)
+# turn_radius_in = 600.0  # turn radius for the turning drag, in (50 ft)
+
+# Race simulator (`jaguar race result.json`, src/race.rs): races the winner over the ASCE courses
+# and prints race times, straight vs turning distance/time and the straight_weight / displacements
+# to use in [objective]; also the score of `run` with objective.kind = "race". Units here: m, m/s, N, W. Courses: start on x = 0 heading +x,
+# y = 0 lane centre (+y = port), round each mark keeping it on `keep` side, finish on x = finish_x_m.
+# Geometry from the ASCE 2026 course figures (races/: Fig. 3 slalom, Fig. 4 endurance slalom,
+# Fig. 5 sprint), lane 5: its buoy line is y = 0, the slalom buoys alternate 5 m to the right of it
+# (rounded on their outside) and on it. The Fig. 4 open-water loop "may be any shape ... 500 m":
+# here the figure's three-buoy loop. Endurance: buoy 8 (lane-5 top, on the lane line) and buoy 12
+# (on the top line, 105 m across from buoy 8) are passed on the canoe's starboard side; from 12 it
+# is 100 m down to the finish line.
+[race]
+paddler_power_w = 100.0       # sustained paddle power per paddler (calibrate: jaguar race --measured "EVENT=SECONDS")
+propulsive_efficiency = 0.7   # share of paddle power that becomes thrust
+max_thrust_n = 100.0          # thrust per paddler at low speed (start, slow turns)
+buoy_clearance_m = 0.6        # closest the centreline passes a buoy (half beam + margin)
+lane_width_m = 15.0           # ASCE minimum lane width
+min_turn_radius_m = 2.0       # tightest turn the crew can steer (turn drag already slows tight turns)
+
+[[race.course]]
+name = "sprint_200"           # Fig. 5: up one side, 180 deg round the 100 m buoy, back down the other
+finish_x_m = 0.0
+marks = [{ x_m = 100.0, y_m = 0.0, keep = "port" }]
+
+[[race.course]]
+name = "sprint_400"           # two laps of sprint_200 (round the start buoy too)
+finish_x_m = 0.0
+marks = [
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+  { x_m = 0.0, y_m = 0.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "slalom_200"           # Fig. 3: up through 7 buoys (10, 20, 30, 50, 60, 70, 80 m), 180 deg round the 100 m buoy, straight back
+finish_x_m = 0.0
+marks = [
+  { x_m = 10.0, y_m = -5.0, keep = "port" },
+  { x_m = 20.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 30.0, y_m = -5.0, keep = "port" },
+  { x_m = 50.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 60.0, y_m = -5.0, keep = "port" },
+  { x_m = 70.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 80.0, y_m = -5.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "port" },
+]
+
+[[race.course]]
+name = "endurance_600"        # Fig. 4: the slalom, round the lane-5 top buoy, the open-water loop, a top-line buoy, 100 m to the line
+finish_x_m = 0.0
+lane_width_m = 400.0          # the loop leaves the lane
+marks = [
+  { x_m = 10.0, y_m = -5.0, keep = "port" },
+  { x_m = 20.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 30.0, y_m = -5.0, keep = "port" },
+  { x_m = 50.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 60.0, y_m = -5.0, keep = "port" },
+  { x_m = 70.0, y_m = 0.0, keep = "starboard" },
+  { x_m = 80.0, y_m = -5.0, keep = "port" },
+  { x_m = 100.0, y_m = 0.0, keep = "starboard" },   # 8: lane-5 top buoy, on the lane line
+  { x_m = 163.0, y_m = -63.0, keep = "port" },
+  { x_m = 229.0, y_m = 43.0, keep = "port" },
+  { x_m = 163.0, y_m = 147.0, keep = "port" },
+  { x_m = 100.0, y_m = 105.0, keep = "starboard" }, # 12: 105 m across from buoy 8, then 100 m to the line
+]
+
+# Events: weights_lb are PLACEHOLDERS (same as the load cases above). weight = share of the score;
+# here Student Symposium and Society-wide Finals count 50/50, races equal within each.
+[[race.event]]
+name = "Symposium co-ed 200 m slalom"
+course = "slalom_200"
+weights_lb = [175.0, 140.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Symposium co-ed 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.125
+
+[[race.event]]
+name = "Finals co-ed 600 m endurance"
+course = "endurance_600"
+weights_lb = [175.0, 140.0, 165.0]
+weight = 0.1
+paddler_power_w = 85.0        # longer race (~4 min), lower sustained power (assumed)
+
+[[race.event]]
+name = "Finals women's 200 m sprint"
+course = "sprint_200"
+weights_lb = [140.0, 130.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals men's 200 m sprint"
+course = "sprint_200"
+weights_lb = [175.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 200 m sprint heats"
+course = "sprint_200"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 400 m sprint final"
+course = "sprint_400"
+weights_lb = [175.0, 140.0, 130.0, 165.0]
+weight = 0.1

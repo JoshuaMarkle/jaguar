@@ -1,0 +1,14 @@
+race: opt-463-f4 at 99.8 lb hull, weighted time 99.0 s
+event                                crew  time s  dist m  straight   turning  turns   S_str  S_turn
+Symposium co-ed 200 m slalom          315    92.4   221.7  132m/ 50s   90m/ 42s      8   0.151   0.126
+Symposium women's 200 m sprint        270    74.1   209.1  187m/ 64s   22m/ 10s      1   0.212   0.040
+Symposium men's 200 m sprint          340    77.0   209.4  187m/ 67s   22m/ 10s      1   0.206   0.043
+Symposium co-ed 200 m sprint          610    70.4   209.1  187m/ 61s   22m/  9s      1   0.188   0.044
+Finals co-ed 600 m endurance          480   231.3   639.8  447m/154s  193m/ 77s     12   0.204   0.069
+Finals women's 200 m sprint           270    74.1   209.1  187m/ 64s   22m/ 10s      1   0.212   0.040
+Finals men's 200 m sprint             340    77.0   209.4  187m/ 67s   22m/ 10s      1   0.206   0.043
+Finals co-ed 200 m sprint heats       610    70.4   209.1  187m/ 61s   22m/  9s      1   0.188   0.044
+Finals co-ed 400 m sprint final       610   144.7   427.6  362m/116s   66m/ 29s      3   0.188   0.065
+recommended [objective]: straight_weight = 0.760, turn_radius_in = 419
+  displacements = [{ crew_lb = 270, weight = 0.166 }, { crew_lb = 315, weight = 0.126 }, { crew_lb = 340, weight = 0.170 }, { crew_lb = 480, weight = 0.249 }, { crew_lb = 610, weight = 0.289 }]
+wrote promo/data/race_shape_race.json

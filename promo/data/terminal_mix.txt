@@ -1,0 +1,18 @@
+mix               rho pcf   measured  fraction  final psi    fit psi flex final  f'c final
+M2 A                 56.4        191      1.00        191        202          -        866
+M2 B                 54.9        193      1.00        193        184          -        879
+M2 A.2               63.6        283      1.00        283        288          -       1284
+M4 A                 65.4        313      1.00        313        308          -       1424
+M5                   58.2        224      1.00        224        223          -       1020
+strength: final split = 11.83*rho -465.1 psi from 5 lab tests (54.9-65.4 pcf), rms 7.5 psi; f'c measured
+tested mixes (strength_model = "tested_mixes"; design = mean final split; m = mix mean of measured values, else derived):
+mix                n  rho pcf split mean  split min   flexural      f'c
+M2 B               1     54.9        193        193        193     879m
+M2 A               1     56.4        191        191        191     866m
+M5                 1     58.2        224        224        224    1020m
+M2 A.2             1     63.6        283        283        283    1284m
+M4 A               1     65.4        313        313        313    1424m
+  at 54.9 pcf: split 184 psi, flexural 184 psi, f'c 835 psi
+  at 65.4 pcf: split 308 psi, flexural 308 psi, f'c 1399 psi
+flexural: derived = 1.00 x split (no flexural_psi data)
+f'c: measured, final = 53.75*rho -2113.5 psi from 5 tests (54.9-65.4 pcf), rms 34.0 psi
