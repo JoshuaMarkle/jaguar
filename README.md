@@ -3,6 +3,8 @@
 Finds the lightest concrete canoe wall (thickness, mix density, mold depth) for a given hull that
 survives the crew, and can optionally search the hull shape too.
 
+https://github.com/user-attachments/assets/f4283657-ee39-4341-ba28-4a421164ac19
+
 ## Download and run (no terminal, no install)
 
 1. Download from [Releases](https://github.com/JoshuaMarkle/jaguar/releases/latest):
