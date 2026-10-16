@@ -19,6 +19,9 @@ flare_deg = 0.0           # outward lean of the sides above the waterline, deg f
 #                            # such outline that encloses the waterline). Full-ended hulls like off1 need a very
 #                            # wide gunwale, which gunwale_max_flare_deg rejects (every design then fails, with why).
 # gunwale_max_flare_deg = 30.0  # steepest side lean allowed with a gunwale outline (default 30)
+roughness_um = 0.0         # outer surface finish, equivalent sand roughness in micrometres (0 = smooth): raises skin
+#                            # friction (drag, race) once rough. Sealed, wet-sanded 400+ grit 5-20; sanded 120-220
+#                            # grit 30-80; steel-troweled 100-300; rough cast 500-1000. Under ~30 a canoe is smooth.
 
 # A design must pass EVERY load case. Seats are knee positions from the bow, one per paddler;
 # omit seats_in for auto seats ([seats] below).

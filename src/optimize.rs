@@ -1928,7 +1928,41 @@ fn curves_on(params: &Params, hull: &Hull, w: &mut Winner) {
         params.load_cases.iter().map(|lc| (lc.name.clone(), lc.weights_lb.iter().sum())).collect();
     for (name, crew) in &loadings {
         let (wt, _) = crate::curves::weight_and_kg(&grid, &sec, c.density_pcf, *crew, cg);
-        out.power.push(crate::curves::power_curve(&table, name, *crew, wt, &out.speeds_fps));
+        out.power.push(crate::curves::power_curve(
+            &table,
+            name,
+            *crew,
+            wt,
+            &out.speeds_fps,
+            params.hull.roughness_um,
+        ));
+    }
+    // Drag at the objective speed, worked per load case and per objective displacement (the
+    // search's own table and hull weight, so the weighted sum is the candidate's drag).
+    let (speed, ks) = (params.objective.speed_mps, params.hull.roughness_um);
+    out.drag_speed_mps = speed;
+    out.roughness_um = ks;
+    for (name, crew) in &loadings {
+        out.drag.push(crate::curves::drag_case(
+            &table,
+            name,
+            *crew,
+            c.hull_weight_lb + crew,
+            speed,
+            ks,
+            None,
+        ));
+    }
+    for d in params.objective.displacements.iter().flatten() {
+        out.objective_drag.push(crate::curves::drag_case(
+            &table,
+            &format!("{:.0} lb crew", d.crew_lb),
+            d.crew_lb,
+            c.hull_weight_lb + d.crew_lb,
+            speed,
+            ks,
+            Some(d.weight),
+        ));
     }
     loadings.push(("empty".into(), 0.0));
     for (name, crew) in &loadings {
@@ -2929,8 +2963,8 @@ fn evaluate_wall(
             let hull = grid_hull(grid);
             let speed = params.objective.speed_mps;
             let drag = match &params.objective.displacements {
-                None => resistance(&hull, draft, speed).map(|r| r.total_n),
-                Some(ds) => weighted_resistance(&hull, c.hull_weight_lb, ds, speed),
+                None => resistance(&hull, draft, speed, params.hull.roughness_um).map(|r| r.total_n),
+                Some(ds) => weighted_resistance(&hull, c.hull_weight_lb, ds, speed, params.hull.roughness_um),
             };
             match drag {
                 Ok(r) => c.drag_n = Some(r),

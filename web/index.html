@@ -273,7 +273,8 @@ gutter($('gutter-plot'), '--plot', 'plot', e => window.innerHeight - e.clientY, 
 // [section, key, label, unit, tooltip, step, min]
 const FIELDS = {
   hull: [['flare_deg', 'Side flare', 'deg', 'How much the hull sides lean outward above the design waterline, in degrees from vertical. 0 = straight up. Typical canoes use 5-15. More flare = wider gunwale (more stable, more freeboard) but more concrete.', 'any', 0],
-    ['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11]],
+    ['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11],
+    ['roughness_um', 'Surface roughness', 'um', 'Equivalent sand roughness of the finished outside of the hull, micrometres. Sets the skin friction in the drag, race and power numbers. 0 = hydraulically smooth. Rough guide: sealed and wet-sanded 400+ grit 5-20, sanded 120-220 grit 30-80, steel-troweled concrete 100-300, rough cast 500-1000. Below about 25-30 it makes no difference on a canoe.', 'any', 0]],
   material: [
     ['flex_over_split', 'Flex / split ratio', '-', 'Bending (flexural) strength divided by the split-cylinder tensile strength the lab measured. 1.0 is the safe choice; textbook relations give about 1.12.', 'any', 0],
     ['density_extrapolation_pcf', 'Density extrapolation', 'pcf', 'How far beyond the lightest and heaviest tested mixes the search may go. The strength line is fitted through only a few lab points, so far outside them it is a guess.', 'any', 0],
@@ -692,6 +693,7 @@ function formToml() {
   if (!shape) out.push(`file = ${tstr(g('hull.file'))}`);
   if (!shape && g('hull.gunwale_radius_in').trim() !== '') out.push(`gunwale_radius_in = ${fl(g('hull.gunwale_radius_in'))}`);
   out.push(`stations = ${int('hull.stations')}`, `flare_deg = ${fl(g('hull.flare_deg'))}`);
+  if (g('hull.roughness_um').trim() !== '' && Number(g('hull.roughness_um')) !== 0) out.push(`roughness_um = ${fl(g('hull.roughness_um'))}`);
   if ($('hull.doubly_symmetric').checked) out.push('doubly_symmetric = true');
   if (g('hull.templates').trim() !== '') out.push(`templates = ${int('hull.templates')}`);
   if (g('hull.stem_radius_in').trim() !== '') out.push(`stem_radius_in = ${fl(g('hull.stem_radius_in'))}`);
@@ -2393,10 +2395,73 @@ function calcHtml(win) {
   if (ks.length) tail.push('<h3>Sensitivity: knee punching by knee split</h3>', table(['knee split', 'load on the knee, lb', 'demand psi', 'capacity psi', 'D/C'],
     ks.map(z => `<tr><td>${g(z.knee_split, 1)}</td><td>${g(z.load_lb, 1)}</td><td>${g(z.demand_psi, 1)}</td><td>${g(z.capacity_psi, 1)}</td><td>${g(z.dc, 3)}</td></tr>`)));
   out.push(`<div class="page">${tail.join('')}</div>`);
+  // ---------- 6. drag ----------
+  const cu = win.curves || {}, dcs = (cu.drag || []).filter(z => z.resistance), ksU = cu.roughness_um || 0;
+  if (dcs.length) {
+    const V = cu.drag_speed_mps, dsec = ['<h2 style="margin-top:0">6. Drag (water resistance).</h2>'];
+    dsec.push(`<div class="muted">At the objective speed V = ${g(V, 2)} m/s (${g(V / 0.3048, 2)} ft/s), each crew's hull floating level at the draft where it displaces hull + crew. Fresh water &rho; = 998 kg/m<sup>3</sup>, &nu; = 1.139 &times; 10<sup>&minus;6</sup> m<sup>2</sup>/s (15 &deg;C), g = 9.80665 m/s<sup>2</sup>. Total = wave + friction; no form factor (k = 0), no air drag, no appendages.</div>`);
+    dsec.push(eq('Skin friction: flat-plate friction on the wetted surface S (the girth below the waterline integrated along the length), with the Reynolds number on the hull length L:',
+      'R<sub>F</sub> = &frac12; &rho; V<sup>2</sup> S C<sub>F</sub>, &nbsp; Re = V L / &nu;, &nbsp; C<sub>F,smooth</sub> = 0.075 / (log<sub>10</sub> Re &minus; 2)<sup>2</sup> (ITTC-1957)'
+      + (ksU > 0 ? ', &nbsp; C<sub>F,rough</sub> = (1.89 + 1.62 log<sub>10</sub>(L / k<sub>s</sub>))<sup>&minus;2.5</sup> (Schlichting, fully rough plate), &nbsp; C<sub>F</sub> = max(C<sub>F,smooth</sub>, C<sub>F,rough</sub>)' : ''),
+      ksU > 0 ? `Surface roughness k<sub>s</sub> = <b>${g(ksU, 0)} &micro;m</b> (Hull &gt; Surface roughness). Below about 25-30 &micro;m a canoe-sized hull is hydraulically smooth and the smooth line governs; rougher, friction grows with L/k<sub>s</sub> instead of Re.`
+        : '<b>Surface roughness k<sub>s</sub> = 0: the hull is taken as hydraulically smooth</b> (a well sealed, wet-sanded finish). Set Hull &gt; Surface roughness for your finish (sanded 120-220 grit about 30-80 &micro;m, steel-troweled 100-300 &micro;m) to add the rough-surface friction.'));
+    dsec.push(eq('Wave resistance: Michell\'s thin-ship integral over the submerged hull (offsets y(x, z) below the waterline, 41 stations &times; 21 waterlines, 256 wave angles), evaluated numerically:',
+      'R<sub>W</sub> = (4 &rho; g<sup>2</sup> / &pi; V<sup>2</sup>) &int;<sub>0</sub><sup>&pi;/2</sup> (P<sup>2</sup> + Q<sup>2</sup>) sec<sup>3</sup>&theta; d&theta;, &nbsp; P + iQ = &int;&int; (&part;y/&part;x) e<sup>k<sub>0</sub> z sec<sup>2</sup>&theta;</sup> e<sup>i k<sub>0</sub> x sec&theta;</sup> dx dz, &nbsp; k<sub>0</sub> = g / V<sup>2</sup>, &nbsp; Fn = V / &radic;(g L)', ''));
+    const row = z => { const r = z.resistance; return `<tr><td>${esc(z.name)}</td><td>${g(z.displacement_lb, 1)}</td><td>${g(z.draft_in, 2)}</td><td>${g(r.length_m, 3)}</td><td>${g(r.wetted_m2, 3)}</td><td>${g(r.froude, 3)}</td><td>${g(r.reynolds, 3)}</td><td>${g(r.cf_smooth * 1000, 3)}</td><td>${r.cf_rough != null ? g(r.cf_rough * 1000, 3) : '-'}</td><td><b>${g(r.cf * 1000, 3)}</b></td><td>${g(r.friction_n, 2)}</td><td>${g(r.wave_n, 2)}</td><td><b>${g(r.total_n, 2)}</b></td><td>${g(r.total_n / 4.448222, 2)}</td></tr>`; };
+    const hd = ['crew', 'hull + crew, lb', 'draft, in', 'L, m', 'S, m<sup>2</sup>', 'Fn', 'Re', 'C<sub>F,smooth</sub> &times;10<sup>3</sup>', 'C<sub>F,rough</sub> &times;10<sup>3</sup>', 'C<sub>F</sub> &times;10<sup>3</sup>', 'R<sub>F</sub>, N', 'R<sub>W</sub>, N', 'R<sub>T</sub>, N', 'R<sub>T</sub>, lbf'];
+    dsec.push(table(hd, dcs.map(row)));
+    const hv = dcs.reduce((a, b) => b.displacement_lb > a.displacement_lb ? b : a), r = hv.resistance;
+    dsec.push(eq(`Worked for the heaviest crew (${esc(hv.name)}, ${g(hv.displacement_lb, 1)} lb, draft ${g(hv.draft_in, 3)} in):`,
+      'R<sub>T</sub> = R<sub>W</sub> + &frac12; &rho; V<sup>2</sup> S C<sub>F</sub>',
+      `Re = ${g(V, 3)} &times; ${g(r.length_m, 4)} / 1.139 &times; 10<sup>&minus;6</sup> = ${g(r.reynolds, 4)}; C<sub>F,smooth</sub> = 0.075 / (${g(Math.log10(r.reynolds), 4)} &minus; 2)<sup>2</sup> = ${g(r.cf_smooth, 5)}`
+      + (r.cf_rough != null ? `; C<sub>F,rough</sub> = (1.89 + 1.62 log<sub>10</sub>(${g(r.length_m, 4)} / ${g(ksU * 1e-6, 3)}))<sup>&minus;2.5</sup> = ${g(r.cf_rough, 5)} &rarr; C<sub>F</sub> = ${g(r.cf, 5)}` : '')
+      + `<br>R<sub>F</sub> = 0.5 &times; 998 &times; ${g(V, 3)}<sup>2</sup> &times; ${g(r.wetted_m2, 4)} &times; ${g(r.cf, 5)} = ${g(r.friction_n, 3)} N; R<sub>W</sub> = ${g(r.wave_n, 3)} N (Fn = ${g(r.froude, 3)}); R<sub>T</sub> = <b>${g(r.total_n, 3)} N = ${g(r.total_n / 4.448222, 3)} lbf</b>; effective power R<sub>T</sub> V = ${g(r.total_n * V, 1)} W`));
+    const od = (cu.objective_drag || []).filter(z => z.resistance);
+    if (od.length) {
+      const sum = od.reduce((a, z) => a + z.weight * z.resistance.total_n, 0);
+      dsec.push('<h3>Objective drag: weighted over the race displacements</h3>', table(['displacement', 'hull + crew, lb', 'draft, in', 'R<sub>T</sub>, N', 'weight w', 'w &times; R<sub>T</sub>, N'],
+        od.map(z => `<tr><td>${esc(z.name)}</td><td>${g(z.displacement_lb, 1)}</td><td>${g(z.draft_in, 2)}</td><td>${g(z.resistance.total_n, 3)}</td><td>${g(z.weight, 3)}</td><td>${g(z.weight * z.resistance.total_n, 3)}</td></tr>`)
+          .concat(`<tr class="gov"><td>&Sigma;</td><td></td><td></td><td></td><td>${g(od.reduce((a, z) => a + z.weight, 0), 3)}</td><td><b>${g(sum, 3)} N</b></td></tr>`)));
+      dsec.push(`<div class="note">Objective drag &Sigma; w R<sub>T</sub> = <b>${g(sum, 3)} N</b> (the search recorded ${g(c.drag_n, 3)} N for this design).</div>`);
+    } else if (typeof c.drag_n === 'number') {
+      dsec.push(`<div class="note">Objective drag (what the drag objective compares, and the drag shown on page 1): R<sub>T</sub> of the heaviest load case at its floating draft from the equilibrium, <b>${g(c.drag_n, 3)} N = ${g(c.drag_n / 4.448222, 3)} lbf</b> (the level-draft value above differs only by the trim).</div>`);
+    }
+    out.push(`<div class="page">${dsec.join('')}</div>`);
+  }
+
+  // ---------- 7. race time ----------
+  const rr = raceRes && Math.abs(raceRes.hull_lb - c.hull_weight_lb) < 0.05 ? raceRes : null;
+  if (rr) {
+    const rp = rr.params, rsec = ['<h2 style="margin-top:0">7. Race time (the comparison score).</h2>'];
+    rsec.push(eq('Weighted race time: every [race] event is simulated on its own best path with its own crew; the event weights (share of the score each race carries) sum to 1:',
+      'T<sub>w</sub> = &Sigma;<sub>e</sub> w<sub>e</sub> t<sub>e</sub>, &nbsp; &Sigma; w<sub>e</sub> = 1', `T<sub>w</sub> = <b>${g(rr.weighted_time_s, 2)} s</b> (table below). Lower is faster; this is the number to compare canoes by.`));
+    rsec.push(eq('Each event: the canoe accelerates from a standing start along its path (straights and circular arcs around the buoys); speed from the momentum equation, integrated in distance (RK4 on u = v<sup>2</sup>, 0.25 m steps):',
+      `m<sub>eff</sub> dv/dt = T(v) &minus; R<sub>T</sub>(v) &minus; R<sub>turn</sub>(v, R), &nbsp; m<sub>eff</sub> = (W<sub>hull</sub> + W<sub>crew</sub>) (1 + ${g(rr.added_mass, 2)}) / g, &nbsp; T(v) = min(n F<sub>max</sub>, n &eta; P / v), &nbsp; t<sub>e</sub> = &int; ds / v`,
+      `n paddlers, each P = ${g(rp.paddler_power_w, 0)} W (unless the event sets its own), propulsive efficiency &eta; = ${g(rp.propulsive_efficiency, 2)}, F<sub>max</sub> = ${g(rp.max_thrust_n, 0)} N per paddler at low speed; added mass ${g(rr.added_mass * 100, 0)}% of the displacement. R<sub>T</sub>(v) is section 6 at this crew's level draft (tabulated 0.25-6 m/s)${rr.roughness_um > 0 ? `, surface roughness ${g(rr.roughness_um, 0)} &micro;m` : ', smooth surface'}.`));
+    rsec.push(eq('Turning drag on an arc of radius R (cross-flow strip model): each strip of the underwater profile (depth T(x)) slides sideways; the drift angle &beta; is solved so the side force holds the turn:',
+      'w(x) = U (x/R &minus; &beta;), &nbsp; f = &frac12; &rho; C<sub>D</sub> T(x) |w| w, &nbsp; &int; f dx = m U<sup>2</sup>/R, &nbsp; R<sub>turn</sub> = &int; &frac12; &rho; C<sub>D</sub> T |w|<sup>3</sup> dx / U, &nbsp; C<sub>D</sub> = 1.0',
+      `Path: start position, each buoy's arc radius and centre are optimized (compass search) for the shortest time, the buoy kept ${g(rp.buoy_clearance_m, 2)} m from the centreline, radius &ge; ${g(rp.min_turn_radius_m, 2)} m, inside a ${g(rp.lane_width_m, 0)} m lane. Neglected: wind, current, stroke pulsation, heel in turns.`));
+    const ev = rr.events, sum = ev.reduce((a, e) => a + e.weight * e.time_s, 0);
+    rsec.push(table(['event', 'crew, lb', 'm<sub>eff</sub> kg', 'P W', 'path m', 'straight m / s', 'arcs m / s', 'mean / top m/s', 'R<sub>T</sub> / thrust at top N', 't<sub>e</sub> s', 'w<sub>e</sub>', 'w<sub>e</sub>t<sub>e</sub> s'],
+      ev.map(e => `<tr><td>${esc(e.name)}</td><td>${esc(e.load_case || '')}: ${g(e.crew_lb, 0)}</td><td>${g(e.mass_eff_kg, 1)}</td><td>${g(e.paddler_power_w, 0)}</td><td>${g(e.distance_m, 1)}</td><td>${g(e.straight_m, 0)} / ${g(e.straight_s, 1)}</td><td>${g(e.turn_m, 0)} / ${g(e.turn_s, 1)}</td><td>${g(e.mean_mps, 2)} / ${g(e.top_mps, 2)}</td><td>${g(e.drag_top_n, 1)} / ${g(e.thrust_top_n, 1)}</td><td><b>${g(e.time_s, 2)}</b></td><td>${g(e.weight, 3)}</td><td>${g(e.weight * e.time_s, 2)}</td></tr>`)
+        .concat(`<tr class="gov"><td>&Sigma;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>${g(ev.reduce((a, e) => a + e.weight, 0), 3)}</td><td><b>${g(sum, 2)}</b></td></tr>`)));
+    rsec.push(`<div class="muted">Draft of each crew: section 6. Straight / arcs: distance and time on the straights and around the buoys.</div>`);
+    const e0 = ev.reduce((a, e) => e.distance_m - e.turn_m > a.distance_m - a.turn_m ? e : a);
+    rsec.push(eq(`Check, ${esc(e0.name)}: on the long straight the canoe reaches the speed where thrust equals drag:`, 'n &eta; P / v<sub>top</sub> = R<sub>T</sub>(v<sub>top</sub>)',
+      `${e0.paddlers} &times; ${g(rp.propulsive_efficiency, 2)} &times; ${g(e0.paddler_power_w, 0)} / ${g(e0.top_mps, 3)} = ${g(e0.thrust_top_n, 2)} N vs R<sub>T</sub> = ${g(e0.drag_top_n, 2)} N`));
+    rsec.push(eq('What moves the score: time sensitivity to each drag (path held; 0.10 means 10% more drag costs 1% more time):',
+      'S = d ln t / d ln R', rr.recommended ? `Drag-objective weights they imply: straight_weight = ${g(rr.recommended.straight_weight, 3)}, turn radius ${g(rr.recommended.turn_radius_in, 0)} in.` : ''));
+    rsec.push(table(['event', 'S<sub>straight</sub>', 'S<sub>turn</sub>'], ev.map(e => `<tr><td>${esc(e.name)}</td><td>${g(e.sens_straight, 3)}</td><td>${g(e.sens_turn, 3)}</td></tr>`)));
+    out.push(`<div class="page">${rsec.join('')}</div>`);
+  } else if (P.race) {
+    out.push('<div class="page"><h2 style="margin-top:0">7. Race time.</h2><div class="note">Not raced: press Race in the Race tab, then export again.</div></div>');
+  }
   return out.join('');
 }
-function exportPdf() {
+async function exportPdf() {
   if (!result || !result.winner || !hull) return;
+  // The proof's race-time section needs a race of this design: race it first if not yet.
+  if (!raceRes && result.params && result.params.race && !raceBusy) await raceGo();
   try {
     const html = reportHtml(snapCanoe(1400, 760), reportCharts());
     // The previous report's frame stays until the next export: removing it while a print dialog

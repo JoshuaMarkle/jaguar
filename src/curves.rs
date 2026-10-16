@@ -14,7 +14,7 @@
 //!   angle; beyond it the closed-hull curve shows the hull shape, not a canoe that stays dry.
 
 use crate::hull::{Grid, Hull};
-use crate::resistance::{level_draft_in, resistance};
+use crate::resistance::{Resistance, level_draft_in, resistance};
 use crate::section::Sections;
 use crate::units::{IN3_PER_FT3, WATER_PCF};
 use anyhow::{Result, bail};
@@ -75,16 +75,77 @@ pub struct Curves {
     pub power: Vec<PowerCurve>,
     pub angles_deg: Vec<f64>,
     pub gz: Vec<GzCurve>,
+    /// Drag broken down (wave, friction, Re, Cf, wetted surface) at `objective.speed_mps` for
+    /// each load case (hull + real crew, level draft), for the report's drag derivation.
+    pub drag: Vec<DragCase>,
+    /// With `objective.displacements`: the same for each weighted displacement; the objective
+    /// drag is the sum of weight x total over these.
+    pub objective_drag: Vec<DragCase>,
+    pub drag_speed_mps: f64,
+    pub roughness_um: f64,
+}
+
+/// One loading's resistance at one speed, every intermediate value.
+#[derive(Debug, Clone, Serialize)]
+pub struct DragCase {
+    pub name: String,
+    pub crew_lb: f64,
+    /// Hull + crew, lb.
+    pub displacement_lb: f64,
+    /// Share in the objective (`objective.displacements` only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub draft_in: Option<f64>,
+    pub resistance: Option<Resistance>,
+}
+
+/// Resistance of `hull` floating level with `weight_lb` at `speed_mps`, every term kept.
+pub fn drag_case(
+    hull: &Hull,
+    name: &str,
+    crew_lb: f64,
+    weight_lb: f64,
+    speed_mps: f64,
+    roughness_um: f64,
+    weight: Option<f64>,
+) -> DragCase {
+    let mut c = DragCase {
+        name: name.into(),
+        crew_lb,
+        displacement_lb: weight_lb,
+        weight,
+        error: None,
+        draft_in: None,
+        resistance: None,
+    };
+    match level_draft_in(hull, weight_lb).and_then(|d| Ok((d, resistance(hull, d, speed_mps, roughness_um)?)))
+    {
+        Ok((d, r)) => {
+            c.draft_in = Some(d);
+            c.resistance = Some(r);
+        }
+        Err(e) => c.error = Some(format!("{e:#}")),
+    }
+    c
 }
 
 /// Effective power at `speeds_fps` of `hull` (a hull table up to the gunwale) floating level
 /// with `weight_lb`. Errors (sinks, no resistance) are per curve, never zeros.
-pub fn power_curve(hull: &Hull, name: &str, crew_lb: f64, weight_lb: f64, speeds_fps: &[f64]) -> PowerCurve {
+pub fn power_curve(
+    hull: &Hull,
+    name: &str,
+    crew_lb: f64,
+    weight_lb: f64,
+    speeds_fps: &[f64],
+    roughness_um: f64,
+) -> PowerCurve {
     let run = || -> Result<(f64, Vec<f64>)> {
         let d = level_draft_in(hull, weight_lb)?;
         let r = speeds_fps
             .iter()
-            .map(|v| resistance(hull, d, v * MPS_PER_FPS).map(|r| r.total_n))
+            .map(|v| resistance(hull, d, v * MPS_PER_FPS, roughness_um).map(|r| r.total_n))
             .collect::<Result<Vec<_>>>()?;
         Ok((d, r))
     };
@@ -305,12 +366,12 @@ mod tests {
             stem: None,
         };
         let sp = speeds_fps();
-        let p = power_curve(&hull, "case", 300.0, w, &sp);
+        let p = power_curve(&hull, "case", 300.0, w, &sp, 0.0);
         assert!(p.error.is_none(), "{:?}", p.error);
         // P = R v, rising with speed.
         assert!((p.power_w[4] - p.drag_n[4] * sp[4] * MPS_PER_FPS).abs() < 1e-9);
         assert!(p.power_w.windows(2).all(|w| w[1] > w[0]));
-        let sunk = power_curve(&hull, "lead", 0.0, 1e6, &sp);
+        let sunk = power_curve(&hull, "lead", 0.0, 1e6, &sp, 0.0);
         assert!(sunk.error.is_some() && sunk.power_w.is_empty());
     }
 }

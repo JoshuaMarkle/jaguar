@@ -222,7 +222,7 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
     let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
     let s = to_shape(&mid);
     let hull = generate(&s, STATIONS, WATERLINES, "reference")?;
-    let drag_n = resistance(&hull, s.draft_in, params.objective.speed_mps)
+    let drag_n = resistance(&hull, s.draft_in, params.objective.speed_mps, params.hull.roughness_um)
         .context("drag of the reference (midpoint) shape")?
         .total_n;
     let lb = displaced_volume_in3(&hull, s.draft_in) * WATER_PCF / IN3_PER_FT3;

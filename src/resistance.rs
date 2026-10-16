@@ -9,10 +9,12 @@
 //!   hull at the loaded draft (half-breadths clipped at `draft_in`), fresh water
 //!   998 kg/m^3, g = 9.80665, ntheta = 128 (or fewer if a test shows <1%
 //!   change), theta excluding pi/2.
-//! * friction: ITTC-1957, Cf = 0.075 / (log10 Re - 2)^2, Re = V L / nu,
-//!   nu = 1.139e-6 m^2/s, times 0.5 rho V^2 S with S the wetted surface
-//!   (girth below the draft integrated along the length).
-//!   No form factor (k = 0); say so in the result doc.
+//! * friction: 0.5 rho V^2 S Cf with S the wetted surface (girth below the draft
+//!   integrated along the length), Re = V L / nu, nu = 1.139e-6 m^2/s (15 C).
+//!   Cf = the larger of ITTC-1957 (hydraulically smooth), 0.075 / (log10 Re - 2)^2, and,
+//!   for a surface of equivalent sand roughness ks (`hull.roughness_um`; 0 = smooth), the
+//!   fully rough flat plate (Schlichting), (1.89 + 1.62 log10(L / ks))^-2.5 ([`friction_coeff`]).
+//!   No form factor (k = 0).
 //!
 //! Errors (Err, never 0.0): non-finite inputs, speed <= 0, draft <= 0, or a
 //! hull with no submerged volume at `draft_in`.
@@ -32,6 +34,35 @@ pub struct Resistance {
     pub total_n: f64,
     /// Wetted surface used for friction, m^2.
     pub wetted_m2: f64,
+    /// Length used for Re and the roughness ratio, m.
+    pub length_m: f64,
+    pub speed_mps: f64,
+    /// Froude number V / sqrt(g L).
+    pub froude: f64,
+    /// Reynolds number V L / nu.
+    pub reynolds: f64,
+    /// ITTC-1957 (smooth) friction coefficient.
+    pub cf_smooth: f64,
+    /// Fully rough plate coefficient at the given roughness (None: smooth, ks = 0).
+    pub cf_rough: Option<f64>,
+    /// The friction coefficient used: max(cf_smooth, cf_rough).
+    pub cf: f64,
+}
+
+/// Kinematic viscosity of fresh water at 15 C, m^2/s, and density, kg/m^3 (for reports).
+pub const NU_WATER: f64 = NU;
+pub const RHO_WATER: f64 = RHO;
+
+/// Skin-friction coefficient of a hull of length `l_m` at Reynolds number `re` with
+/// equivalent sand roughness `ks_um` (micrometres; 0 = hydraulically smooth):
+/// (smooth, rough, used). Smooth: ITTC-1957 correlation line. Rough: Schlichting's fully rough
+/// flat plate, (1.89 + 1.62 log10(L / ks))^-2.5. Used: the larger, the usual envelope of the
+/// two (White, Fluid Mechanics, flat-plate friction): a surface is "smooth" until its roughness
+/// pokes through the viscous sublayer, then friction depends on L / ks, not on Re.
+pub fn friction_coeff(re: f64, l_m: f64, ks_um: f64) -> (f64, Option<f64>, f64) {
+    let smooth = 0.075 / (re.log10() - 2.0).powi(2);
+    let rough = (ks_um > 0.0).then(|| (1.89 + 1.62 * (l_m / (ks_um * 1e-6)).log10()).powf(-2.5));
+    (smooth, rough, rough.map_or(smooth, |r| r.max(smooth)))
 }
 
 /// Stations and waterlines used to sample the submerged hull.
@@ -51,12 +82,12 @@ const NU: f64 = 1.139e-6;
 /// Resistance of `hull` floating level at `draft_in` (inches above keel) at
 /// `speed_mps`. Total = wave (Michell) + ITTC-1957 friction with form factor
 /// k = 0 (no viscous form drag).
-pub fn resistance(hull: &Hull, draft_in: f64, speed_mps: f64) -> Result<Resistance> {
+pub fn resistance(hull: &Hull, draft_in: f64, speed_mps: f64, ks_um: f64) -> Result<Resistance> {
     ensure!(draft_in.is_finite() && draft_in > 0.0, "draft must be finite and > 0, got {draft_in}");
     ensure!(speed_mps.is_finite() && speed_mps > 0.0, "speed must be finite and > 0, got {speed_mps}");
     ensure!(hull.length.is_finite() && hull.length > 0.0, "hull length must be > 0");
     let (x, z, y) = sample(hull, draft_in);
-    resistance_offsets(&x, &z, &y, speed_mps)
+    resistance_offsets(&x, &z, &y, speed_mps, ks_um)
 }
 
 /// Displaced volume of `hull` floating level at `draft_in`, in^3 (same
@@ -92,11 +123,12 @@ pub fn weighted_resistance(
     hull_lb: f64,
     displacements: &[Displacement],
     speed_mps: f64,
+    ks_um: f64,
 ) -> Result<f64> {
     let mut sum = 0.0;
     for d in displacements {
         let draft = level_draft_in(hull, hull_lb + d.crew_lb)?;
-        sum += d.weight * resistance(hull, draft, speed_mps)?.total_n;
+        sum += d.weight * resistance(hull, draft, speed_mps, ks_um)?.total_n;
     }
     Ok(sum)
 }
@@ -198,11 +230,12 @@ fn trapz(f: &[f64], dx: f64) -> f64 {
 
 /// Core on a uniform grid: `x` stations (in, bow to stern), `z` waterlines
 /// (in, keel 0 up to the waterline at `z[last]`), `y[i * nz + k]` half-breadth, in.
-pub(crate) fn resistance_offsets(x: &[f64], z: &[f64], y: &[f64], v: f64) -> Result<Resistance> {
-    resistance_n(x, z, y, v, NTHETA)
+pub(crate) fn resistance_offsets(x: &[f64], z: &[f64], y: &[f64], v: f64, ks_um: f64) -> Result<Resistance> {
+    resistance_n(x, z, y, v, NTHETA, ks_um)
 }
 
-fn resistance_n(x: &[f64], z: &[f64], y: &[f64], v: f64, nth: usize) -> Result<Resistance> {
+fn resistance_n(x: &[f64], z: &[f64], y: &[f64], v: f64, nth: usize, ks_um: f64) -> Result<Resistance> {
+    ensure!(ks_um.is_finite() && ks_um >= 0.0, "roughness must be >= 0 um, got {ks_um}");
     let (nx, nz) = (x.len(), z.len());
     ensure!(nx >= 3 && nz >= 2 && y.len() == nx * nz, "bad offset grid");
     ensure!(y.iter().all(|a| a.is_finite() && *a >= 0.0), "non-finite or negative half-breadth");
@@ -277,11 +310,23 @@ fn resistance_n(x: &[f64], z: &[f64], y: &[f64], v: f64, nth: usize) -> Result<R
         .collect();
     let wetted = trapz(&girth, dx);
     let re = v * l / NU;
-    let cf = 0.075 / (re.log10() - 2.0).powi(2);
+    let (cf_smooth, cf_rough, cf) = friction_coeff(re, l, ks_um);
     let friction = 0.5 * RHO * v * v * wetted * cf;
     let total = wave + friction;
     ensure!(total.is_finite() && wave >= 0.0, "non-finite resistance");
-    Ok(Resistance { wave_n: wave, friction_n: friction, total_n: total, wetted_m2: wetted })
+    Ok(Resistance {
+        wave_n: wave,
+        friction_n: friction,
+        total_n: total,
+        wetted_m2: wetted,
+        length_m: l,
+        speed_mps: v,
+        froude: v / (G * l).sqrt(),
+        reynolds: re,
+        cf_smooth,
+        cf_rough,
+        cf,
+    })
 }
 
 /// Weights (lo, hi) such that the integral over [-h, 0] of the linear
@@ -420,13 +465,34 @@ mod tests {
         let h = box_hull();
         let one = [Displacement { crew_lb: 350.0, weight: 1.0 }];
         let d = level_draft_in(&h, 100.0 + 350.0).unwrap();
-        let single = resistance(&h, d, 2.5).unwrap().total_n;
-        assert_eq!(weighted_resistance(&h, 100.0, &one, 2.5).unwrap(), single);
+        let single = resistance(&h, d, 2.5, 0.0).unwrap().total_n;
+        assert_eq!(weighted_resistance(&h, 100.0, &one, 2.5, 0.0).unwrap(), single);
         let two =
             [Displacement { crew_lb: 350.0, weight: 0.75 }, Displacement { crew_lb: 700.0, weight: 0.25 }];
-        let heavy = resistance(&h, level_draft_in(&h, 800.0).unwrap(), 2.5).unwrap().total_n;
-        let wsum = weighted_resistance(&h, 100.0, &two, 2.5).unwrap();
+        let heavy = resistance(&h, level_draft_in(&h, 800.0).unwrap(), 2.5, 0.0).unwrap().total_n;
+        let wsum = weighted_resistance(&h, 100.0, &two, 2.5, 0.0).unwrap();
         assert!((wsum - (0.75 * single + 0.25 * heavy)).abs() < 1e-9 && heavy > single);
+    }
+
+    #[test]
+    fn roughness_raises_friction_once_it_pokes_through() {
+        // 5.5 m canoe at 3 m/s: Re = 1.45e7, ITTC Cf = 0.00282. Fully rough Cf passes it near
+        // ks = 28 um; 100 um is about 25% more friction, 300 um about 56% more.
+        let re = 3.0 * 5.5 / NU;
+        let (s, r0, c0) = friction_coeff(re, 5.5, 0.0);
+        assert!((s - 0.00282).abs() < 2e-5 && r0.is_none() && c0 == s, "{s}");
+        let (_, r20, c20) = friction_coeff(re, 5.5, 20.0);
+        assert!(r20.unwrap() < s && c20 == s, "20 um is still smooth");
+        let (_, _, c100) = friction_coeff(re, 5.5, 100.0);
+        let (_, _, c300) = friction_coeff(re, 5.5, 300.0);
+        assert!((c100 / s - 1.25).abs() < 0.03 && (c300 / s - 1.56).abs() < 0.04, "{c100} {c300}");
+        // Only friction moves; the wave part does not see the surface.
+        let h = box_hull();
+        let (a, b) = (resistance(&h, 5.0, 2.5, 0.0).unwrap(), resistance(&h, 5.0, 2.5, 300.0).unwrap());
+        assert_eq!(a.wave_n, b.wave_n);
+        assert!(b.friction_n > 1.4 * a.friction_n && b.cf_rough.is_some() && a.cf_rough.is_none());
+        assert!((b.friction_n - 0.5 * RHO * 2.5 * 2.5 * b.wetted_m2 * b.cf).abs() < 1e-9);
+        assert!(resistance(&h, 5.0, 2.5, -1.0).is_err());
     }
 
     #[test]
@@ -435,7 +501,7 @@ mod tests {
         let x = linspace(0.0, l, NX);
         let z = linspace(0.0, t, NZ);
         let y = vec![0.001; NX * NZ];
-        let r = resistance_offsets(&x, &z, &y, 2.5).unwrap();
+        let r = resistance_offsets(&x, &z, &y, 2.5, 0.0).unwrap();
         assert!(r.wave_n < 1e-3 * r.friction_n, "{r:?}");
         // ITTC by hand: S = 2 L T (sides) + bottom, both sides of the plate
         let (lm, tm) = (l / M_TO_IN, t / M_TO_IN);
@@ -455,8 +521,8 @@ mod tests {
         // Same plate with the bottom half of every station empty (keel lifted to mid-draft).
         let lifted: Vec<f64> = (0..NX * NZ).map(|j| if j % NZ < NZ / 2 { 0.0 } else { 0.001 }).collect();
         let (a, b) = (
-            resistance_offsets(&x, &z, &full, 2.5).unwrap().wetted_m2,
-            resistance_offsets(&x, &z, &lifted, 2.5).unwrap().wetted_m2,
+            resistance_offsets(&x, &z, &full, 2.5, 0.0).unwrap().wetted_m2,
+            resistance_offsets(&x, &z, &lifted, 2.5, 0.0).unwrap().wetted_m2,
         );
         // Sides: NZ - NZ/2 of the NZ - 1 waterline segments remain (bottom strip negligible).
         let want = (NZ - NZ / 2) as f64 / (NZ - 1) as f64;
@@ -470,7 +536,7 @@ mod tests {
         let cw = |fn_: f64| {
             let v = fn_ * (G * lm).sqrt();
             let (x, z, y) = wigley(l, b, t);
-            let r = resistance_offsets(&x, &z, &y, v).unwrap();
+            let r = resistance_offsets(&x, &z, &y, v, 0.0).unwrap();
             r.wave_n / (0.5 * RHO * v * v * r.wetted_m2)
         };
         let c: Vec<f64> = [0.15, 0.2, 0.3, 0.35, 0.5].iter().map(|&f| cw(f)).collect();
@@ -503,8 +569,8 @@ mod tests {
         let (x, z, y) = wigley(240.0, 24.0, 15.0);
         for fn_ in [0.15, 0.2, 0.3, 0.5] {
             let v = fn_ * (G * 240.0 / M_TO_IN).sqrt();
-            let a = resistance_n(&x, &z, &y, v, NTHETA).unwrap().wave_n;
-            let b = resistance_n(&x, &z, &y, v, 4 * NTHETA).unwrap().wave_n;
+            let a = resistance_n(&x, &z, &y, v, NTHETA, 0.0).unwrap().wave_n;
+            let b = resistance_n(&x, &z, &y, v, 4 * NTHETA, 0.0).unwrap().wave_n;
             assert!((a / b - 1.0).abs() < 0.01, "Fn {fn_}: {a} vs {b}");
         }
     }
@@ -526,7 +592,7 @@ mod tests {
             }
             for f in [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6] {
                 let v = f * (G * l / M_TO_IN).sqrt();
-                let r = resistance_offsets(&x, &z, &y, v).unwrap();
+                let r = resistance_offsets(&x, &z, &y, v, 0.0).unwrap();
                 eprintln!(
                     "{nx}x{nz} Fn {f}: Cw*1e3 {:.3}",
                     1e3 * r.wave_n / (0.5 * RHO * v * v * r.wetted_m2)
@@ -538,8 +604,8 @@ mod tests {
     #[test]
     fn errors_not_zero() {
         let (x, z, y) = wigley(240.0, 24.0, 15.0);
-        assert!(resistance_offsets(&x, &z, &y, 0.0).is_err());
-        assert!(resistance_offsets(&x, &z, &vec![0.0; y.len()], 2.0).is_err());
+        assert!(resistance_offsets(&x, &z, &y, 0.0, 0.0).is_err());
+        assert!(resistance_offsets(&x, &z, &vec![0.0; y.len()], 2.0, 0.0).is_err());
     }
 
     #[test]
@@ -549,11 +615,11 @@ mod tests {
         let n = 50;
         let mut r = None;
         for _ in 0..n {
-            r = Some(resistance(&hull, 5.0, 2.5).unwrap());
+            r = Some(resistance(&hull, 5.0, 2.5, 0.0).unwrap());
         }
         let dt = t0.elapsed() / n;
         eprintln!("resistance(): {dt:?} per call, {:?}", r.unwrap());
         assert!(dt.as_secs_f64() < 2e-3 || cfg!(debug_assertions), "{dt:?}");
-        assert!(resistance(&hull, 0.0, 2.5).is_err());
+        assert!(resistance(&hull, 0.0, 2.5, 0.0).is_err());
     }
 }

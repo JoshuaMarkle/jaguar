@@ -119,7 +119,7 @@ impl Boat {
         let straight_c = (1..=SPEEDS)
             .map(|k| {
                 let v = k as f64 * SPEED_STEP;
-                Ok(resistance(topsides, draft_in, v)?.total_n / (v * v))
+                Ok(resistance(topsides, draft_in, v, rp.roughness_um)?.total_n / (v * v))
             })
             .collect::<Result<Vec<f64>>>()?;
         let g = Grid::build(topsides, topsides.draft_design, PROFILE_STATIONS);
@@ -656,6 +656,12 @@ pub struct EventResult {
     pub turn_s: f64,
     pub mean_mps: f64,
     pub top_mps: f64,
+    /// Hull + crew mass x (1 + ADDED_MASS), kg: what the thrust accelerates.
+    pub mass_eff_kg: f64,
+    /// Straight resistance and paddle thrust at `top_mps` (they balance at the steady top
+    /// speed on a long straight), N.
+    pub drag_top_n: f64,
+    pub thrust_top_n: f64,
     /// d ln(time) / d ln(straight resistance), path held.
     pub sens_straight: f64,
     /// d ln(time) / d ln(turning drag), path held.
@@ -685,6 +691,10 @@ pub struct RaceResult {
     pub hull: String,
     pub hull_lb: f64,
     pub params: RaceParams,
+    /// `hull.roughness_um` the straight resistance used, micrometres.
+    pub roughness_um: f64,
+    /// Surge added mass share used (`ADDED_MASS`).
+    pub added_mass: f64,
     /// Sum of event weight x time, s.
     pub weighted_time_s: f64,
     pub events: Vec<EventResult>,
@@ -720,6 +730,7 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         path_m.push(last.point(last.length_m));
     }
     let distance_m: f64 = runs.iter().map(|r| r.length_m).sum();
+    let top_mps = runs.iter().map(|r| r.exit_mps.max(r.entry_mps)).fold(0.0, f64::max);
     Ok(EventResult {
         name: e.name.clone(),
         course: e.course.clone(),
@@ -737,7 +748,10 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         turn_m: runs.iter().filter(arc).map(|r| r.length_m).sum(),
         turn_s: runs.iter().filter(arc).map(|r| r.time_s).sum(),
         mean_mps: distance_m / t,
-        top_mps: runs.iter().map(|r| r.exit_mps.max(r.entry_mps)).fold(0.0, f64::max),
+        top_mps,
+        mass_eff_kg: boat.mass_kg * (1.0 + ADDED_MASS),
+        drag_top_n: boat.straight_n(top_mps),
+        thrust_top_n: boat.thrust_n(top_mps),
         sens_straight,
         sens_turn,
         start_y_m: x.0[0],
@@ -813,6 +827,8 @@ pub fn run(hull: &Hull, hull_lb: f64, depth_in: f64, ts: Topsides, rp: &RacePara
         hull: hull.name.clone(),
         hull_lb,
         params: rp.clone(),
+        roughness_um: rp.roughness_um,
+        added_mass: ADDED_MASS,
         weighted_time_s,
         recommended: recommend(&events)?,
         events,
@@ -914,6 +930,7 @@ mod tests {
                 weight: 1.0,
                 paddler_power_w: None,
             }],
+            roughness_um: 0.0,
         }
     }
 

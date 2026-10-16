@@ -767,6 +767,7 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
             let lcs: Vec<crate::params::LoadCase> =
                 serde_json::from_value(v["params"]["load_case"].clone()).context("params.load_case")?;
             rp.resolve_crews(&lcs)?;
+            rp.roughness_um = v["params"]["hull"]["roughness_um"].as_f64().unwrap_or(0.0);
             Some(rp)
         }
     };

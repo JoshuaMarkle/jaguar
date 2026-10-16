@@ -134,6 +134,10 @@ pub struct RaceParams {
     pub courses: Vec<Course>,
     #[serde(rename = "event")]
     pub events: Vec<RaceEvent>,
+    /// `hull.roughness_um`, copied in when the canoe.toml (or result) is read; not an input of
+    /// `[race]` and not written back.
+    #[serde(skip)]
+    pub roughness_um: f64,
 }
 
 /// A course: standing start on the line x = 0 heading +x (anywhere within the
@@ -393,6 +397,13 @@ pub struct HullParams {
     /// along the hull, deg from vertical (default 30). Steeper = rejected.
     #[serde(default = "gunwale_max_flare")]
     pub gunwale_max_flare_deg: f64,
+    /// Equivalent sand roughness of the finished outer surface, micrometres (default 0 =
+    /// hydraulically smooth). Raises skin friction once it is rough enough to matter
+    /// (`resistance::friction_coeff`): drag objective, race, power curves. Rough guide:
+    /// sealed and wet-sanded 400+ grit 5-20, sanded 120-220 grit 30-80, steel-troweled
+    /// concrete 100-300, rough cast 500-1000.
+    #[serde(default)]
+    pub roughness_um: f64,
     /// Doubly symmetric canoe (manufacturability: one end mold makes both ends): bow and stern
     /// identical as well as port and starboard. A hull file is made fore-aft symmetric
     /// (`Hull::symmetrized`); a shape search ties the stern factors to the bow's (same as
@@ -877,6 +888,7 @@ impl Params {
         }
         if let Some(r) = &mut p.race {
             r.resolve_crews(&p.load_cases)?;
+            r.roughness_um = p.hull.roughness_um;
         }
         p.validate()?;
         Ok(p)
@@ -885,6 +897,9 @@ impl Params {
     pub fn validate(&self) -> Result<()> {
         if self.hull.stations < 11 {
             bail!("hull.stations must be >= 11");
+        }
+        if !(self.hull.roughness_um.is_finite() && (0.0..=5000.0).contains(&self.hull.roughness_um)) {
+            bail!("hull.roughness_um must be in [0, 5000] micrometres, got {}", self.hull.roughness_um);
         }
         if !(0.0..=45.0).contains(&self.hull.flare_deg) {
             bail!("hull.flare_deg must be in [0, 45], got {}", self.hull.flare_deg);
