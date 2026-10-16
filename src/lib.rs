@@ -52,12 +52,22 @@ use params::Params;
 /// and the knee-split sensitivity) and its power and GZ curves (`optimize::winner_curves`),
 /// never per candidate or per shape.
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
+    run_controlled(params, on_progress, &optimize::RunControl::default())
+}
+
+/// [`run`] that the web UI can pause and end (`optimize::RunControl`): a fixed-hull search
+/// ends with Err(`optimize::RunEnded`), a shape search with the best shape so far.
+pub fn run_controlled(
+    params: &Params,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &optimize::RunControl,
+) -> Result<RunResult> {
     let mut r = match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => {
             let h = hull::Hull::load(f)?.prepared(&params.hull)?;
-            optimize::run_with_progress(params, &h, on_progress)?
+            optimize::run_controlled(params, &h, on_progress, ctl)?
         }
-        (None, Some(_)) => shapeopt::run(params, on_progress)?,
+        (None, Some(_)) => shapeopt::run_controlled(params, on_progress, ctl)?,
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     };
     optimize::verify_stands(params, &mut r);

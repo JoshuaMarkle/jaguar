@@ -40,8 +40,14 @@
 //!   `Params::parse(text, <dir of the CLI canoe.toml>)`; 400 {"error"} if
 //!   invalid, 409 if a run is already going, else 202 {"ok":true} and starts
 //!   `optimize::run_with_progress` on a background thread.
-//! * `GET  /api/status`    -> {"state": "idle"|"running"|"done"|"error",
-//!   "done": n, "total": n, "error": str|null,
+//! * `POST /api/pause`  /  `POST /api/resume`: hold the running search at its next candidate
+//!   (fixed hull) or shape (shape search) / let it go on. 200 {"ok":true}, 409 if no run is going.
+//! * `POST /api/stop`      end the running search (also releases a pause). Shape search: no new
+//!   shapes; the best shape so far is verified and reported as usual, with `ended_early` in
+//!   result.json (state "done"). Fixed hull, or no shape finished yet: state "stopped", no result
+//!   written, the previous one kept. 200 {"ok":true}, 409 if no run is going.
+//! * `GET  /api/status`    -> {"state": "idle"|"running"|"done"|"error"|"stopped",
+//!   "paused": bool, "stopping": bool, "done": n, "total": n, "error": str|null,
 //!   "shape": {"index": i, "shapes": n} | null (shape search only), "candidates": [...new since ?since=k...]}
 //!   Poll every ~250 ms with `?since=<count already seen>` to get only new
 //!   candidates (cheap incremental updates; no websockets needed).
@@ -104,6 +110,8 @@ struct Shared {
     shape: Option<(usize, usize)>,
     /// Params of the most recent run (feeds /api/mix).
     params: Option<Params>,
+    /// Pause / stop of the current run (a fresh one per run).
+    ctl: Arc<optimize::RunControl>,
 }
 
 /// Request handler, independent of the socket so it can be unit tested.
@@ -221,6 +229,18 @@ impl App {
             },
             ("POST", "/api/run") => self.start_run(body),
             ("POST", "/api/race") => self.race(body),
+            ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/stop") => {
+                let s = self.lock();
+                if s.state != "running" {
+                    return err_reply(409, "no run is going");
+                }
+                match path {
+                    "/api/pause" => s.ctl.set_paused(true),
+                    "/api/resume" => s.ctl.set_paused(false),
+                    _ => s.ctl.stop(),
+                }
+                json_reply(200, serde_json::json!({ "ok": true }))
+            }
             ("GET", "/api/session") => json_reply(
                 200,
                 serde_json::json!({
@@ -259,6 +279,9 @@ impl App {
                 | "/api/run"
                 | "/api/export"
                 | "/api/race"
+                | "/api/pause"
+                | "/api/resume"
+                | "/api/stop"
                 | "/api/session"
                 | "/api/quit"
                 | "/api/open-folder",
@@ -524,6 +547,8 @@ impl App {
             200,
             serde_json::json!({
                 "state": s.state,
+                "paused": s.state == "running" && s.ctl.paused(),
+                "stopping": s.state == "running" && s.ctl.stopped(),
                 "done": s.done,
                 "total": s.total,
                 "error": s.error,
@@ -593,7 +618,8 @@ impl App {
         }
         let shared = Arc::clone(&self.shared);
         let out = self.result_path.clone();
-        std::thread::spawn(move || run_job(params, shared, out));
+        let ctl = Arc::clone(&self.lock().ctl);
+        std::thread::spawn(move || run_job(params, shared, out, &ctl));
         json_reply(202, serde_json::json!({ "ok": true }))
     }
 }
@@ -674,7 +700,7 @@ fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
+fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf, ctl: &optimize::RunControl) {
     let sh = Arc::clone(&shared);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
         let on_progress = |p: Progress| {
@@ -690,7 +716,7 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
                 Progress::Verifying { .. } => {}
             }
         };
-        let result = crate::run(&params, &on_progress)?;
+        let result = crate::run_controlled(&params, &on_progress, ctl)?;
         report::write_json(&result, &out)?;
         Ok(serde_json::to_string_pretty(&result)?)
     }));
@@ -700,6 +726,7 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
             s.result = Some(json);
             s.state = "done";
         }
+        Ok(Err(e)) if e.downcast_ref::<optimize::RunEnded>().is_some() => s.state = "stopped",
         Ok(Err(e)) => {
             s.error = Some(format!("{e:#}"));
             s.state = "error";
@@ -1264,9 +1291,35 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jaguar_serve_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         a.lock().state = "running";
-        run_job(params, Arc::clone(&a.shared), dir.join("result.json"));
+        run_job(params, Arc::clone(&a.shared), dir.join("result.json"), &optimize::RunControl::default());
         let s = a.lock();
         assert!(s.state == "done" || (s.state == "error" && s.error.is_some()), "{}", s.state);
+    }
+
+    #[test]
+    fn pause_resume_stop_need_a_run_and_stop_ends_it() {
+        let a = app();
+        for path in ["/api/pause", "/api/resume", "/api/stop"] {
+            assert_eq!(a.handle("POST", path, "").0, 409, "{path} with no run");
+        }
+        a.lock().state = "running";
+        assert_eq!(a.handle("POST", "/api/pause", "").0, 200);
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/status", "").2).unwrap();
+        assert_eq!((v["paused"].as_bool(), v["stopping"].as_bool()), (Some(true), Some(false)));
+        assert_eq!(a.handle("POST", "/api/resume", "").0, 200);
+        assert!(!a.lock().ctl.paused());
+        assert_eq!(a.handle("POST", "/api/stop", "").0, 200);
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/status", "").2).unwrap();
+        assert_eq!(v["stopping"].as_bool(), Some(true));
+        // A fixed-hull run that is ended: state "stopped", the previous result kept, no error.
+        let params = Params::parse(&a.toml_text, &a.base_dir).unwrap();
+        let dir = tmpdir();
+        a.lock().result = Some("previous".into());
+        let ctl = Arc::clone(&a.lock().ctl);
+        run_job(params, Arc::clone(&a.shared), dir.join("result.json"), &ctl);
+        let s = a.lock();
+        assert_eq!((s.state, s.error.as_deref(), s.result.as_deref()), ("stopped", None, Some("previous")));
+        assert!(!dir.join("result.json").exists());
     }
 
     #[test]

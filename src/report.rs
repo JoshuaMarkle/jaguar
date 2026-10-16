@@ -475,6 +475,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 "WINNER  t {:.3} in  {rho}  depth {:.2} in  weight {:.2} lb",
                 c.thickness_in, c.depth_in, c.hull_weight_lb
             ));
+            if let Some(e) = &r.ended_early {
+                out.push(format!("        ENDED EARLY: {e}; best of the shapes checked"));
+            }
             if let Some(z) = &c.zones {
                 out.extend(zone_lines(z, c.dense_mix.as_deref()));
             }
@@ -876,6 +879,7 @@ mod tests {
             winner,
             race: None,
             zones: None,
+            ended_early: None,
         }
     }
 

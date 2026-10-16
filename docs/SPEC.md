@@ -25,6 +25,11 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 3D view: left-drag orbits, right-, middle- or Shift-drag pans, the wheel zooms; a view cube in the
 top right turns with the camera (faces BOW, STERN, PORT, STBD, TOP, BOTTOM) and a click on a face,
 edge or corner turns the view there; Home returns to the starting view.
+While a run is going the top bar has **Pause** (workers hold before their next candidate or hull
+shape; **Resume** goes on) and **End** (`optimize::RunControl`). End on a shape search starts no new
+shapes, lets those in progress finish, then verifies and reports the best one with `ended_early`;
+on a fixed hull (or before the first shape finished) it cancels: no result, the last one stays.
+The CLI has neither (Ctrl-C stops it).
 
 No command (double-clicking JAGUAR.exe / JAGUAR.app, `src/launch.rs`): the canoe folder is
 `Documents/JAGUAR` (Windows: the Documents folder Explorer shows, also when OneDrive moved it).
@@ -282,7 +287,10 @@ beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, cap
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
 gunwale_immersion_deg}]}}
-| null, zones}`.
+| null, zones, ended_early}`.
+`ended_early` (only when a shape search was ended from the web UI): how far it got, e.g. "ended by
+the user after 812 shapes (812 of 4000 samples, 0 of 25 refine rounds started)"; the winner is the
+best shape checked, verified as usual. The terminal adds `ENDED EARLY` under WINNER.
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
 mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's

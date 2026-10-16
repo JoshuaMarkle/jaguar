@@ -32,7 +32,7 @@
 
 use crate::hull::{Grid, Hull, linspace};
 use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
-use crate::optimize::{Candidate, Progress, RunResult, run_inner, run_with_progress};
+use crate::optimize::{Candidate, Progress, RunControl, RunEnded, RunResult, run_inner, run_with_progress};
 use crate::params::{ObjectiveKind, Params, SHAPE_DIMS, ShapeSearch};
 use crate::race;
 use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
@@ -376,13 +376,18 @@ fn eval_shape(
 
 /// `f(0..n)` spread over `rayon::current_num_threads()` plain threads, each
 /// owning one private 1-thread rayon pool for the inner search. Results in
-/// index order (deterministic).
+/// index order (deterministic). Each worker passes `ctl`'s checkpoint before taking an index:
+/// a pause holds it there; once stopped, the indices not started stay None.
 ///
 /// Not `par_iter` + a per-shape pool: a rayon worker blocked in a cross-pool
 /// `install` steals other shapes from its own pool while it waits, nesting
 /// one shape's frames on another's until a debug build overflows the stack.
 /// Plain threads block cleanly.
-fn on_workers<T: Send>(n: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Result<Vec<T>> {
+fn on_workers<T: Send>(
+    n: usize,
+    ctl: &RunControl,
+    f: &(dyn Fn(usize) -> T + Sync),
+) -> Result<Vec<Option<T>>> {
     let threads = rayon::current_num_threads().clamp(1, n.max(1));
     let next = AtomicUsize::new(0);
     let slots: Vec<Mutex<Option<T>>> = (0..n).map(|_| Mutex::new(None)).collect();
@@ -393,6 +398,9 @@ fn on_workers<T: Send>(n: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Result<Vec<
                     let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
                     pool.install(|| {
                         loop {
+                            if ctl.checkpoint() {
+                                break;
+                            }
                             let i = next.fetch_add(1, Ordering::SeqCst);
                             if i >= n {
                                 break;
@@ -410,13 +418,23 @@ fn on_workers<T: Send>(n: usize, f: &(dyn Fn(usize) -> T + Sync)) -> Result<Vec<
         }
         Ok(())
     })?;
-    slots
-        .into_iter()
-        .map(|m| m.into_inner().expect("slot lock").context("shape worker skipped an index"))
-        .collect()
+    let out: Vec<Option<T>> = slots.into_iter().map(|m| m.into_inner().expect("slot lock")).collect();
+    anyhow::ensure!(ctl.stopped() || out.iter().all(Option::is_some), "shape worker skipped an index");
+    Ok(out)
 }
 
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
+    run_controlled(params, on_progress, &RunControl::default())
+}
+
+/// [`run`] that can be paused and ended. Ended: no new shapes; the best shape checked so far
+/// becomes the winner as usual and `ended_early` says how far the search got. Ended before any
+/// shape finished: Err([`RunEnded`]).
+pub fn run_controlled(
+    params: &Params,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &RunControl,
+) -> Result<RunResult> {
     let ss = params.shape_search.as_ref().context("no [shape_search] in params")?;
     let b = ss.bounds();
     for (n, [lo, hi]) in b {
@@ -443,7 +461,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
         let base = shapes.len();
         let total = base + batch.len();
         on_progress(Progress::Started { total });
-        let out: Vec<Result<Eval>> = on_workers(batch.len(), &|i| {
+        let out: Vec<Option<Result<Eval>>> = on_workers(batch.len(), ctl, &|i| {
             let (v, index) = (&batch[i], base + i);
             on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
             let e = eval_shape(params, ss, refs, plan.as_ref(), v, index);
@@ -453,9 +471,12 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
             }
             e
         })?;
+        // Ended: only the shapes that were started (each finishes) are kept.
         for (v, e) in batch.into_iter().zip(out) {
-            evals.push(e?);
-            shapes.push(v);
+            if let Some(e) = e {
+                evals.push(e?);
+                shapes.push(v);
+            }
         }
         Ok(())
     };
@@ -470,7 +491,12 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
         idx
     };
     let mut step = 1.0 / 8.0;
+    let mut rounds = 0;
     for _ in 0..ss.refine_rounds {
+        if ctl.stopped() {
+            break;
+        }
+        rounds += 1;
         let before = evals[ranked(&evals)[0]].score;
         let mut batch = Vec::new();
         for &c in ranked(&evals).iter().take(K_BEST) {
@@ -496,6 +522,19 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
         }
     }
 
+    if evals.is_empty() {
+        return Err(RunEnded.into());
+    }
+    let ended_early = ctl.stopped().then(|| {
+        format!(
+            "ended by the user after {} shapes ({} of {} samples, {} of {} refine rounds started)",
+            evals.len(),
+            evals.len().min(ss.samples),
+            ss.samples,
+            rounds,
+            ss.refine_rounds
+        )
+    });
     let best = ranked(&evals)[0];
     let reps: Vec<Candidate> = evals.iter().map(|e| e.rep.clone()).collect();
     // Shape with its metrics (turn at the same inner winner the re-run finds).
@@ -532,6 +571,7 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
         r.winner_hull = Some(hull);
     }
     r.candidates = reps;
+    r.ended_early = ended_early;
     Ok(r)
 }
 

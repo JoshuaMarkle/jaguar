@@ -31,7 +31,8 @@ use crate::section::{
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::Serialize;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Candidate {
@@ -787,7 +788,60 @@ pub struct RunResult {
     /// `[zones]`: what the two-mix search enumerated, skipped and checked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub zones: Option<ZoneSearch>,
+    /// Shape search ended early by the user ([`RunControl::stop`]): how far it got. The winner
+    /// is the best of the shapes checked, verified as usual.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_early: Option<String>,
 }
+
+/// Pause and stop requests for a running search (the web UI's Pause and End buttons; the CLI
+/// never sets them). Workers look at it between candidates (fixed hull) or shapes (shape
+/// search): pausing holds them there, stopping makes them start nothing new.
+#[derive(Debug, Default)]
+pub struct RunControl {
+    stop: AtomicBool,
+    paused: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl RunControl {
+    /// End the run: also releases a pause.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.wake.notify_all();
+    }
+    pub fn stopped(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+    pub fn set_paused(&self, on: bool) {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner()) = on;
+        self.wake.notify_all();
+    }
+    pub fn paused(&self) -> bool {
+        *self.paused.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    /// Wait while paused (and not stopped); then true if the run should stop.
+    pub fn checkpoint(&self) -> bool {
+        let mut p = self.paused.lock().unwrap_or_else(|e| e.into_inner());
+        while *p && !self.stopped() {
+            p = self.wake.wait(p).unwrap_or_else(|e| e.into_inner());
+        }
+        self.stopped()
+    }
+}
+
+/// The run was ended by the user before anything could be reported (a fixed-hull search, or a
+/// shape search before its first shape finished). Callers tell it apart with `downcast_ref`.
+#[derive(Debug)]
+pub struct RunEnded;
+
+impl std::fmt::Display for RunEnded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("run ended by the user")
+    }
+}
+
+impl std::error::Error for RunEnded {}
 
 /// The two-mix search's bookkeeping (`zoned_search`).
 #[derive(Debug, Clone, Serialize)]
@@ -919,6 +973,17 @@ pub fn run_with_progress(
     run_inner(params, hull, true, on_progress)
 }
 
+/// [`run_with_progress`] that can be paused and ended ([`RunControl`]). Ended = Err([`RunEnded`]):
+/// a part of the grid is no answer.
+pub fn run_controlled(
+    params: &Params,
+    hull: &Hull,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &RunControl,
+) -> Result<RunResult> {
+    run_search(params, hull, on_progress, ctl)
+}
+
 /// [`run_with_progress`] with a choice of parallelism. `parallel = false` runs
 /// the whole search on one thread (a private 1-thread rayon pool) so the shape
 /// search can parallelize over shapes instead. Output is identical either way.
@@ -928,14 +993,20 @@ pub fn run_inner(
     parallel: bool,
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> Result<RunResult> {
+    let ctl = RunControl::default();
     if parallel {
-        return run_search(params, hull, on_progress);
+        return run_search(params, hull, on_progress, &ctl);
     }
     let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
-    pool.install(|| run_search(params, hull, on_progress))
+    pool.install(|| run_search(params, hull, on_progress, &ctl))
 }
 
-fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
+fn run_search(
+    params: &Params,
+    hull: &Hull,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &RunControl,
+) -> Result<RunResult> {
     let ts = thicknesses(params);
     let fit = strength(params)?;
     let axis = density_axis(params, &fit)?;
@@ -980,6 +1051,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             let flare = geoms[gi].1;
             rhos.iter()
                 .enumerate()
+                .filter(|_| !ctl.checkpoint())
                 .map(move |(ri, &rho)| {
                     let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, plan, true);
                     c.mix = axis[ri].2.clone();
@@ -995,6 +1067,9 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
                 .collect::<Vec<_>>()
         })
         .collect();
+    if ctl.stopped() {
+        return Err(RunEnded.into());
+    }
     candidates.sort_by_key(|&(t, r, d, _)| (t, r, d));
     // (thickness, light mix, geometry) whose single-mix wall misses freeboard: a two-mix wall
     // there is heavier still, so the zoned search skips it.
@@ -1026,6 +1101,9 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
             zoned_search(params, z, &space, &unbuildable, lightest, (&done, total), on_progress);
         candidates.extend(zc);
         zone_stats = Some(ZoneSearch { single_mix_lb, ..stats });
+        if ctl.checkpoint() {
+            return Err(RunEnded.into());
+        }
     }
 
     let best = candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
@@ -1079,6 +1157,7 @@ fn run_search(params: &Params, hull: &Hull, on_progress: &(dyn Fn(Progress) + Sy
         winner,
         race: None,
         zones: zone_stats,
+        ended_early: None,
     })
 }
 

@@ -15,5 +15,6 @@ Windows: **More info** > **Run anyway**. Mac: System Settings > Privacy & Securi
 * Your files live in **Documents/JAGUAR** (button **Open folder**): `canoe.toml`, the hull, the lab
   data `mix_tests.csv`, and `result.json`. Updating JAGUAR keeps them.
 * It starts with the team's settings: hull shape search, which takes hours. For a quick look set
-  **Samples** to 96 (minutes).
+  **Samples** to 96 (minutes). **Pause** holds a run; **End** finishes it early with the best hull
+  found so far.
 * **Quit** (top right) stops it; closing the tab stops it after about 5 minutes.

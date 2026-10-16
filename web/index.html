@@ -193,6 +193,9 @@
     <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
   <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
   <button id="run" class="btn primary">Run optimization</button>
+  <span id="runctl" hidden style="display:contents">
+    <button type="button" class="btn soft" id="pauserun" title="Hold the run after the candidates or hull shapes being checked now. Resume carries on where it stopped.">Pause</button>
+    <button type="button" class="btn soft" id="endrun" title="End the run. Shape search: no new shapes; the best hull found so far is verified and shown as the result. Fixed hull: the run is cancelled and the last result stays.">End</button></span>
   <span id="deskbtns" hidden><div class="sep"></div>
     <button type="button" class="btn soft" id="openfolder">Open folder</button>
     <button type="button" class="btn soft" id="quitapp" title="Stop JAGUAR. Settings are saved; double-click JAGUAR to start it again.">Quit</button></span>
@@ -1876,6 +1879,7 @@ function showWinner() {
   box.innerHTML = `<div style="display:flex;gap:var(--s2);align-items:center;margin-bottom:var(--s1)">
       <span class="badge ${win.verified ? 'success' : 'error'}">${win.verified ? 'Verified' : 'Not verified'}</span>
       <span class="muted">${f(c.hull_weight_lb, 1)} lb hull, D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations</span></div>
+    ${result.ended_early ? `<div class="note-box warn">Ended early: ${esc(result.ended_early)}. This is the best of the hull shapes checked; a full run may find a better one.</div>` : ''}
     <div style="display:flex;gap:var(--s2);margin-bottom:var(--s2)">
       <a class="btn soft" href="/api/export?format=step" download title="Winning canoe as a STEP solid (inches): hull, wall thickness and mold depth, for CAD and the mold shop.">Export STEP</a>
       <a class="btn soft" href="/api/export?format=stl" download title="Same solid as a binary STL mesh (inches), for 3D printing or mesh tools.">Export STL</a>
@@ -2392,16 +2396,40 @@ async function loadResult() {
   }
   showWinner(); buildCanoe(); buildTabs(); drawPlot();
 }
+// Pause / End while a run is going (long shape searches).
+function runCtl(s) {
+  const on = s.state === 'running';
+  $('runctl').hidden = !on;
+  $('runctl').style.display = on ? 'contents' : 'none';
+  $('pauserun').textContent = s.paused ? 'Resume' : 'Pause';
+  $('pauserun').disabled = $('endrun').disabled = !!s.stopping;
+}
+$('pauserun').onclick = async () => {
+  const resume = $('pauserun').textContent === 'Resume';
+  await fetch(resume ? '/api/resume' : '/api/pause', { method: 'POST' });
+  $('pauserun').textContent = resume ? 'Pause' : 'Resume';
+};
+$('endrun').onclick = async () => {
+  const shape = $('shapemode').checked;
+  const n = cands.length;
+  if (!confirm(shape
+    ? `End the run now? No new hull shapes are tried; the best of the ${n} checked so far is verified and becomes the result.`
+    : 'End the run now? It is cancelled and the last result stays.')) return;
+  await fetch('/api/stop', { method: 'POST' });
+  $('pauserun').disabled = $('endrun').disabled = true;
+};
 async function poll() {
   const r = await fetch('/api/status?since=' + cands.length);
   const s = await r.json();
   cands = cands.concat(s.candidates);
-  $('status').textContent = `${s.state[0].toUpperCase() + s.state.slice(1)}  ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
+  runCtl(s);
+  const word = s.stopping ? 'Ending (finishing the shapes in progress, then verifying)' : s.paused ? 'Paused' : s.state === 'stopped' ? 'Ended' : s.state[0].toUpperCase() + s.state.slice(1);
+  $('status').textContent = `${word}  ${s.done} / ${s.total}` + (s.shape && s.state === 'running' ? `   shape ${s.shape.index + 1} / ${s.shape.shapes}` : '');
   $('prog').max = s.total || 1; $('prog').value = s.done;
   $('err').textContent = s.error || '';
   drawPlot();
-  if (s.state === 'running') setTimeout(poll, 250);
-  else { polling = false; $('run').disabled = false; if (s.state === 'done') loadResult(); }
+  if (s.state === 'running') setTimeout(poll, s.paused ? 1000 : 250);
+  else { polling = false; $('run').disabled = false; if (s.state === 'done') loadResult(); else if (s.state === 'stopped') loadResult(); }
 }
 $('run').onclick = async () => {
   let text;
