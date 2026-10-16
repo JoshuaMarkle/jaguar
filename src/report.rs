@@ -153,6 +153,45 @@ fn case_line(k: &crate::optimize::CaseDiagrams) -> String {
 }
 
 /// Richardson line: the extrapolated D/C the verify gate used, or why not.
+/// The stands case: position, reactions, peak moments, then D/C per check.
+fn stands_lines(w: &crate::optimize::Winner) -> Vec<String> {
+    let Some(st) = &w.stands else { return vec![] };
+    let Some(s) = &st.calc else {
+        return vec![format!("        stands: not computed: {}", st.error.as_deref().unwrap_or("unknown"))];
+    };
+    let peak = |m: Option<f64>, x: Option<f64>| match (m, x) {
+        (Some(m), Some(x)) => format!("{m:.0} lb*in at {x:.1} in"),
+        _ => "none".into(),
+    };
+    let orient = match s.orientation {
+        crate::params::StandOrientation::Upright => "upright",
+        crate::params::StandOrientation::Inverted => "inverted",
+    };
+    vec![
+        format!(
+            "        stands ({orient}, {} in pads, self weight x {}): {:.1} in from each end ({:.3} L), spacing {:.1} in, R {:.1} / {:.1} lb",
+            s.pad_in,
+            s.dead_factor,
+            s.x_stand_in,
+            s.x_over_l,
+            s.spacing_in,
+            s.reactions_lb[0],
+            s.reactions_lb[1]
+        ),
+        format!(
+            "          sag {}  hog {}",
+            peak(s.sag_max_lbin, s.x_sag_in),
+            peak(s.hog_max_lbin, s.x_hog_in)
+        ),
+        format!(
+            "          D/C {:.3} ({}): {}",
+            s.verdict.dc,
+            s.verdict.governing_check,
+            s.verdict.checks.iter().map(|k| format!("{} {:.3}", k.name, k.dc)).collect::<Vec<_>>().join("  ")
+        ),
+    ]
+}
+
 fn convergence_line(w: &crate::optimize::Winner) -> String {
     let c = &w.convergence;
     let st = format!("{}/{}/{} stations", c.stations[0], c.stations[1], c.stations[2]);
@@ -494,6 +533,26 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 w.verify_dc,
                 if w.verified { String::new() } else { format!(", gate {:.3}", g.dc_verify) }
             ));
+            if let Some(f) = &w.verify_failure {
+                out.push(format!("        verification failed: {f}"));
+            }
+            out.extend(stands_lines(w));
+            if !w.knee_split_sensitivity.is_empty() {
+                out.push(format!(
+                    "        punching D/C by knee_split: {}",
+                    w.knee_split_sensitivity
+                        .iter()
+                        .map(|s| format!("{:.1} -> {:.3}", s.knee_split, s.dc))
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                ));
+            }
+            if r.strength.flexural_fit.is_none() {
+                out.push(format!(
+                    "        ASSUMPTION flexural strength = {:.2} x split tensile (no flexural data)",
+                    r.strength.flex_over_split
+                ));
+            }
             out.push(convergence_line(w));
             out.push(provenance_line(&w.mix_provenance));
             if let Some(d) = &w.dense_mix_provenance {
@@ -817,6 +876,9 @@ mod tests {
             }],
             empty: Default::default(),
             calc: Default::default(),
+            verify_failure: (!verified).then(|| "D/C at 81 stations 1.0200 > dc_verify 0.95".into()),
+            stands: None,
+            knee_split_sensitivity: vec![],
         }
     }
 

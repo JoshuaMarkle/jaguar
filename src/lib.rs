@@ -8,6 +8,7 @@
 //! Hull --(resample, extrude to depth)--> Grid --section--> Sections (A, zbar, I)
 //! Sections + density + crew --equilibrium--> Loads (draft, trim, GM, V(x), M(x))
 //! Loads + Sections + StrengthFit --check--> Verdict (bending, shear, punching, freeboard)
+//! winner on two stands (empty) --stands--> post-search verification (`[stands]`)
 //! grid over (thickness, density, depth) --optimize--> RunResult   (+ resistance for drag)
 //! optional outer loop over hull shapes --shapeopt--> RunResult
 //! RunResult --report--> terminal + result.json       --serve--> localhost web UI
@@ -35,6 +36,7 @@ pub mod seats;
 pub mod section;
 pub mod serve;
 pub mod shapeopt;
+pub mod stands;
 pub mod units;
 
 use anyhow::Result;
@@ -43,13 +45,17 @@ use params::Params;
 
 /// Run one canoe.toml: the wall search on `hull.file`, or the hull-shape
 /// search when `[shape_search]` is present instead.
+/// The winner then gets its post-search checks once (`optimize::verify_stands`: `[stands]`
+/// and the knee-split sensitivity), never per candidate or per shape.
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
-    match (&params.hull.file, &params.shape_search) {
+    let mut r = match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => {
             let h = hull::Hull::load(f)?.prepared(&params.hull)?;
-            optimize::run_with_progress(params, &h, on_progress)
+            optimize::run_with_progress(params, &h, on_progress)?
         }
-        (None, Some(_)) => shapeopt::run(params, on_progress),
+        (None, Some(_)) => shapeopt::run(params, on_progress)?,
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
-    }
+    };
+    optimize::verify_stands(params, &mut r);
+    Ok(r)
 }

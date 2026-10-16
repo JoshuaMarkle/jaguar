@@ -132,6 +132,14 @@ pub struct Winner {
     /// Every intermediate value behind the governing load case's checks
     /// (the report's calculation appendix).
     pub calc: CalcTrace,
+    /// Why `verified` is false (station convergence or the stands case); None when verified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verify_failure: Option<String>,
+    /// `[stands]`: the empty hull on two stands at the best position ([`verify_stands`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stands: Option<crate::stands::StandsCase>,
+    /// Knee punching D/C of the heaviest paddler at knee splits 0.5, 0.6 and 1.0.
+    pub knee_split_sensitivity: Vec<crate::stands::SplitDc>,
 }
 
 /// Worked calculation of the winner's governing load case at the seats its
@@ -1537,6 +1545,15 @@ fn finish_winner(
             Some(x) => x.max(conv.dc[2]) <= params.gates.dc_verify,
             None => verify_dc <= params.gates.dc_verify,
         };
+    let verify_failure = (!verified).then(|| match (v.verdict.is_some(), conv.extrapolated) {
+        (false, _) => "no verdict at the verification stations".to_string(),
+        (true, Some(x)) => {
+            format!("D/C at finer stations {:.4} > dc_verify {}", x.max(conv.dc[2]), params.gates.dc_verify)
+        }
+        (true, None) => {
+            format!("D/C at {stations} stations {verify_dc:.4} > dc_verify {}", params.gates.dc_verify)
+        }
+    });
     let search_space = search_space(params, fit, c)?;
     let walls = &search_space[..3];
     let mut candidate = c.clone();
@@ -1567,7 +1584,105 @@ fn finish_winner(
         cases,
         empty,
         calc,
+        verify_failure,
+        stands: None,
+        knee_split_sensitivity: Vec::new(),
     })
+}
+
+/// Post-search checks of the winner, once (called by [`crate::run`] after either search):
+/// the knee-split sensitivity and, with `[stands]`, the empty hull on two stands at the
+/// verification station count. A stands D/C over `dc_verify`, or a stands case that cannot be
+/// computed, makes the winner unverified with the reason in `verify_failure`.
+pub fn verify_stands(params: &Params, r: &mut RunResult) {
+    let fit = &r.strength;
+    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let c = &w.candidate;
+    let mat = &params.material;
+    let live = match mat.method {
+        crate::params::DesignMethod::Asd => 1.0,
+        crate::params::DesignMethod::Lrfd => mat.lrfd_live,
+    };
+    let paddler = params.load_cases.iter().flat_map(|lc| lc.weights_lb.iter()).cloned().fold(0.0, f64::max)
+        * mat.dynamic_load_factor
+        * live;
+    if let Some(pc) = c.verdict.as_ref().and_then(|v| v.checks.iter().find(|k| k.name == "punching")) {
+        w.knee_split_sensitivity = crate::stands::knee_split_sensitivity(
+            paddler,
+            c.thickness_in,
+            mat.knee_patch_in,
+            &params.punching,
+            pc.capacity,
+        );
+    }
+    let Some(sp) = &params.stands else { return };
+    let case = stands_case(params, fit, hull, c, sp);
+    let failure = match (&case.error, &case.calc) {
+        (Some(e), _) => Some(format!("stands: {e}")),
+        // NaN fails too.
+        (None, Some(s))
+            if !matches!(
+                s.verdict.dc.partial_cmp(&params.gates.dc_verify),
+                Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+            ) =>
+        {
+            Some(format!(
+                "stands: {} D/C {:.4} > dc_verify {}",
+                s.verdict.governing_check, s.verdict.dc, params.gates.dc_verify
+            ))
+        }
+        _ => None,
+    };
+    if let Some(f) = failure {
+        w.verified = false;
+        w.verify_failure = Some(match w.verify_failure.take() {
+            Some(prev) => format!("{prev}; {f}"),
+            None => f,
+        });
+    }
+    w.stands = Some(case);
+}
+
+fn stands_case(
+    params: &Params,
+    fit: &StrengthFit,
+    hull: &Hull,
+    c: &Candidate,
+    sp: &crate::params::Stands,
+) -> crate::stands::StandsCase {
+    let calc = || -> Result<crate::stands::StandsCalc> {
+        if c.zones.is_some() {
+            anyhow::bail!("the stands case covers single-mix walls, not a two-mix wall");
+        }
+        // The winner's own strength (its tested mix in tested_mixes mode).
+        let axis = density_axis(params, fit)?;
+        let wall_fit = axis
+            .iter()
+            .find(|(rho, _, name)| *rho == c.density_pcf && name.as_deref() == c.mix.as_deref())
+            .map(|a| &a.1)
+            .ok_or_else(|| anyhow::anyhow!("winner density {} not on the density axis", c.density_pcf))?;
+        // A shape winner's gunwale radius is in its shape (as in shapeopt::for_shape).
+        let mut wp = params.clone();
+        if let Some(r) = c.shape.as_ref().and_then(|s| s.gunwale_radius_in) {
+            wp.hull.gunwale_radius_in = Some(r);
+        }
+        let stations = 2 * params.hull.stations - 1;
+        let grid = Grid::build_topsides(hull, c.depth_in, stations, candidate_topsides(&wp, c)).0;
+        let sec = sections(&grid, c.thickness_in);
+        crate::stands::optimize_position(
+            &grid,
+            &sec,
+            c.density_pcf,
+            &params.material,
+            wall_fit,
+            &params.punching,
+            sp,
+        )
+    };
+    match calc() {
+        Ok(s) => crate::stands::StandsCase { error: None, calc: Some(s) },
+        Err(e) => crate::stands::StandsCase { error: Some(format!("{e:#}")), calc: None },
+    }
 }
 
 /// Knee x per paddler for `case` without auto seats: `seats_in`, or evenly spaced.

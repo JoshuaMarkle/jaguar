@@ -48,6 +48,41 @@ pub struct Params {
     /// a bottom and a top band over the middle (an I-beam), the light mix everywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zones: Option<Zones>,
+    /// Present = after the search, check the winner's empty hull resting on two stands
+    /// (src/stands.rs). Never a search gate: run once on the winner, it fails verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands: Option<Stands>,
+}
+
+/// Empty hull on two stands placed symmetrically about midship (src/stands.rs).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Stands {
+    /// Stand pad width along the hull, in: each reaction is spread uniformly over it, and the
+    /// local check loads a pad x pad square.
+    #[serde(default = "stand_pad")]
+    pub pad_in: f64,
+    /// "upright" (stands under the keel) or "inverted" (hull upside down on its gunwales).
+    #[serde(default)]
+    pub orientation: StandOrientation,
+    /// Step of the stand-position sweep, in.
+    #[serde(default = "stand_step")]
+    pub step_in: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StandOrientation {
+    #[default]
+    Upright,
+    Inverted,
+}
+
+fn stand_pad() -> f64 {
+    6.0
+}
+fn stand_step() -> f64 {
+    0.5
 }
 
 /// Two-mix walls (docs/SPEC.md): the light mix is `search.density_pcf`; the dense mix is placed
@@ -965,6 +1000,11 @@ impl Params {
         if self.stability.gm_empty_min_in.is_some_and(|g| !g.is_finite()) {
             bail!("stability.gm_empty_min_in must be a number");
         }
+        if let Some(s) = &self.stands
+            && !(s.pad_in > 0.0 && s.pad_in.is_finite() && s.step_in > 0.0 && s.step_in.is_finite())
+        {
+            bail!("stands: need pad_in > 0 and step_in > 0");
+        }
         if let Some(f) = &self.flotation
             && !(f.air_pocket_max_in >= 0.0 && f.swamp_factor > 0.0 && f.swamp_factor.is_finite())
         {
@@ -1091,6 +1131,22 @@ mod tests {
         );
         let bad = text.replace("method = \"asd\"", "method = \"lrfd\"\nlrfd_dead_only = 0.0");
         assert!(Params::parse(&bad, Path::new("examples")).is_err());
+    }
+
+    #[test]
+    fn stands_defaults_and_validation() {
+        // Line endings normalized: a Windows checkout of the example has CRLF.
+        let full = std::fs::read_to_string("examples/canoe.toml").unwrap().replace("\r\n", "\n");
+        let s = full.find("[stands]").unwrap();
+        let e = s + full[s..].find("\n\n").unwrap();
+        let text = format!("{}{}", &full[..s], &full[e..]);
+        let parse = |extra: &str| Params::parse(&format!("{text}\n[stands]\n{extra}"), Path::new("examples"));
+        let s = parse("").unwrap().stands.unwrap();
+        assert_eq!((s.pad_in, s.step_in, s.orientation), (6.0, 0.5, StandOrientation::Upright));
+        let inv = parse("orientation = \"inverted\"\npad_in = 4.0\n").unwrap().stands.unwrap();
+        assert_eq!((inv.orientation, inv.pad_in), (StandOrientation::Inverted, 4.0));
+        assert!(parse("pad_in = 0.0\n").is_err());
+        assert!(parse("width = 6.0\n").is_err());
     }
 
     #[test]

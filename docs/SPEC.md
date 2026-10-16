@@ -31,7 +31,7 @@ edge or corner turns the view there; Home returns to the starting view.
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
 `[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`,
-optional `[zones]`, `[seats]`,
+optional `[zones]`, optional `[stands]`, `[seats]`,
 optional `[race]` (read only by `jaguar race`). Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
@@ -197,6 +197,21 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    max(dc_extrapolated, D/C at 4n-3) <= `dc_verify` (never below a computed value). Otherwise
    `dc_extrapolated` is null, `convergence.note` says which series, and VERIFIED iff the 2n-1 D/C
    <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin.
+   `verify_failure` says why when not verified.
+8b. **Stands** (optional `[stands]`, `src/stands.rs`; `optimize::verify_stands`, called once by
+   `jaguar::run` after either search, never a search gate): the winner at 2n-1 stations, empty,
+   on two `pad_in` (default 6) pads centred x_s from each end. Load: the real self weight A(x)
+   rho/1728 x the dead-only factor (asd 1, lrfd `lrfd_dead_only`); reactions from force and
+   moment balance; each spread over its pad in closed form. `orientation` = upright (keel on
+   the stands) or inverted (on the gunwales: checks see -M). Checks: bending, compression,
+   shear, biaxial as in 5 (no turning) and, at the heavier pad, `stand_punching` (upright:
+   ACI 22.6 on a pad x pad square, b0 = 4 (c + d), or Table 14.5.5.1 with `plain_14_5`) or
+   `stand_bearing` (inverted: 0.85 f'c on A1 = 2 t pad, phi 0.65 lrfd). x_s is swept from pad/2
+   to L/2 - pad/2 in `step_in` (default 0.5) steps; the kept position has the lowest beam D/C
+   (bending, shear, biaxial: the pad check does not depend on position on a symmetric hull);
+   uniform weight gives 0.207 L. A stands D/C > `dc_verify`, or a stands case that cannot be
+   computed (e.g. a two-mix wall), makes the winner NOT VERIFIED with the reason. Also after
+   the search: the heaviest paddler's punching D/C at knee splits 0.5, 0.6 and 1.0.
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern
    search over Michlet Series 7 shape factors within bounds. Each shape runs the wall search above,
    and the best objective wins. `beam_in = [min, max]`: the waterline beam is sampled in it, and a
@@ -236,7 +251,11 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
 measured), winner_hull (shape runs) | null, candidates: [...],
 winner: {candidate, verify_stations, verify_dc, verified, dc_extrapolated, dc_order, convergence
 {stations, dc, extrapolated, order, governing, note}, on_grid_edge, at_mix_data_edge,
-mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc} | null, zones}`.
+mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc, verify_failure,
+stands {error | orientation, pad_in, dead_factor, x_stand_in, x_over_l, spacing_in, reactions_lb,
+sag_max_lbin, x_sag_in, hog_max_lbin, x_hog_in, x_in, shear_lb, moment_lbin, verdict, local,
+beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, capacity_psi, dc}]}
+| null, zones}`.
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested
 mixes); the winner has `dense_mix_provenance`; `search_space` adds `zones.dense_pcf`; the result's
