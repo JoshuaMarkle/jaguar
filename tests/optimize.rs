@@ -49,7 +49,7 @@ fn example_finds_verified_winner() {
     eprintln!("run: {} candidates in {:?}", r.candidates.len(), t0.elapsed());
     let w = r.winner.expect("winner");
     let c = &w.candidate;
-    // Strength from data/mix_tests.csv; knee punching (ACI 318-19 22.6.5.2,
+    // Strength from examples/mix_tests.csv; knee punching (ACI 318-19 22.6.5.2,
     // demand on b0*d, two knees with a 60/40 split) governs and needs 58 pcf.
     assert_eq!((c.thickness_in, c.density_pcf, c.depth_in), (0.375, 58.0, 12.0));
     // 98.39 lb on the old fixed-height table blend; 98.24 on the smooth-keel loft (no hull

@@ -37,7 +37,7 @@ src/main.rs         CLI: run | check | mix | import-michlet | import-mesh | gen-
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
 tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race
-examples/           runnable canoe.toml files and hulls (docs/HULLS.md)
+examples/           runnable canoe.toml files, hulls, frozen lab data mix_tests.csv (docs/HULLS.md)
 data/               lab mix data (mix_tests.csv, cleaned from data/raw/)
 ```
 

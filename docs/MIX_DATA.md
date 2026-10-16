@@ -5,7 +5,9 @@ measured property.
 
 ## The file
 
-`data/mix_tests.csv` (path set by `material.mix_data` in canoe.toml, relative to the toml).
+`data/mix_tests.csv` (path set by `material.mix_data` in canoe.toml, relative to the toml). The
+examples and tests use `examples/mix_tests.csv`, a frozen copy, so new lab rows do not move them;
+the numbers quoted below are from that copy.
 The original lab sheet is kept untouched in `data/raw/Splitting_Tensile_Testing.csv`; the CSV is
 a cleaned copy of it. Lines starting with `#` are comments. Columns (found by header name, order
 does not matter, extra columns are ignored):

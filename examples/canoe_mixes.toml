@@ -19,10 +19,11 @@ weights_lb = [175.0, 165.0]
 
 [material]
 strength_model = "tested_mixes"         # "fit" = any density on the lab line; "tested_mixes" = only mixes you tested
-# Strength comes from the team's lab breaks (data/mix_tests.csv): final split
+# Strength comes from lab breaks (examples/mix_tests.csv, a frozen copy of the team's
+# data; ../data/mix_tests.csv is the current one): final split
 # tensile strength is fitted against density; flexural and compressive strength
 # are derived from it (see src/mix.rs). 7-day breaks are scaled by 1/0.6.
-mix_data = "../data/mix_tests.csv"
+mix_data = "mix_tests.csv"
 flex_over_split = 1.0            # modulus of rupture / split tensile (1.0 = conservative)
 density_extrapolation_pcf = 4.0  # how far past the tested densities to trust the fit
 factor_of_safety = 1.5

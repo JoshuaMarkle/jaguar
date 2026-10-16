@@ -46,7 +46,7 @@ fn fit_mode_has_no_mix_names() {
 /// negative-slope line), so here densities run 55..60 pcf.
 #[test]
 fn measured_fit_limits_density_range() {
-    let csv = std::fs::read_to_string("data/mix_tests.csv").unwrap();
+    let csv = std::fs::read_to_string("examples/mix_tests.csv").unwrap();
     let mut out = String::new();
     for line in csv.lines() {
         let extra = if line.starts_with('#') {

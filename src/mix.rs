@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn team_data_scales_seven_day_breaks_and_fits() {
-        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let fit = StrengthFit::load(Path::new("examples/mix_tests.csv"), 1.0).unwrap();
         assert_eq!(fit.points.len(), 3);
         // 7-day breaks are 60% of final.
         assert!((fit.points[0].final_psi - 143.0 / 0.6).abs() < 1e-9);
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn team_data_per_mix_means() {
         // Every lab row is its own mix: M2 B (54.86), M2 A (56.408), final target (60).
-        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let fit = StrengthFit::load(Path::new("examples/mix_tests.csv"), 1.0).unwrap();
         let m = fit.tested_mixes();
         let names: Vec<&str> = m.iter().map(|x| x.name.as_str()).collect();
         assert_eq!(names, ["M2 B", "M2 A", "final target"]);
@@ -632,7 +632,7 @@ mod tests {
 
     #[test]
     fn provenance_reach() {
-        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let fit = StrengthFit::load(Path::new("examples/mix_tests.csv"), 1.0).unwrap();
         // Between M2 A (56.408) and the 60 pcf mix: predicted, bracketed, reach to the closer one.
         let p = fit.provenance(58.0, None).unwrap();
         assert_eq!(p.status, Provenance::Predicted);
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     fn negative_strength_gives_nonpositive_fc() {
-        let fit = StrengthFit::load(Path::new("data/mix_tests.csv"), 1.0).unwrap();
+        let fit = StrengthFit::load(Path::new("examples/mix_tests.csv"), 1.0).unwrap();
         assert!(fit.split_psi(20.0) < 0.0);
         assert!(fit.fc_psi(20.0) <= 0.0);
     }

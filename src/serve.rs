@@ -799,7 +799,7 @@ mod tests {
         let dir = tmpdir();
         let csv = dir.join("mix.csv");
         let orig =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/data/mix_tests.csv")).unwrap();
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/mix_tests.csv")).unwrap();
         std::fs::write(&csv, &orig).unwrap();
         let mut p = a.params.clone();
         p.material.mix_data = csv.clone();
