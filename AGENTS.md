@@ -40,7 +40,8 @@ src/main.rs         CLI: (none = desktop app) | run | check | mix | import-michl
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
 tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race
-packaging/          what the release zips add: macOS Info.plist, read-me per platform
+packaging/          what the release zips add: macOS Info.plist, read-me per platform,
+                    starter/canoe.toml (the team's settings, first-launch canoe.toml)
                     (.github/workflows/release.yml builds JAGUAR-windows.zip, JAGUAR-mac.zip)
 examples/           runnable canoe.toml files, hulls, frozen lab data mix_tests.csv (docs/HULLS.md)
 data/               lab mix data (mix_tests.csv, cleaned from data/raw/)

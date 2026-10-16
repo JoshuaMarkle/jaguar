@@ -28,7 +28,8 @@ edge or corner turns the view there; Home returns to the starting view.
 
 No command (double-clicking JAGUAR.exe / JAGUAR.app, `src/launch.rs`): the canoe folder is
 `Documents/JAGUAR` (Windows: the Documents folder Explorer shows, also when OneDrive moved it).
-The first launch writes the starter `canoe.toml` (examples/canoe.toml), `off1_hull.json` and
+The first launch writes the starter `canoe.toml` (packaging/starter/canoe.toml, the team's
+settings), `off1_hull.json` and
 `mix_tests.csv` (data/mix_tests.csv, the team's current lab data) into it; an existing file is never
 overwritten. Then it serves that canoe.toml as `serve` does, with prefs in
 `~/.config/jaguar/app-prefs.toml` (home = `$HOME`, else `%USERPROFILE%`), on the first free port of

@@ -1,0 +1,317 @@
+# canoe.toml: the team's settings, the starter for the JAGUAR desktop app (Documents/JAGUAR).
+# Units: in, lb, psi, pcf. Unknown keys are an error. Edit it in the web UI (hover a label for
+# help); every key is explained in the example canoe.toml and docs/SPEC.md of the source.
+# Hull shape search ([shape_search], no hull.file); off1_hull.json in this folder is the
+# fixed-hull alternative (untick shape search in the form and pick it).
+[hull]
+stations = 161
+flare_deg = 3.0
+stem_radius_in = 2.0
+gunwale_max_flare_deg = 30.0
+doubly_symmetric = true
+
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 195.0]
+
+[[load_case]]
+name = "2M, 1F"
+weights_lb = [175.0, 175.0, 195.0]
+
+[[load_case]]
+name = "2M, 2F"
+weights_lb = [195.0, 175.0, 145.0, 145.0]
+
+[[load_case]]
+name = "2F"
+weights_lb = [145.0, 145.0]
+
+[[load_case]]
+name = "1M, 1F"
+weights_lb = [175.0, 145.0]
+
+[material]
+strength_model = "tested_mixes"
+mix_data = "mix_tests.csv"   # lab breaks, in this folder
+flex_over_split = 1.0
+density_extrapolation_pcf = 4.0
+method = "lrfd"
+lrfd_dead = 1.2
+lrfd_dead_only = 1.4
+lrfd_live = 1.5
+factor_of_safety = 1.5
+dynamic_load_factor = 1.0
+knee_patch_in = 3.0
+
+[search]
+thickness_in = [0.375, 0.5, 0.125]
+density_pcf = [50.0, 80.0, 1.0]
+depth_in = [10.0, 18.0, 0.5]
+
+[gates]
+dc_search = 0.97
+dc_verify = 0.99
+freeboard_min_in = 6.2
+thickness_min_buildable_in = 0.375
+
+[stability]
+crew_cg_in = 12.0
+gm_min_in = 3.0
+gm_empty_min_in = 10.0
+
+[objective]
+kind = "race"
+speed_mps = 3.0
+straight_weight = 1.0
+turn_radius_in = 600.0
+
+[[objective.displacements]]
+crew_lb = 350.0
+weight = 0.75
+
+[[objective.displacements]]
+crew_lb = 700.0
+weight = 0.25
+
+[punching]
+method = "aci_22_6"
+knees = 2
+knee_split = 0.5
+knee_spacing_in = 8.0
+pad_in = 0.0
+layers = 3
+mesh_after_layer = [1, 2]
+mold = "male"
+
+[shape_search]
+length_in = [180.0, 216.0]
+beam_in = [18.0, 32.0]
+draft_in = [2.0, 8.0]
+fore_wp = [0.1, 1.6]
+section = [0.1, 0.8]
+fore_rocker = [0.0, 0.6]
+aft_wp = [0.3, 1.6]
+aft_rocker = [0.0, 0.6]
+fore_len_frac = [0.3, 0.5]
+aft_len_frac = [0.3, 0.5]
+draft_step_in = 0.5
+symmetric = true
+samples = 4000
+refine_rounds = 25
+seed = 1
+
+[flotation]
+air_pocket_max_in = 36.0
+swamp_factor = 1.2
+
+[seats]
+auto = true
+spacing_min_in = 30.0
+bow_clear_in = 18.0
+stern_clear_in = 18.0
+variance_in = 6.0
+
+[race]
+paddler_power_w = 100.0
+propulsive_efficiency = 0.7
+max_thrust_n = 100.0
+buoy_clearance_m = 0.6
+lane_width_m = 15.0
+min_turn_radius_m = 2.0
+
+[[race.course]]
+name = "sprint_200"
+finish_x_m = 0.0
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 0.0
+keep = "port"
+
+[[race.course]]
+name = "sprint_400"
+finish_x_m = 0.0
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 0.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 0.0
+y_m = 0.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 0.0
+keep = "port"
+
+[[race.course]]
+name = "slalom_200"
+finish_x_m = 0.0
+
+[[race.course.marks]]
+x_m = 10.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 20.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 30.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 50.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 60.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 70.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 80.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 0.0
+keep = "port"
+
+[[race.course]]
+name = "endurance_600"
+finish_x_m = 0.0
+lane_width_m = 400.0
+
+[[race.course.marks]]
+x_m = 10.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 20.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 30.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 50.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 60.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 70.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 80.0
+y_m = -5.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 0.0
+keep = "starboard"
+
+[[race.course.marks]]
+x_m = 163.0
+y_m = -63.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 229.0
+y_m = 43.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 163.0
+y_m = 147.0
+keep = "port"
+
+[[race.course.marks]]
+x_m = 100.0
+y_m = 105.0
+keep = "starboard"
+
+[[race.event]]
+name = "Symposium co-ed 200 m slalom"
+course = "slalom_200"
+load_case = "1M, 1F"
+weight = 0.125
+
+[[race.event]]
+name = "Symposium women's 200 m sprint"
+course = "sprint_200"
+load_case = "2F"
+weight = 0.125
+
+[[race.event]]
+name = "Symposium men's 200 m sprint"
+course = "sprint_200"
+load_case = "2M"
+weight = 0.125
+
+[[race.event]]
+name = "Symposium co-ed 200 m sprint"
+course = "sprint_200"
+load_case = "2M, 2F"
+weight = 0.125
+
+[[race.event]]
+name = "Finals co-ed 600 m endurance"
+course = "endurance_600"
+load_case = "2M, 1F"
+weight = 0.1
+paddler_power_w = 85.0
+
+[[race.event]]
+name = "Finals women's 200 m sprint"
+course = "sprint_200"
+load_case = "2F"
+weight = 0.1
+
+[[race.event]]
+name = "Finals men's 200 m sprint"
+course = "sprint_200"
+load_case = "2M"
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 200 m sprint heats"
+course = "sprint_200"
+load_case = "2M, 2F"
+weight = 0.1
+
+[[race.event]]
+name = "Finals co-ed 400 m sprint final"
+course = "sprint_400"
+load_case = "2M, 2F"
+weight = 0.1
+
+[stands]
+pad_in = 6.0
+orientation = "upright"
+step_in = 0.5

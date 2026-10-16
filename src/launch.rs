@@ -22,18 +22,11 @@ pub const PORTS: std::ops::RangeInclusive<u16> = 8000..=8009;
 /// it alive with its 30 s ping.
 pub const IDLE: Duration = Duration::from_secs(300);
 
-/// Starter files written into a new canoe folder: (file name, contents).
+/// Starter files written into a new canoe folder: (file name, contents). canoe.toml is the
+/// team's settings (packaging/starter/canoe.toml), not examples/canoe.toml (tests pin that one).
 pub fn starter_files() -> [(&'static str, String); 3] {
-    // Normalised first: a Windows checkout embeds CRLF.
-    let toml = include_str!("../examples/canoe.toml")
-        .replace("\r\n", "\n")
-        .replace("examples/canoe.toml", "canoe.toml")
-        .replace(
-            "(examples/mix_tests.csv, a frozen copy of the team's\n# data; ../data/mix_tests.csv is the current one)",
-            "(mix_tests.csv in this folder; the web UI's\n# Mix data table edits it)",
-        );
     [
-        ("canoe.toml", toml),
+        ("canoe.toml", include_str!("../packaging/starter/canoe.toml").to_string()),
         ("off1_hull.json", include_str!("../examples/off1_hull.json").to_string()),
         ("mix_tests.csv", include_str!("../data/mix_tests.csv").to_string()),
     ]
@@ -245,12 +238,12 @@ mod tests {
         let canoe = ensure_folder(&d).unwrap();
         // Self-contained: the canoe.toml loads with only the starter files next to it.
         let p = crate::params::Params::load(&canoe).unwrap();
-        assert!(p.hull.file.as_ref().unwrap().starts_with(&d));
+        assert!(p.hull.file.as_ref().is_none_or(|h| h.starts_with(&d)));
         assert!(p.material.mix_data.starts_with(&d));
         crate::optimize::strength(&p).unwrap();
         let text = std::fs::read_to_string(&canoe).unwrap();
         assert!(
-            !text.contains("examples/canoe") && !text.contains("../data"),
+            !text.contains("examples/canoe") && !text.contains("../data") && !text.contains(":\\"),
             "starter refers outside its folder"
         );
         // A second launch never overwrites what the user edited.
