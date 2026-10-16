@@ -1045,9 +1045,9 @@ function pocketCover(group, x0, x1, gw, depth) {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C(x)'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall map'], ['xsec', 'Sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C(x)'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall map'], ['xsec', 'Sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race'], ['power', 'Power'], ['gz', 'Stability']];
 // Chart tabs by what they answer: the search, the structure of the winner, its hull, the race.
-const TAB_GROUPS = [['Search', ['cands', 'map', 'shape']], ['Structure', ['hull', 'stress', 'dcx', 'checks']], ['Hull', ['fb', 'xsec', 'zones']], ['Race', ['race']]];
+const TAB_GROUPS = [['Search', ['cands', 'map', 'shape']], ['Structure', ['hull', 'stress', 'dcx', 'checks']], ['Hull', ['fb', 'xsec', 'zones']], ['Race', ['race']], ['Performance', ['power', 'gz']]];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
@@ -1067,8 +1067,9 @@ function buildTabs() {
   const xa = axSel.x || defaultX();
   $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
     <span class="hint" style="margin-left:auto">green = passes, grey = fails, red cross = analysis error, blue ring = winner</span>`
-    : CASE_TABS.includes(tab) ? casePills() : tab === 'race' ? raceCtl() : '';
+    : CASE_TABS.includes(tab) ? casePills() : tab === 'race' ? raceCtl() : CURVE_TABS.includes(tab) ? curveCtl() : '';
   if (tab === 'race') raceWire();
+  if (CURVE_TABS.includes(tab)) curveWire();
   if (CASE_TABS.includes(tab)) for (const b of $('plotctl').querySelectorAll('button[data-case]')) b.onclick = () => { const n = b.dataset.case; caseHidden.has(n) ? caseHidden.delete(n) : caseHidden.add(n); buildTabs(); drawPlot(); };
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
@@ -1281,7 +1282,7 @@ function drawPlot() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
-  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, zones: plotZones, shape: plotShape, race: plotRace })[tab](ctx, W, H);
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, zones: plotZones, shape: plotShape, race: plotRace, power: plotPower, gz: plotGz })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
   if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
@@ -1345,6 +1346,89 @@ function plotStands(ctx, W, H) {
   hline(ctx, r2.l, r2.l + r2.w, a2.py(0), C.hair); line(ctx, a2, s.x_in, s.moment_lbin, C.ink); mark(a2, r2);
   legend(ctx, r1.l + 10, r1.t + 16, [[C.ink, `${s.orientation}, self weight x ${s.dead_factor}`], [C.faint, `stands ${s.x_stand_in.toFixed(1)} in from each end, ${s.pad_in} in pads`, [2, 3]]]);
 }
+// ---------- performance curves (result.winner.curves): power vs speed, righting lever vs heel ----------
+// The winner in the accent; other canoes (result.json files loaded with Compare) in greys, matched
+// by load case name. "All load cases" shows every loading of the winner instead.
+const CURVE_TABS = ['power', 'gz'];
+let curveSel = '*';
+const compares = [];
+const winCurves = () => result && result.winner && result.winner.curves;
+function curveNames() {
+  const c = winCurves(); if (!c) return [];
+  return (tab === 'gz' ? c.gz : c.power).map(k => k.name);
+}
+function curveCtl() {
+  const names = curveNames();
+  if (curveSel !== '*' && !names.includes(curveSel)) curveSel = '*';
+  const opt = (v, t) => `<option value="${esc(v)}" ${v === curveSel ? 'selected' : ''}>${esc(t)}</option>`;
+  const sel = names.length ? `<span class="muted">loading</span><select id="curvesel">${opt('*', 'all load cases')}${names.map(n => opt(n, n)).join('')}</select>` : '';
+  const pills = compares.map((k, i) => `<button type="button" class="btn soft" data-cmp="${i}" title="Remove this canoe from the plot">${esc(k.label)} &times;</button>`).join('');
+  return `${sel}<button type="button" class="btn" id="cmpadd" title="Overlay another canoe: a result.json from an earlier run (e.g. last year's canoe imported with import-mesh and run as drawn).">Compare...</button>
+    <input type="file" id="cmpfile" accept=".json,application/json" multiple style="display:none">${pills}`;
+}
+function curveWire() {
+  const s = $('curvesel'); if (s) s.onchange = e => { curveSel = e.target.value; drawPlot(); };
+  const add = $('cmpadd'), f = $('cmpfile');
+  if (add) add.onclick = () => f.click();
+  if (f) f.onchange = async () => {
+    for (const file of f.files) {
+      try {
+        const v = JSON.parse(await file.text());
+        const c = v && v.winner && v.winner.curves;
+        if (!c || c.error) { alert(`${file.name}: ${c && c.error ? c.error : 'no curves (re-run it with this version of JAGUAR)'}`); continue; }
+        const w = v.winner.candidate, hn = v.winner_hull && v.winner_hull.name;
+        compares.push({ label: `${hn || file.name.replace(/\.json$/i, '')} (${w.hull_weight_lb.toFixed(0)} lb)`, curves: c });
+      } catch (e) { alert(`${file.name}: not a JAGUAR result.json (${e.message})`); }
+    }
+    buildTabs(); drawPlot();
+  };
+  for (const b of $('plotctl').querySelectorAll('button[data-cmp]')) b.onclick = () => { compares.splice(Number(b.dataset.cmp), 1); buildTabs(); drawPlot(); };
+}
+// Series [label, xs, ys, colour, dash, marker x or null] for the current tab and loading.
+function curveSeries(kind) {
+  const c = winCurves(); if (!c) return [];
+  const pick = cs => kind === 'gz' ? cs.gz : cs.power;
+  const xs = cs => kind === 'gz' ? cs.angles_deg : cs.speeds_fps;
+  const ys = k => kind === 'gz' ? k.gz_in : k.power_w;
+  const mark = k => kind === 'gz' ? k.gunwale_immersion_deg : null;
+  const hw = result.winner.candidate.hull_weight_lb.toFixed(0);
+  const me = (result.winner_hull && result.winner_hull.name) || 'this canoe';
+  if (curveSel === '*') return pick(c).map((k, i) => [k.error ? `${k.name}: ${k.error}` : k.name, xs(c), k.error ? [] : ys(k), ...caseStyle(i), k.error ? null : mark(k)]);
+  const out = [];
+  const w = pick(c).find(k => k.name === curveSel);
+  if (w) out.push([`${me} (${hw} lb), ${curveSel}${w.error ? ': ' + w.error : ''}`, xs(c), w.error ? [] : ys(w), C.accent, [], w.error ? null : mark(w)]);
+  compares.forEach((cmp, i) => {
+    const k = pick(cmp.curves).find(q => q.name === curveSel);
+    const [col, dash] = caseStyle(i);
+    out.push(k && !k.error ? [`${cmp.label}, ${curveSel}`, xs(cmp.curves), ys(k), col, dash, mark(k)] : [`${cmp.label}: no "${curveSel}" load case`, [], [], col, dash, null]);
+  });
+  return out;
+}
+function plotCurves(ctx, W, H, kind) {
+  const c = winCurves();
+  if (!c) return msg(ctx, W, H, result && result.winner ? 'No curves in this result (re-run with this version of JAGUAR).' : 'Needs a winner. Run an optimization first.');
+  if (c.error) return msg(ctx, W, H, `Curves not computed: ${c.error}`);
+  const ss = curveSeries(kind), drawn = ss.filter(q => q[2].length);
+  if (!drawn.length) return msg(ctx, W, H, 'No curve to show for this loading.');
+  const r = { l: 72, t: 12, w: W - 92, h: H - 52 };
+  const xr = kind === 'gz' ? [0, 180] : [c.speeds_fps[0], c.speeds_fps[c.speeds_fps.length - 1]];
+  const ys = drawn.flatMap(q => q[2]);
+  const a = axes(ctx, r, xr, kind === 'gz' ? range2(ys.concat([0])) : [Math.max(0, Math.min(...ys)) * 0.95, Math.max(...ys) * 1.05],
+    kind === 'gz' ? 'angle of heel, deg' : 'speed, ft/s', kind === 'gz' ? 'righting lever GZ, in' : 'effective power R v, W');
+  if (kind === 'gz') hline(ctx, r.l, r.l + r.w, a.py(0), C.faint);
+  for (const [, x, y, col, dash, m] of drawn) {
+    line(ctx, a, x, y, col, dash);
+    if (m != null) { // gunwale under: an open canoe starts to take water here
+      const ym = interp(x, y, m); ctx.strokeStyle = col; ctx.setLineDash([]); ctx.beginPath(); ctx.arc(a.px(m), a.py(ym), 3.5, 0, 7); ctx.stroke();
+    }
+  }
+  const items = ss.map(([lab, , , col, dash]) => [col, lab, dash]);
+  if (kind === 'gz') items.push([C.muted, 'ring: gunwale goes under (an open canoe takes water); beyond it the hull is treated as closed']);
+  else items.push([C.muted, `level draft of hull + real crew; paddlers deliver P / propulsive efficiency`]);
+  legend(ctx, r.l + 10, r.t + 16, items);
+}
+const plotPower = (ctx, W, H) => plotCurves(ctx, W, H, 'power');
+const plotGz = (ctx, W, H) => plotCurves(ctx, W, H, 'gz');
 // Freeboard (gunwale minus local waterline) along the hull: every shown case plus the empty canoe.
 function plotFreeboard(ctx, W, H) {
   const d = diag(), c = winC(); if (!d || !c) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
@@ -1858,6 +1942,12 @@ function reportCharts() {
       add('Stress and waterline', 'Bending tension against the allowable (top); loaded waterline against the gunwale (bottom).', plotStress, 440);
       add('D/C along the hull', 'Max of bending tension, compression, shear and biaxial at each station.', plotDcx, 300);
       add('Freeboard', 'Gunwale above the local waterline per load case and with no crew aboard (worst seat sample in the legend). Dashed: freeboard gate.', plotFreeboard, 300);
+    }
+    if (winCurves() && !winCurves().error) {
+      const t0 = tab;
+      tab = 'power'; add('Power and speed', 'Effective (towing) power R v at the level draft of hull + crew, per load case' + (compares.length && curveSel !== '*' ? ', with the compared canoes' : '') + '.', plotPower, 300);
+      tab = 'gz'; add('Stability curve', 'Righting lever GZ versus angle of heel, hull closed at the gunwale. Ring: gunwale goes under (an open canoe takes water there).', plotGz, 300);
+      tab = t0;
     }
     if (result.winner && result.winner.stands && result.winner.stands.x_in) add('Stands: shear and moment', 'Empty hull on two stands at the best position, factored self weight. Grey: the pads.', plotStands, 400);
     if (w && result.winner_hull) add('Cross-sections', '', plotXsec, 240);

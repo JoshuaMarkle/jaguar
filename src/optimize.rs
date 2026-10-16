@@ -140,6 +140,9 @@ pub struct Winner {
     pub stands: Option<crate::stands::StandsCase>,
     /// Knee punching D/C of the heaviest paddler at knee splits 0.5, 0.6 and 1.0.
     pub knee_split_sensitivity: Vec<crate::stands::SplitDc>,
+    /// Power-speed and righting-lever curves of the winner ([`winner_curves`]); not gated.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curves: Option<crate::curves::Curves>,
 }
 
 /// Worked calculation of the winner's governing load case at the seats its
@@ -1587,7 +1590,46 @@ fn finish_winner(
         verify_failure,
         stands: None,
         knee_split_sensitivity: Vec::new(),
+        curves: None,
     })
+}
+
+/// Power-speed and righting-lever (GZ) curves of the winner, once after the search (called by
+/// [`crate::run`]): one power curve per load case (hull + real crew), one GZ curve per load case
+/// and the empty canoe, on the search-resolution grid. Pictures only: nothing is gated on them.
+pub fn winner_curves(params: &Params, r: &mut RunResult) {
+    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let c = &w.candidate;
+    let mut out = crate::curves::Curves {
+        speeds_fps: crate::curves::speeds_fps(),
+        angles_deg: crate::curves::angles_deg(),
+        ..Default::default()
+    };
+    if c.zones.is_some() {
+        out.error = Some("the curves cover single-mix walls, not a two-mix wall".into());
+        w.curves = Some(out);
+        return;
+    }
+    let mut wp = params.clone();
+    if let Some(gr) = c.shape.as_ref().and_then(|s| s.gunwale_radius_in) {
+        wp.hull.gunwale_radius_in = Some(gr);
+    }
+    let grid = Grid::build_topsides(hull, c.depth_in, params.hull.stations, candidate_topsides(&wp, c)).0;
+    let sec = sections(&grid, c.thickness_in);
+    let table = grid_hull(&grid);
+    let cg = params.stability.crew_cg_in;
+    let mut loadings: Vec<(String, f64)> =
+        params.load_cases.iter().map(|lc| (lc.name.clone(), lc.weights_lb.iter().sum())).collect();
+    for (name, crew) in &loadings {
+        let (wt, _) = crate::curves::weight_and_kg(&grid, &sec, c.density_pcf, *crew, cg);
+        out.power.push(crate::curves::power_curve(&table, name, *crew, wt, &out.speeds_fps));
+    }
+    loadings.push(("empty".into(), 0.0));
+    for (name, crew) in &loadings {
+        let (wt, kg) = crate::curves::weight_and_kg(&grid, &sec, c.density_pcf, *crew, cg);
+        out.gz.push(crate::curves::gz_curve(&grid, name, wt, kg, &out.angles_deg));
+    }
+    w.curves = Some(out);
 }
 
 /// Post-search checks of the winner, once (called by [`crate::run`] after either search):

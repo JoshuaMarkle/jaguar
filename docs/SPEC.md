@@ -212,6 +212,15 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    uniform weight gives 0.207 L. A stands D/C > `dc_verify`, or a stands case that cannot be
    computed (e.g. a two-mix wall), makes the winner NOT VERIFIED with the reason. Also after
    the search: the heaviest paddler's punching D/C at knee splits 0.5, 0.6 and 1.0.
+8c. **Curves** (`src/curves.rs`, `optimize::winner_curves`, once after the search; pictures, never
+   gated): effective power P = R(v) v (Michell + ITTC, level draft of hull + real crew) at 3 to 11
+   ft/s per load case; righting lever GZ(phi) at 0 to 180 deg in 2 deg steps per load case and
+   empty, each section closed at the gunwale and cut by the heeled waterline, h solved for
+   buoyancy = weight, GZ = Y_B - Y_G (G on the centreline at the GM check's KG), level trim. Per
+   curve: max GZ and its angle, the angle GZ stops being positive, and `gunwale_immersion_deg`
+   (first angle a gunwale is under: an open canoe takes water there). A curve that cannot be
+   computed carries `error`, never zeros. The web UI plots both (Performance tab) and overlays
+   other result.json files for comparison.
 9. **Shape search** (optional, `src/shapeopt.rs`, docs/SHAPE_SEARCH.md): Latin hypercube + pattern
    search over Michlet Series 7 shape factors within bounds. Each shape runs the wall search above,
    and the best objective wins. `beam_in = [min, max]`: the waterline beam is sampled in it, and a
@@ -254,7 +263,10 @@ winner: {candidate, verify_stations, verify_dc, verified, dc_extrapolated, dc_or
 mix_provenance, dense_mix_provenance, search_space, diagrams, cases, empty, calc, verify_failure,
 stands {error | orientation, pad_in, dead_factor, x_stand_in, x_over_l, spacing_in, reactions_lb,
 sag_max_lbin, x_sag_in, hog_max_lbin, x_hog_in, x_in, shear_lb, moment_lbin, verdict, local,
-beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, capacity_psi, dc}]}
+beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, capacity_psi, dc}],
+curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
+angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
+gunwale_immersion_deg}]}}
 | null, zones}`.
 With `[zones]`: a zoned candidate has `zones` {light_pcf, dense_pcf, dense: [{x0_in, x1_in,
 z0_in, z1_in}]} (disjoint rectangles; its `density_pcf` is the light mix) and `dense_mix` (tested

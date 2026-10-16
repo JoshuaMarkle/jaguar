@@ -9,6 +9,7 @@
 //! Sections + density + crew --equilibrium--> Loads (draft, trim, GM, V(x), M(x))
 //! Loads + Sections + StrengthFit --check--> Verdict (bending, shear, punching, freeboard)
 //! winner on two stands (empty) --stands--> post-search verification (`[stands]`)
+//! winner hull + wall + crews --curves--> power vs speed, righting lever vs heel (pictures)
 //! grid over (thickness, density, depth) --optimize--> RunResult   (+ resistance for drag)
 //! optional outer loop over hull shapes --shapeopt--> RunResult
 //! RunResult --report--> terminal + result.json       --serve--> localhost web UI
@@ -20,6 +21,7 @@
 //! Units everywhere inside the crate: inches, pounds, psi, pcf (see [`units`]).
 
 pub mod check;
+pub mod curves;
 pub mod equilibrium;
 pub mod export;
 pub mod flotation;
@@ -46,7 +48,8 @@ use params::Params;
 /// Run one canoe.toml: the wall search on `hull.file`, or the hull-shape
 /// search when `[shape_search]` is present instead.
 /// The winner then gets its post-search checks once (`optimize::verify_stands`: `[stands]`
-/// and the knee-split sensitivity), never per candidate or per shape.
+/// and the knee-split sensitivity) and its power and GZ curves (`optimize::winner_curves`),
+/// never per candidate or per shape.
 pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<RunResult> {
     let mut r = match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => {
@@ -57,5 +60,6 @@ pub fn run(params: &Params, on_progress: &(dyn Fn(Progress) + Sync)) -> Result<R
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     };
     optimize::verify_stands(params, &mut r);
+    optimize::winner_curves(params, &mut r);
     Ok(r)
 }

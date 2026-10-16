@@ -21,6 +21,7 @@ src/meshimport.rs   CAD canoe (STL / OBJ mesh) -> hull table, measured wall + de
 src/section.rs      shell A, zbar, I per station
 src/equilibrium.rs  float + trim, GM, V(x), M(x)
 src/flotation.rs    swamped flotation: bow/stern air pocket length
+src/curves.rs       power vs speed and righting lever (GZ) vs heel of the winner (pictures, not gates)
 src/resistance.rs   Michell wave + ITTC friction drag
 src/race.rs         race simulator: optimal path + speed over ASCE courses, straight/turn weighting
 src/check.rs        bending/compression/shear/punching (docs/PUNCHING.md), freeboard

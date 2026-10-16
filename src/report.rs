@@ -192,6 +192,24 @@ fn stands_lines(w: &crate::optimize::Winner) -> Vec<String> {
     ]
 }
 
+/// Righting lever summary of the heaviest loading (the least stable one).
+fn curves_line(w: &crate::optimize::Winner) -> Option<String> {
+    let c = w.curves.as_ref()?;
+    let g =
+        c.gz.iter()
+            .filter(|g| g.name != "empty" && g.error.is_none())
+            .max_by(|a, b| a.weight_lb.total_cmp(&b.weight_lb))?;
+    let deg = |d: Option<f64>| d.map_or("none".to_string(), |d| format!("{d:.0} deg"));
+    Some(format!(
+        "        stability {}: max GZ {:.2} in at {}, positive to {}, gunwale under at {}",
+        g.name,
+        g.max_gz_in?,
+        deg(g.max_gz_deg),
+        deg(g.vanishing_deg),
+        deg(g.gunwale_immersion_deg)
+    ))
+}
+
 fn convergence_line(w: &crate::optimize::Winner) -> String {
     let c = &w.convergence;
     let st = format!("{}/{}/{} stations", c.stations[0], c.stations[1], c.stations[2]);
@@ -547,6 +565,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                         .join("  ")
                 ));
             }
+            if let Some(l) = curves_line(w) {
+                out.push(l);
+            }
             if r.strength.flexural_fit.is_none() {
                 out.push(format!(
                     "        ASSUMPTION flexural strength = {:.2} x split tensile (no flexural data)",
@@ -897,6 +918,7 @@ mod tests {
             verify_failure: (!verified).then(|| "D/C at 81 stations 1.0200 > dc_verify 0.95".into()),
             stands: None,
             knee_split_sensitivity: vec![],
+            curves: None,
         }
     }
 
