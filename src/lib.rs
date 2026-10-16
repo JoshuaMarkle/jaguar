@@ -74,5 +74,11 @@ pub fn run_controlled(
     optimize::verify_stands(params, &mut r);
     optimize::winner_case_calcs(params, &mut r);
     optimize::winner_curves(params, &mut r);
+    // The closest failing design also lists a failed verification (stations, stands).
+    if let Some(cl) = &mut r.closest
+        && let Some(f) = &cl.design.verify_failure
+    {
+        cl.fails.push(format!("verification: {f}"));
+    }
     Ok(r)
 }

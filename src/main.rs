@@ -459,7 +459,7 @@ fn main() -> Result<()> {
                 rp.paddler_power_w = p;
             }
             if let Some(why) = &input.fails {
-                println!("note: racing the drawn design, which does not pass every check ({why})");
+                println!("note: racing a design that does not pass every check ({why})");
             }
             let r = race::run(&input.hull, input.hull_lb, input.depth_in, input.topsides, &rp)?;
             for l in report::race_lines(&r) {

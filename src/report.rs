@@ -664,6 +664,42 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             }
         }
     }
+    // Nothing passed: the closest design, analysed in full, and every gate it misses.
+    if let (None, Some(cl)) = (&r.winner, &r.closest) {
+        let (w, c) = (&cl.design, &cl.design.candidate);
+        out.push(format!(
+            "CLOSEST DESIGN (FAILS)  t {:.3} in  {}  depth {:.2} in  weight {:.2} lb  L {:.1} in  beam {:.1} in",
+            c.thickness_in,
+            match &c.mix {
+                Some(m) => format!("mix {m} ({:.1} pcf)", c.density_pcf),
+                None => format!("{:.1} pcf", c.density_pcf),
+            },
+            c.depth_in,
+            c.hull_weight_lb,
+            c.length_in,
+            c.beam_in
+        ));
+        for f in &cl.fails {
+            out.push(format!("  FAILS {f}"));
+        }
+        if let Some(v) = &c.verdict {
+            out.push(format!(
+                "  D/C {:.3} at {} stations  freeboard {:.2} in  GM loaded {} in  empty {} in",
+                w.verify_dc,
+                w.verify_stations,
+                v.freeboard_in,
+                fmt_opt(c.gm_in, 2),
+                fmt_opt(c.gm_empty_in, 2)
+            ));
+            for k in &v.checks {
+                out.push(format!(
+                    "    {:<20} demand {:>8.1}  capacity {:>8.1}  D/C {:.3}",
+                    k.name, k.demand, k.capacity, k.dc
+                ));
+            }
+        }
+        out.push("  race it with: jaguar race result.json (the web UI: Race tab)".into());
+    }
     out.truncate(MAX_LINES);
     out
 }
@@ -692,6 +728,12 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
     let cands = v["candidates"].as_array().map_or(&[][..], |a| a.as_slice());
     let (c, fails) = if v["winner"]["candidate"].is_object() {
         (&v["winner"]["candidate"], None)
+    } else if v["closest"]["design"]["candidate"].is_object() {
+        // Nothing passed: the closest design (it fails; the race says so).
+        let fails: Vec<String> = v["closest"]["fails"]
+            .as_array()
+            .map_or(vec![], |a| a.iter().filter_map(|f| f.as_str().map(String::from)).collect());
+        (&v["closest"]["design"]["candidate"], Some(format!("closest design, fails: {}", fails.join("; "))))
     } else if cands.len() == 1 && cands[0]["verdict"].is_object() {
         let c = &cands[0];
         let why = c["error"].as_str().map(|s| s.to_string()).unwrap_or_else(|| {
@@ -877,6 +919,7 @@ mod tests {
             winner_hull: None,
             candidates,
             winner,
+            closest: None,
             race: None,
             zones: None,
             ended_early: None,

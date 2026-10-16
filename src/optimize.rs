@@ -94,6 +94,71 @@ pub struct Candidate {
     pub dense_mix: Option<String>,
 }
 
+/// The candidate that comes closest when nothing passes ([`RunResult::closest`]): re-checked
+/// with every load case and gate (no early exit) and analysed like a winner ([`finish_winner`]:
+/// verification, every case, empty float, stands, curves, worked proof).
+#[derive(Debug, Clone, Serialize)]
+pub struct Closest {
+    /// Every gate it misses, worst first, with its numbers.
+    pub fails: Vec<String>,
+    pub design: Winner,
+}
+
+/// The gates `c` misses, worst first, each with its numbers, and its score: the largest relative
+/// miss over the gates ((demand - limit) / limit, or (limit - value) / limit; <= 0 when it passes
+/// them all, infinite for an analysis error). Ranks candidates for [`Closest`].
+pub fn shortfalls(params: &Params, c: &Candidate) -> (f64, Vec<String>) {
+    let mut miss: Vec<(f64, String)> = Vec::new();
+    if let Some(e) = &c.error {
+        miss.push((f64::INFINITY, format!("analysis: {e}")));
+    }
+    let case = c.governing_case.as_deref().unwrap_or("-");
+    match &c.verdict {
+        None => miss.push((f64::INFINITY, "no verdict (the canoe could not be analysed)".into())),
+        Some(v) => {
+            let g = &params.gates;
+            miss.push((
+                v.dc / g.dc_search - 1.0,
+                format!("strength: D/C {:.3} ({}, {case}) > {}", v.dc, v.governing_check, g.dc_search),
+            ));
+            miss.push((
+                (g.freeboard_min_in - v.freeboard_in) / g.freeboard_min_in.abs().max(1.0),
+                format!("freeboard: {:.2} in < {} in (lowest load case)", v.freeboard_in, g.freeboard_min_in),
+            ));
+        }
+    }
+    let st = &params.stability;
+    match c.gm_in {
+        Some(gm) => {
+            let worst = c
+                .gm_cases_in
+                .iter()
+                .enumerate()
+                .min_by(|a, b| a.1.total_cmp(b.1))
+                .and_then(|(i, _)| params.load_cases.get(i))
+                .map_or(String::new(), |lc| format!(", {}", lc.name));
+            miss.push((
+                (st.gm_min_in - gm) / st.gm_min_in.abs().max(1.0),
+                format!("stability: loaded GM {gm:.2} in < {} in{worst}", st.gm_min_in),
+            ));
+        }
+        None if c.verdict.is_some() => miss.push((f64::INFINITY, "stability: loaded GM not computed".into())),
+        None => {}
+    }
+    if let Some(m) = st.gm_empty_min_in {
+        match c.gm_empty_in {
+            Some(g) => {
+                miss.push(((m - g) / m.abs().max(1.0), format!("stability: empty GM {g:.2} in < {m} in")))
+            }
+            None => miss.push((f64::INFINITY, "stability: empty GM not computed".into())),
+        }
+    }
+    let score = miss.iter().map(|m| m.0).fold(f64::NEG_INFINITY, f64::max);
+    miss.retain(|m| m.0 > 0.0);
+    miss.sort_by(|a, b| b.0.total_cmp(&a.0));
+    (score, miss.into_iter().map(|m| m.1).collect())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Winner {
     pub candidate: Candidate,
@@ -790,6 +855,11 @@ pub struct RunResult {
     pub candidates: Vec<Candidate>,
     /// None = no design passed. Never a fallback "best failing" design.
     pub winner: Option<Winner>,
+    /// No design passed: the candidate that misses the gates by the least, analysed in full
+    /// like a winner, so the report can show where it fails. It FAILS: never the answer, never
+    /// in `winner`. See [`Closest`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closest: Option<Closest>,
     /// objective.kind = race: the winner raced on paths re-planned for it
     /// (`race::run`; its weighted time is <= the winner's `race_s`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1156,7 +1226,21 @@ fn run_search(
     if let (Some(st), Some(w)) = (&mut zone_stats, &winner) {
         st.saved_lb = st.single_mix_lb.map(|s| s - w.candidate.hull_weight_lb);
     }
-    let winner_hull = winner.as_ref().map(|_| hull.clone());
+    let closest = match winner {
+        Some(_) => None,
+        None => {
+            let space = ClosestSpace {
+                axis: &axis,
+                grids: &grids,
+                geoms: &geoms,
+                pairs: &pairs,
+                ts: &ts,
+                plans: &plans,
+            };
+            closest_design(params, &fit, hull, &candidates, &space, on_progress)?
+        }
+    };
+    let winner_hull = (winner.is_some() || closest.is_some()).then(|| hull.clone());
     Ok(RunResult {
         format: RESULT_FORMAT,
         params: params.clone(),
@@ -1164,10 +1248,82 @@ fn run_search(
         winner_hull,
         candidates,
         winner,
+        closest,
         race: None,
         zones: zone_stats,
         ended_early: None,
     })
+}
+
+/// The search grid [`closest_design`] re-evaluates candidates on.
+struct ClosestSpace<'a> {
+    axis: &'a [(f64, StrengthFit, Option<String>)],
+    grids: &'a [Grid],
+    geoms: &'a [(f64, f64)],
+    pairs: &'a [(usize, usize)],
+    ts: &'a [f64],
+    plans: &'a [Result<Vec<CaseSeats>, String>],
+}
+
+/// No design passed: the single-mix candidate that misses the gates by the least
+/// ([`shortfalls`]). The 16 best by the search's numbers (which stop at the first failed gate)
+/// are re-checked with every load case and gate, the best of those is analysed like a winner.
+/// None when no candidate could be analysed at all (every one errored, or no seats).
+fn closest_design(
+    params: &Params,
+    fit: &StrengthFit,
+    hull: &Hull,
+    candidates: &[Candidate],
+    sp: &ClosestSpace,
+    on_progress: &(dyn Fn(Progress) + Sync),
+) -> Result<Option<Closest>> {
+    let mut pre: Vec<(f64, usize)> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.zones.is_none() && c.verdict.is_some())
+        .map(|(i, c)| (shortfalls(params, c).0, i))
+        .collect();
+    let lb = |i: usize| candidates[i].hull_weight_lb;
+    pre.sort_by(|a, b| a.0.total_cmp(&b.0).then(lb(a.1).total_cmp(&lb(b.1))));
+    let full: Vec<(f64, Candidate, usize, usize)> = pre
+        .par_iter()
+        .take(16)
+        .filter_map(|&(_, i)| {
+            let c = &candidates[i];
+            let ri = sp.axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix)?;
+            let pi = sp.pairs.iter().position(|&(gi, ti)| {
+                sp.geoms[gi] == (c.depth_in, c.flare_deg) && sp.ts[ti] == c.thickness_in
+            })?;
+            sp.plans[pi].as_ref().ok()?;
+            let grid = &sp.grids[sp.pairs[pi].0];
+            let sec = sections(grid, c.thickness_in);
+            let mut f = evaluate(
+                params,
+                &sp.axis[ri].1,
+                grid,
+                &sec,
+                c.thickness_in,
+                c.density_pcf,
+                &sp.plans[pi],
+                false,
+            );
+            f.mix = c.mix.clone();
+            f.flare_deg = c.flare_deg;
+            if f.error.is_none() {
+                f.error = c.error.clone(); // e.g. under the buildable floor
+            }
+            Some((shortfalls(params, &f).0, f, ri, pi))
+        })
+        .collect();
+    let Some((_, c, ri, pi)) = full
+        .into_iter()
+        .filter(|f| f.1.verdict.is_some())
+        .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.hull_weight_lb.total_cmp(&b.1.hull_weight_lb)))
+    else {
+        return Ok(None);
+    };
+    let design = finish_winner(params, fit, &sp.axis[ri].1, hull, &c, &sp.plans[pi], None, on_progress)?;
+    Ok(Some(Closest { fails: shortfalls(params, &c).1, design }))
 }
 
 /// The wall search grid `zoned_search` places zones on.
@@ -1692,7 +1848,14 @@ fn finish_winner(
 /// resolution, each case at its resolved seats, with the winning mix's strength. Single-mix
 /// walls only (a zoned wall keeps an empty list; its `calc` says why).
 pub fn winner_case_calcs(params: &Params, r: &mut RunResult) {
-    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let RunResult { winner, closest, winner_hull, strength, .. } = r;
+    let Some(hull) = winner_hull.as_ref() else { return };
+    for w in winner.iter_mut().chain(closest.iter_mut().map(|c| &mut c.design)) {
+        case_calcs_on(params, strength, hull, w);
+    }
+}
+
+fn case_calcs_on(params: &Params, strength: &StrengthFit, hull: &Hull, w: &mut Winner) {
     let c = &w.candidate;
     if c.zones.is_some() {
         return;
@@ -1702,7 +1865,7 @@ pub fn winner_case_calcs(params: &Params, r: &mut RunResult) {
         wp.hull.gunwale_radius_in = Some(gr);
     }
     let err = |e: String| vec![CalcTrace { error: Some(e), calc: None }; params.load_cases.len()];
-    let fit = match density_axis(&wp, &r.strength) {
+    let fit = match density_axis(&wp, strength) {
         Ok(axis) => match axis.into_iter().find(|a| a.0 == c.density_pcf && a.2 == c.mix) {
             Some(a) => a.1,
             None => {
@@ -1734,7 +1897,14 @@ pub fn winner_case_calcs(params: &Params, r: &mut RunResult) {
 }
 
 pub fn winner_curves(params: &Params, r: &mut RunResult) {
-    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let RunResult { winner, closest, winner_hull, .. } = r;
+    let Some(hull) = winner_hull.as_ref() else { return };
+    for w in winner.iter_mut().chain(closest.iter_mut().map(|c| &mut c.design)) {
+        curves_on(params, hull, w);
+    }
+}
+
+fn curves_on(params: &Params, hull: &Hull, w: &mut Winner) {
     let c = &w.candidate;
     let mut out = crate::curves::Curves {
         speeds_fps: crate::curves::speeds_fps(),
@@ -1773,8 +1943,14 @@ pub fn winner_curves(params: &Params, r: &mut RunResult) {
 /// verification station count. A stands D/C over `dc_verify`, or a stands case that cannot be
 /// computed, makes the winner unverified with the reason in `verify_failure`.
 pub fn verify_stands(params: &Params, r: &mut RunResult) {
-    let fit = &r.strength;
-    let (Some(w), Some(hull)) = (r.winner.as_mut(), r.winner_hull.as_ref()) else { return };
+    let RunResult { winner, closest, winner_hull, strength, .. } = r;
+    let Some(hull) = winner_hull.as_ref() else { return };
+    for w in winner.iter_mut().chain(closest.iter_mut().map(|c| &mut c.design)) {
+        stands_on(params, strength, hull, w);
+    }
+}
+
+fn stands_on(params: &Params, fit: &StrengthFit, hull: &Hull, w: &mut Winner) {
     let c = &w.candidate;
     let mat = &params.material;
     let live = match mat.method {

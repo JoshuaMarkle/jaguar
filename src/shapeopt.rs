@@ -556,12 +556,15 @@ pub fn run_controlled(
     let mut r = run_with_progress(&winner_params, &hull, &forward)?;
     // The record keeps the input params; the winner's radius is in its shape.
     r.params = params.clone();
-    if shape.metrics.as_ref().is_some_and(|m| m.rejected.is_some()) {
-        // Every shape broke a [shape_search] constraint: no winner, never a rejected one.
-        r.winner = None;
+    if let Some(why) = shape.metrics.as_ref().and_then(|m| m.rejected.clone()) {
+        // Every shape broke a [shape_search] constraint: no winner, never a rejected one. Its
+        // design is shown as the closest, failing that constraint.
+        if let Some(w) = r.winner.take() {
+            r.closest = Some(crate::optimize::Closest { fails: vec![format!("shape: {why}")], design: w });
+        }
     }
     if let Some(w) = &mut r.winner {
-        w.candidate.shape = Some(shape);
+        w.candidate.shape = Some(shape.clone());
         w.candidate.race_s = reps[best].race_s;
         // Now that the winner carries its shape, add the shape axes.
         w.search_space = crate::optimize::search_space(params, &r.strength, &w.candidate)?;
@@ -574,7 +577,12 @@ pub fn run_controlled(
                 .context("race of the winner on re-planned paths")?,
         );
     }
-    if r.winner.is_some() {
+    if let Some(cl) = &mut r.closest {
+        // Nothing passed on any shape: the best-ranked shape's closest design, with its shape.
+        cl.design.candidate.shape = Some(shape.clone());
+        cl.design.search_space = crate::optimize::search_space(params, &r.strength, &cl.design.candidate)?;
+    }
+    if r.winner.is_some() || r.closest.is_some() {
         r.winner_hull = Some(hull);
     }
     r.candidates = reps;

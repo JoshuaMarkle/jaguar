@@ -294,7 +294,14 @@ beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, cap
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
 gunwale_immersion_deg}]}}
-| null, zones, ended_early}`.
+| null, closest, zones, ended_early}`.
+`closest` (only when no design passes): `{fails, design}`, the candidate that misses the gates by
+the least (largest relative miss over D/C, freeboard, loaded and empty GM; the 16 best by the
+search's early-exit numbers are re-checked with every case and gate), analysed in full like a
+winner (`design` has the winner's fields: every case, stands, curves, worked proof); `fails` lists
+every gate it misses with its numbers, plus a failed verification. It is never the answer: `winner`
+stays null, the terminal prints it as `CLOSEST DESIGN (FAILS)`, the web UI and PDF mark it FAILS,
+`jaguar race` races it with a note, and STEP/STL export refuses it. `winner_hull` is then its hull.
 `ended_early` (only when a shape search was ended from the web UI): how far it got, e.g. "ended by
 the user after 812 shapes (812 of 4000 samples, 0 of 25 refine rounds started)"; the winner is the
 best shape checked, verified as usual. The terminal adds `ENDED EARLY` under WINNER.
