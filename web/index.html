@@ -440,9 +440,9 @@ function buildForm() {
     section('hull',
       row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
       + `<div id="hullpick">${row('hull.file', 'Hull file', ht, '<select id="hull.file"></select>')}`
-      + `${row('hull.gunwale_radius_in', 'Gunwale radius', GW_T, '<input type="number" id="hull.gunwale_radius_in" step="any" min="0" placeholder="off">', 'in')}`
+      + `${row('hull.gunwale_radius_in', 'Gunwale radius', GW_T, '<input type="number" id="hull.gunwale_radius_in" step="any" min="0" placeholder="off">', 'in')}</div>`
       + `${row('meshfile', 'Import CAD file', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the model (auto: the unit a STEP file declares, else from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><label class="btn soft file">Choose file<input type="file" id="meshfile" accept=".step,.stp,.stl,.obj"></label></div>')}`
-      + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div></div>`
+      + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join('')
       + row('hull.doubly_symmetric', 'Doubly symmetric', SYM_T, '<input type="checkbox" class="switch" id="hull.doubly_symmetric">')
       + row('hull.stem_radius_in', 'Stem radius', FIL_T, '<input type="number" id="hull.stem_radius_in" step="any" min="0" max="12" placeholder="4">', 'in')
