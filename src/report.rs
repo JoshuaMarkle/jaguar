@@ -737,17 +737,26 @@ pub fn race_lines(r: &crate::race::RaceResult) -> Vec<String> {
     let mut out = vec![
         format!("race: {} at {:.1} lb hull, weighted time {:.1} s", r.hull, r.hull_lb, r.weighted_time_s),
         format!(
-            "{:<34} {:>6} {:<5} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7} {:>7}",
-            "event", "crew", "case", "time s", "dist m", "straight", "turning", "turns", "S_str", "S_turn"
+            "{:<34} {:>6} {:<11} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7} {:>7}",
+            "event",
+            "crew",
+            "load case",
+            "time s",
+            "dist m",
+            "straight",
+            "turning",
+            "turns",
+            "S_str",
+            "S_turn"
         ),
     ];
     for e in &r.events {
         let turns = e.segments.iter().filter(|s| s.radius_m.is_some()).count();
         out.push(format!(
-            "{:<34} {:>6.0} {:<5} {:>7.1} {:>7.1} {:>4.0}m/{:>3.0}s {:>4.0}m/{:>3.0}s {:>6} {:>7.3} {:>7.3}",
+            "{:<34} {:>6.0} {:<11} {:>7.1} {:>7.1} {:>4.0}m/{:>3.0}s {:>4.0}m/{:>3.0}s {:>6} {:>7.3} {:>7.3}",
             e.name,
             e.crew_lb,
-            e.load_case.as_deref().unwrap_or("-"),
+            e.load_case.as_deref().unwrap_or("own weights"),
             e.time_s,
             e.distance_m,
             e.straight_m,

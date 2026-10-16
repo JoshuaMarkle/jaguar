@@ -14,9 +14,10 @@
 //!   `meshimport.rs`). Writes `<stem>_hull.json` next to the CLI canoe.toml (refusing to
 //!   overwrite a hull that is not a mesh import) and returns {"file", "measured"}; 400 if the
 //!   mesh cannot be read.
-//! * `[race]` has no form fields, so it always comes from the CLI canoe.toml, read fresh on
-//!   every request: `/api/params` returns it, and `/api/run`, `/api/race` and `/api/prefs`
-//!   replace the posted `[race]` (absent from prefs saved before it existed) with it.
+//! * `[race]`: the form edits each event's crew (a load case or its own weights) and posts
+//!   the whole `[race]`, which is used as posted. When the posted text or the saved prefs have
+//!   no `[race]` (prefs saved before it existed), the CLI canoe.toml's, read fresh, is used:
+//!   `/api/params` returns it and `/api/run`, `/api/race`, `/api/prefs` add it.
 //! * `GET  /api/params`    -> {"toml": "<text>", "params": <Params as JSON, hull.file and
 //!   mix_data made relative to the CLI canoe.toml dir when inside it>, "dir": "<that dir>",
 //!   "source": "prefs"|"file"} (UI prefills its form). Read fresh each call: the saved
@@ -269,11 +270,15 @@ impl App {
         Ok(table.get("race").cloned())
     }
 
-    /// The posted canoe.toml text with its `[race]` replaced by the CLI canoe.toml's (when the
-    /// file has one). Text that does not parse is returned as is, for `Params::parse` to report.
+    /// The posted canoe.toml text, with the CLI canoe.toml's `[race]` added when it has none (the
+    /// form's own `[race]` is used as posted). Text that does not parse is returned as is, for
+    /// `Params::parse` to report.
     fn with_file_race(&self, body: &str) -> Result<String, String> {
-        let Some(race) = self.file_race()? else { return Ok(body.to_string()) };
         let Ok(mut table) = toml::from_str::<toml::Table>(body) else { return Ok(body.to_string()) };
+        if table.contains_key("race") {
+            return Ok(body.to_string());
+        }
+        let Some(race) = self.file_race()? else { return Ok(body.to_string()) };
         table.insert("race".into(), race);
         toml::to_string(&table).map_err(|e| e.to_string())
     }
@@ -296,13 +301,18 @@ impl App {
             f.strip_prefix(&self.base_dir).or_else(|_| f.strip_prefix(&canon)).unwrap_or(f).to_path_buf()
         };
         let mut rel = params;
-        match self.file_race() {
-            Ok(Some(v)) => match v.try_into() {
-                Ok(r) => rel.race = Some(r),
-                Err(e) => return err_reply(500, format!("{}: [race]: {e}", self.params_path.display())),
-            },
-            Ok(None) => rel.race = None,
-            Err(e) => return err_reply(500, e),
+        // Saved prefs keep their own (form-edited) [race]; without one, the file's.
+        if rel.race.is_none() {
+            match self.file_race() {
+                Ok(Some(v)) => match v.try_into() {
+                    Ok(r) => rel.race = Some(r),
+                    Err(e) => {
+                        return err_reply(500, format!("{}: [race]: {e}", self.params_path.display()));
+                    }
+                },
+                Ok(None) => {}
+                Err(e) => return err_reply(500, e),
+            }
         }
         rel.hull.file = rel.hull.file.as_deref().map(rel_to);
         rel.material.mix_data = rel_to(&rel.material.mix_data);
@@ -1100,13 +1110,16 @@ mod tests {
         assert_eq!(v["format"], crate::race::RACE_FORMAT);
         assert_eq!(v["events"].as_array().unwrap().len(), 1);
         assert!(v["events"][0]["speed_m"].as_array().unwrap().len() > 100);
-        // The file wins over a stale copy in the form.
-        let mut stale = params.clone();
-        stale.race.as_mut().unwrap().events[0].name = "stale".into();
+        // The form edits [race] (each event's crew): its own [race] is used as posted.
+        let mut edited = params.clone();
+        let ev = &mut edited.race.as_mut().unwrap().events[0];
+        (ev.name, ev.load_case, ev.weights_lb) = ("edited".into(), None, vec![150.0, 150.0]);
         let v: serde_json::Value =
-            serde_json::from_str(&a.handle("POST", "/api/race", &toml::to_string(&stale).unwrap()).2)
+            serde_json::from_str(&a.handle("POST", "/api/race", &toml::to_string(&edited).unwrap()).2)
                 .unwrap();
-        assert_eq!(v["events"][0]["name"], "Symposium men's 200 m sprint");
+        assert_eq!(v["events"][0]["name"], "edited");
+        assert_eq!(v["events"][0]["crew_lb"], 300.0);
+        assert!(v["events"][0].get("load_case").is_none());
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/race", &body).0, 409);
         assert_eq!(a.handle("GET", "/api/race", "").0, 405);

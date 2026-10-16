@@ -341,7 +341,7 @@ const PUNCH = [
 const PUNCH_INT = ['layers'];
 const MESH_T = 'Pass each mesh is laid after (1 = after the first), less than the number of passes. Several meshes: list them, e.g. "1, 2". Punching uses the mesh farthest from the knee face.';
 // [title, note shown muted next to it]
-const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], stands: ['Stands', 'empty hull on two stands, after the search'], turning: ['Turning', 'side-wall stress in a turn'], zones: ['Two-mix zones', 'dense flanges over the middle'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
+const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], stands: ['Stands', 'empty hull on two stands, after the search'], race: ['Race events', 'crew of each race'], turning: ['Turning', 'side-wall stress in a turn'], zones: ['Two-mix zones', 'dense flanges over the middle'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 // One aligned row: label | control | unit. The tooltip lives on the row so hovering anywhere explains it.
@@ -456,7 +456,8 @@ function buildForm() {
       + row('', 'Race displacements', DISP_T, '<span class="hint" id="dispnote"></span>')
       + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${['none', 'regionals', 'nationals', 'total', 'custom'].map(m => `<button type="button" data-disp="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>`
       + '<div id="disps" style="display:grid;gap:var(--s1)"></div>'
-      + `<div id="dispadd">${row('', '', 'Add another race condition.', '<button type="button" class="btn soft" id="dispaddbtn">Add condition</button>')}</div>`);
+      + `<div id="dispadd">${row('', '', 'Add another race condition.', '<button type="button" class="btn soft" id="dispaddbtn">Add condition</button>')}</div>`)
+    + section('race', '<div id="raceevs" style="display:grid;gap:var(--s1)"></div>');
   $('addcase').onclick = () => lcBlock({ name: 'case' + ($('cases').children.length + 1), weights_lb: [] });
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
@@ -488,7 +489,7 @@ const GROUPS = [
   ['hull', 'Hull', ['sec-hull', 'shapefs'], 'The hull: file or shape search, gunwale, stem radius, mold templates, CAD import.'],
   ['crew', 'Crew', ['sec-crew'], 'Load cases (paddler weights and seats) and the seat placement rules.'],
   ['material', 'Material', ['sec-material', 'sec-punching', 'sec-zones'], 'Concrete: strength model and design method, knee punching and casting layers, two-mix walls, lab mix data.'],
-  ['search', 'Search', ['sec-search', 'sec-gates', 'sec-objective'], 'What is searched (wall, density, depth ranges), the D/C and freeboard gates, and what "best" means.'],
+  ['search', 'Search', ['sec-search', 'sec-gates', 'sec-objective', 'sec-race'], 'What is searched (wall, density, depth ranges), the D/C and freeboard gates, and what "best" means.'],
   ['checks', 'Checks', ['sec-stability', 'sec-flotation', 'sec-turning', 'sec-stands'], 'Stability, swamped flotation, turning-stress and stands checks.'],
 ];
 function setGroup(g) {
@@ -630,6 +631,7 @@ function fillForm(p, hulls) {
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
+  raceEvents();
   const st = p.seats || { auto: true, spacing_min_in: 30, bow_clear_in: 36, stern_clear_in: 36, variance_in: 3 };
   $('seats.auto').checked = !!st.auto; for (const [k] of FIELDS.seats) $(`seats.${k}`).value = st[k];
 }
@@ -726,11 +728,56 @@ function formToml() {
     out.push(`dense_pcf = [${[0, 1, 2].map(n => fl(g(`zones.dense_pcf.${n}`))).join(', ')}]`, `increment_in = ${fl(g('zones.increment_in'))}`);
     out.push(`max_checks = ${int('zones.max_checks')}`, '');
   }
-  if (loadedRace) out.push(...raceToml(loadedRace));
+  if (loadedRace) out.push(...raceToml(raceFromForm()));
   return out.join('\n');
 }
-// [race] has no form fields (jaguar race, objective "race"): carried through from the loaded params.
+// [race] (jaguar race, objective "race"): courses carried through from the loaded params; each
+// event's crew is picked in the Race events section: a load case (load_case) or custom weights
+// (weights_lb), never both.
 let loadedRace = null;
+const CUSTOM = '\u0000custom';
+const lcNames = () => [...document.querySelectorAll('#cases .lcname')].map(i => i.value.trim()).filter(Boolean);
+function crewOptions(sel, cur) {
+  const names = lcNames();
+  const opts = names.map(n => [n, n]);
+  if (cur && cur !== CUSTOM && !names.includes(cur)) opts.push([cur, `${cur} (no such load case)`]);
+  opts.push([CUSTOM, 'custom weights']);
+  sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
+  sel.value = cur;
+}
+function raceEvents() {
+  const box = $('raceevs');
+  if (!loadedRace || !loadedRace.event || !loadedRace.event.length) {
+    box.innerHTML = row('', '', 'Races come from the [race] section of the canoe.toml.', '<span class="hint">no [race] in the canoe.toml</span>');
+    return;
+  }
+  const tc = 'Crew of this race: a load case (its weights, kept in sync) or custom weights for a crew that is not a load case (a light crew that never governs the structure costs the search nothing this way).';
+  box.innerHTML = loadedRace.event.map((e, i) => `<div class="raceev" data-i="${i}" style="display:grid;gap:var(--s1)">`
+    + row(`raceev.${i}`, esc(e.name), tc, `<select id="raceev.${i}"></select>`)
+    + `<div class="racew">${row('', 'Custom weights', 'Paddler weights in lb, comma separated.', `<input class="racewin" value="${(e.weights_lb || []).join(', ')}">`, 'lb')}</div></div>`).join('');
+  loadedRace.event.forEach((e, i) => {
+    const sel = $(`raceev.${i}`), w = sel.closest('.raceev').querySelector('.racew');
+    const show = () => { w.style.display = sel.value === CUSTOM ? '' : 'none'; };
+    crewOptions(sel, e.load_case != null ? e.load_case : CUSTOM); show();
+    // Load case names can change in the Crew section: refresh the list when it is opened.
+    sel.addEventListener('mousedown', () => crewOptions(sel, sel.value));
+    sel.addEventListener('focus', () => crewOptions(sel, sel.value));
+    sel.addEventListener('change', show);
+  });
+}
+// loadedRace with each event's crew as picked in the form.
+function raceFromForm() {
+  const r = { ...loadedRace, event: loadedRace.event.map(e => ({ ...e })) };
+  r.event.forEach((e, i) => {
+    const sel = $(`raceev.${i}`); if (!sel) return;
+    if (sel.value === CUSTOM) {
+      const w = list(sel.closest('.raceev').querySelector('.racewin').value).map(Number);
+      if (!w.length || w.some(x => !(x > 0))) throw new Error(`race event "${e.name}": custom weights must be numbers > 0`);
+      e.weights_lb = w; delete e.load_case;
+    } else { e.load_case = sel.value; delete e.weights_lb; }
+  });
+  return r;
+}
 function raceToml(r) {
   const out = ['[race]'];
   for (const k of ['paddler_power_w', 'propulsive_efficiency', 'max_thrust_n', 'buoy_clearance_m', 'lane_width_m', 'min_turn_radius_m']) out.push(`${k} = ${fl(r[k])}`);
@@ -1480,7 +1527,7 @@ const RACE_SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 20, 50];
 const anim = { t: 0, playing: false, speed: 5, follow: false, last: 0 };
 function raceCtl() {
   const evs = raceRes ? raceRes.events : [];
-  const sel = evs.length ? `<span class="muted">event</span><select id="raceev">${evs.map((e, i) => `<option value="${i}" ${i === raceEv ? 'selected' : ''}>${esc(e.name)}</option>`).join('')}</select>` : '';
+  const sel = evs.length ? `<span class="muted">event</span><select id="raceev">${evs.map((e, i) => `<option value="${i}" ${i === raceEv ? 'selected' : ''}>${esc(e.name)} \u00b7 ${esc(e.load_case || 'own weights')}</option>`).join('')}</select>` : '';
   const e = evs[raceEv];
   const play = e ? `<button type="button" class="btn" id="raceplay" title="Play / pause (space)">${anim.playing ? 'Pause' : anim.t >= e.time_s ? 'Replay' : 'Play'}</button>
     <button type="button" class="btn" id="racerew" title="Back to the start">Restart</button>
@@ -1650,13 +1697,18 @@ function plotRace(ctx, W, H) {
   row(`${raceRes.hull} at ${raceRes.hull_lb.toFixed(1)} lb: weighted time ${raceRes.weighted_time_s.toFixed(1)} s`, 652);
   // One row per event: name, then right-aligned columns (straight / turning as metres / seconds).
   const cols = [['time s', k => k.time_s.toFixed(1)], ['straight m / s', k => `${k.straight_m.toFixed(0)} / ${k.straight_s.toFixed(0)}`],
-    ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0) + (k.load_case ? ` (${k.load_case})` : '')]];
-  const cw = 70, nameW = Math.max(110, W - x - 12 - cw * cols.length);
+    ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0)],
+    ['load case', k => k.load_case || 'own weights']];
+  // Every column is as wide as its widest entry (bold, the selected row), so none is clipped;
+  // only the event name gives way, with an ellipsis.
+  ctx.font = font(11, 652);
+  const cws = cols.map(([h, f]) => 14 + Math.max(ctx.measureText(h).width, ...raceRes.events.map(k => ctx.measureText(f(k)).width)));
+  const nameW = Math.max(110, W - x - 12 - cws.reduce((a, b) => a + b, 0));
   const cells = (name, vals, w, col) => {
     ctx.font = font(11, w); ctx.fillStyle = col; ctx.textAlign = 'left';
     let n = name; while (n.length > 4 && ctx.measureText(n).width > nameW - 6) n = n.slice(0, -2);
     ctx.fillText(n === name ? n : n + '...', x, y); ctx.textAlign = 'right';
-    vals.forEach((v, j) => ctx.fillText(v, x + nameW + cw * (j + 1), y)); ctx.textAlign = 'left'; y += 16;
+    let cx = x + nameW; vals.forEach((v, j) => { cx += cws[j]; ctx.fillText(v, cx, y); }); ctx.textAlign = 'left'; y += 16;
   };
   cells('event', cols.map(c => c[0]), 450, C.muted);
   raceRes.events.forEach((k, i) => cells(k.name, cols.map(c => c[1](k)), i === raceEv ? 652 : 450, i === raceEv ? C.accent : C.ink));
