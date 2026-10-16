@@ -9,11 +9,11 @@
 //! * `GET  /`              -> web/index.html (embedded with include_str!)
 //! * `GET  /vendor/three.min.js` -> three.js r128 (web/vendor, MIT, web/vendor/three.LICENSE),
 //!   embedded too, so the 3D view never depends on a CDN or the network.
-//! * `POST /api/import-mesh?name=<file.stl|file.obj>[&units=in|mm|cm|m|ft][&length_axis=x|y|z]
-//!   [&up_axis=..][&flip_up=1][&bow_at_max=1]` body = the mesh file's bytes (a canoe made in CAD,
-//!   `meshimport.rs`). Writes `<stem>_hull.json` next to the CLI canoe.toml (refusing to
-//!   overwrite a hull that is not a mesh import) and returns {"file", "measured"}; 400 if the
-//!   mesh cannot be read.
+//! * `POST /api/import-mesh?name=<file.step|.stp|.stl|.obj>[&units=in|mm|cm|m|ft][&length_axis=x|y|z]
+//!   [&up_axis=..][&flip_up=1][&bow_at_max=1]` body = the CAD file's bytes (a canoe made in CAD,
+//!   `meshimport.rs`, STEP via `stepimport.rs`). Writes `<stem>_hull.json` next to the CLI
+//!   canoe.toml (refusing to overwrite a hull that is not a mesh import) and returns {"file",
+//!   "read", "measured"}; 400 if the file cannot be read.
 //! * `[race]`: the form edits each event's crew (a load case or its own weights) and posts
 //!   the whole `[race]`, which is used as posted. When the posted text or the saved prefs have
 //!   no `[race]` (prefs saved before it existed), the CLI canoe.toml's, read fresh, is used:
@@ -512,7 +512,7 @@ impl App {
             query.split('&').find_map(|kv| kv.strip_prefix(&format!("{k}=")[..])).map(|v| v.to_string())
         };
         let Some(name) = q("name").as_deref().and_then(safe_name) else {
-            return err_reply(400, "give ?name=<file.stl|file.obj> (a bare file name)");
+            return err_reply(400, "give ?name=<file.step|file.stl|file.obj> (a bare file name)");
         };
         let path = Path::new(&name);
         let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -526,19 +526,18 @@ impl App {
         if stem.is_empty() {
             return err_reply(400, "bad mesh file name");
         }
-        let parsed = match ext.as_str() {
-            "stl" => mi::parse_stl(bytes),
-            "obj" => mi::parse_obj(&String::from_utf8_lossy(bytes)),
-            e => {
-                return err_reply(
-                    400,
-                    format!("mesh must be .stl or .obj (got .{e}): export one from your CAD"),
-                );
-            }
+        let (tris, declared, what) = match mi::read_cad(&ext, bytes) {
+            Ok(v) => v,
+            Err(e) => return err_reply(400, format!("{e:#}")),
         };
         let opts = (|| -> Result<MeshOptions> {
+            let given = q("units").filter(|u| u != "auto").as_deref().map(mi::unit_scale).transpose()?;
             Ok(MeshOptions {
-                units: q("units").filter(|u| u != "auto").as_deref().map(mi::unit_scale).transpose()?,
+                units: given.or(declared.as_ref().map(|d| d.0)),
+                units_from: declared
+                    .clone()
+                    .filter(|_| given.is_none())
+                    .map(|d| format!("{} (declared in the file)", d.1)),
                 length_axis: q("length_axis").as_deref().map(mi::axis_index).transpose()?,
                 up_axis: q("up_axis").as_deref().map(mi::axis_index).transpose()?,
                 flip_up: q("flip_up").is_some_and(|v| v == "1"),
@@ -546,7 +545,7 @@ impl App {
                 ..MeshOptions::new()
             })
         })();
-        let (hull, m) = match opts.and_then(|o| mi::hull_from_mesh(&parsed?, &stem, &o)) {
+        let (hull, m) = match opts.and_then(|o| mi::hull_from_mesh(&tris, &stem, &o)) {
             Ok(v) => v,
             Err(e) => return err_reply(400, format!("{e:#}")),
         };
@@ -560,7 +559,7 @@ impl App {
         if let Err(e) = hull.save(&out) {
             return err_reply(500, format!("{e:#}"));
         }
-        json_reply(200, serde_json::json!({ "file": file, "measured": m }))
+        json_reply(200, serde_json::json!({ "file": file, "read": what, "measured": m }))
     }
 
     fn hulls(&self) -> Reply {
@@ -1231,7 +1230,17 @@ mod tests {
         let list = a.handle("GET", "/api/hulls", "").2;
         assert!(list.contains("My_Canoe_hull.json"), "{list}");
         assert_eq!(a.handle("GET", "/api/hull?file=My_Canoe_hull.json", "").0, 200);
-        assert_eq!(a.import_mesh("name=x.step", &stl).0, 400, "not a mesh");
+        assert_eq!(a.import_mesh("name=x.step", &stl).0, 400, "not a STEP file");
+        assert_eq!(a.import_mesh("name=x.dwg", &stl).0, 400, "not a CAD format read");
+        // A STEP solid of the same canoe gives the same wall and depth, in the file's own unit.
+        let step = export::to_step(&export::build_mesh(&hull, &spec).unwrap(), "off1");
+        let (st, _, body) = a.import_mesh("name=Step%20Canoe.step", step.as_bytes());
+        assert_eq!(st, 200, "{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["read"].as_str().unwrap().starts_with("STEP"), "{v}");
+        assert!(v["measured"]["units"].as_str().unwrap().starts_with("inch (declared"), "{v}");
+        assert!((v["measured"]["thickness_in"].as_f64().unwrap() - 0.375).abs() < 0.02, "{v}");
+        assert!((v["measured"]["depth_in"].as_f64().unwrap() - 12.0).abs() < 0.05, "{v}");
         assert_eq!(a.import_mesh("name=bad.stl", b"nonsense").0, 400);
         // Never overwrites a hull that is not a mesh import.
         hull.save(&a.base_dir.join("keep_hull.json")).unwrap();

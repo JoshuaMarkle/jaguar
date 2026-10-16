@@ -338,7 +338,7 @@ const SHAPE_OPT = [
 ];
 const GME_T = 'Minimum metacentric height of the empty canoe (no crew aboard): how strongly it rights itself when it sits empty in the water, e.g. at the dock or launching. Empty = not gated (still computed and shown).';
 const FIL_T = 'Side-view radius at the bottom of the bow and stern stems, where the stem meets the keel, so the bottom has no point. The corner is cut on an arc tangent to stem and keel; over the arc each section is stretched onto it (same shape, still pointed, so the waterline entry stays sharp); the top of the stem, the gunwale and the length stay as they are. The arc may run above the design waterline; a mold shallower than its top is rejected. Weight, displacement, GM, D/C and the export use the cut hull. 0 = sharp. Empty = 4 in.';
-const CADMESH_T = 'Analyse a canoe made in CAD: export it as STL or OBJ (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius, symmetry or gunwale outline). Then Run analyses that design; Race races it.';
+const CADMESH_T = 'Analyse a canoe made in CAD: a STEP file (.step / .stp, solid or surface, its own units), or an STL or OBJ mesh (solid wall, or the outer surface). JAGUAR slices it into a hull table next to the canoe.toml, measures the wall and gunwale depth, picks the new hull, turns shape search off and pins the search to the drawn wall and depth (the CAD shape is used as is: no flare, templates, radius, symmetry or gunwale outline). Then Run analyses that design (structure, floating, stability, flotation); the Race tab races it.';
 const TPL_T = 'Constructable mold: build the hull from this many cross-section templates (tips included, closer at the ends) with straight surfaces between them, as hot-wire foam or frames with straight battens produce. The analysis, export and 3D view use that loft; with shape search the optimizer tunes it. 9-11 cost about 1% race time (docs/HULLS.md). Empty = smooth hull.';
 const GW_T = 'Constructable gunwale: in top view the sides run straight from the bow, one circular arc of this radius through the middle, straight to the stern; each side is straight from the waterline up to it. The gunwale is the narrowest such outline that keeps the sides from leaning in (and at least the flare at midships). Empty = off. Full-ended hulls need a small radius; a radius that fits no outline rejects the design.';
 const ROCKER_T = 'Allowed keel rise, min and max, at 5% of the length from the bow and from the stern, relative to the lowest keel point. Shapes outside are rejected. Both empty = any rocker.';
@@ -441,7 +441,7 @@ function buildForm() {
       row('shapemode', 'Optimize hull shape', st, '<input type="checkbox" class="switch" id="shapemode">')
       + `<div id="hullpick">${row('hull.file', 'Hull file', ht, '<select id="hull.file"></select>')}`
       + `${row('hull.gunwale_radius_in', 'Gunwale radius', GW_T, '<input type="number" id="hull.gunwale_radius_in" step="any" min="0" placeholder="off">', 'in')}`
-      + `${row('meshfile', 'Import CAD mesh', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the mesh (auto: from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><label class="btn soft file">Choose file<input type="file" id="meshfile" accept=".stl,.obj"></label></div>')}`
+      + `${row('meshfile', 'Import CAD file', CADMESH_T, '<div class="multi"><select id="meshunits" title="Units of the model (auto: the unit a STEP file declares, else from its length)">' + ['auto', 'in', 'mm', 'cm', 'm', 'ft'].map(u => `<option value="${u}">${u}</option>`).join('') + '</select><label class="btn soft file">Choose file<input type="file" id="meshfile" accept=".step,.stp,.stl,.obj"></label></div>')}`
       + `<div class="hint" id="meshnote" style="padding:0 var(--s3) var(--s2)"></div></div>`
       + FIELDS.hull.map(f => numRow('hull', f)).join('')
       + row('hull.doubly_symmetric', 'Doubly symmetric', SYM_T, '<input type="checkbox" class="switch" id="hull.doubly_symmetric">')
@@ -600,6 +600,10 @@ function wireMeshImport() {
     if (!r.ok) { note.textContent = 'import failed: ' + v.error; return; }
     const m = v.measured, sel = $('hull.file');
     sel.innerHTML = hullOptions(await (await fetch('/api/hulls')).json()); sel.value = v.file;
+    // The drawn hull is the hull: no shape search, so the race objective falls back to weight.
+    const notes = [...m.notes];
+    if ($('shapemode').checked) { $('shapemode').checked = false; setShapeMode(); notes.push('Shape search turned off.'); }
+    if ($('objective.kind').value === 'race') { $('objective.kind').value = 'weight'; notes.push('Optimize for: min weight (race time needs a shape search; the Race tab races the result).'); }
     $('hull.flare_deg').value = 0;
     for (const id of ['hull.templates', 'hull.gunwale_radius_in']) $(id).value = '';
     $('hull.stem_radius_in').value = 0;
@@ -610,8 +614,8 @@ function wireMeshImport() {
     }
     for (const n of [0, 1]) $(`search.depth_in.${n}`).value = m.depth_in.toFixed(3);
     const wall = typeof m.thickness_in === 'number' ? `wall ${m.thickness_in.toFixed(3)} in (2V/A ${m.thickness_volume_in != null ? m.thickness_volume_in.toFixed(3) : '-'})` : 'no wall (surface mesh): thickness range searched';
-    note.textContent = `${v.file}: ${(m.length_in / 12).toFixed(1)} ft x ${m.beam_in.toFixed(1)} in, depth ${m.depth_in.toFixed(2)} in, ${wall}; ${m.units}. Search pinned to the drawn design: Run to analyse it.`
-      + (m.notes.length ? ' Note: ' + m.notes.join(' ') : '');
+    note.textContent = `${v.file} (${v.read}): ${(m.length_in / 12).toFixed(1)} ft x ${m.beam_in.toFixed(1)} in, depth ${m.depth_in.toFixed(2)} in, ${wall}; units ${m.units}. Search pinned to the drawn design: Run to analyse it.`
+      + (notes.length ? ' Note: ' + notes.join(' ') : '');
     schedulePrefs(); loadHull(v.file);
   };
 }
@@ -2101,6 +2105,11 @@ function reportHtml(canoeImg, charts) {
       ${kvr('D/C', `${f(sc.verdict.dc, 3)} <span class="muted">${esc(sc.verdict.governing_check)}, gate &le; ${f(p.gates && p.gates.dc_verify, 2)}; verified D/C ${f(win.verify_dc, 3)}</span>`)}</div>`
       + table(['check', 'demand psi', 'capacity psi', 'D/C', 'at x, in'], sc.verdict.checks.map(k =>
         `<tr class="${k.name === sc.verdict.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 1)}</td><td>${f(k.capacity, 1)}</td><td>${f(k.dc, 3)}</td><td>${f(k.x_in, 1)}</td></tr>`));
+  // Race results, when this winner was raced (Race tab, or a race-objective search).
+  const rr = raceRes && Math.abs(raceRes.hull_lb - c.hull_weight_lb) < 0.05 ? raceRes : null;
+  const raceSec = !rr ? '' : `<h2>Race.</h2><div class="muted">Simulated race of this hull (${f(rr.hull_lb, 1)} lb) over the [race] events: fastest path and speed with each event's crew and paddler power. Weighted time ${f(rr.weighted_time_s, 1)} s.</div>`
+    + table(['event', 'crew', 'time s', 'distance m', 'straight m / s', 'turning m / s', 'mean m/s', 'top m/s', 'weight'], rr.events.map(e =>
+      `<tr><td>${esc(e.name)}</td><td>${esc(e.load_case || '')} ${f(e.crew_lb, 0)} lb</td><td>${f(e.time_s, 1)}</td><td>${f(e.distance_m, 1)}</td><td>${f(e.straight_m, 0)} / ${f(e.straight_s, 0)}</td><td>${f(e.turn_m, 0)} / ${f(e.turn_s, 0)}</td><td>${f(e.mean_mps, 2)}</td><td>${f(e.top_mps, 2)}</td><td>${f(e.weight, 3)}</td></tr>`));
   const ks = win.knee_split_sensitivity || [];
   const splitSec = ks.length ? `<h3>Knee punching by knee split</h3>` + table(['knee_split', 'load on one knee lb', 'demand psi', 'capacity psi', 'D/C'], ks.map(q =>
     `<tr class="${p.punching && q.knee_split === p.punching.knee_split ? 'gov' : ''}"><td>${f(q.knee_split, 1)}${q.knee_split === 1 ? ' (one knee)' : ''}</td><td>${f(q.load_lb, 1)}</td><td>${f(q.demand_psi, 1)}</td><td>${f(q.capacity_psi, 1)}</td><td>${f(q.dc, 3)}</td></tr>`)) : '';
@@ -2131,6 +2140,7 @@ function reportHtml(canoeImg, charts) {
   <h2>Checks.</h2>${checks}
   <h2>Load cases.</h2>${cases}${splitSec}
   ${standsSec}
+  ${raceSec}
   <div class="page"><h2 style="margin-top:0">Optimization data.</h2>
     <h3>Search space</h3>${space}
     ${conv ? `<h3>Station convergence of the winner</h3>${conv}` : ''}

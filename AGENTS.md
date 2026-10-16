@@ -17,7 +17,8 @@ src/params.rs       canoe.toml -> Params (the only input)
 src/mix.rs          lab CSV -> strength fit (docs/MIX_DATA.md)
 src/hull.rs         jaguar-hull/1 JSON, Michlet import, Grid
 src/hullgen.rs      parametric hull from shape factors (gen-hull, shape search)
-src/meshimport.rs   CAD canoe (STL / OBJ mesh) -> hull table, measured wall + depth, as-drawn canoe.toml
+src/stepimport.rs   STEP B-rep (planes, B-splines, cylinders...) -> triangles for meshimport
+src/meshimport.rs   CAD canoe (STEP / STL / OBJ) -> hull table, measured wall + depth, as-drawn canoe.toml
 src/section.rs      shell A, zbar, I per station
 src/equilibrium.rs  float + trim, GM, V(x), M(x)
 src/flotation.rs    swamped flotation: bow/stern air pocket length

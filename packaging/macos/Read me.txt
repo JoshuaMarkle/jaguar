@@ -26,6 +26,10 @@ USE
   * Your files are in Documents/JAGUAR: canoe.toml (the settings), the hull, the lab data
     (mix_tests.csv) and result.json (the last run's answer). The "Open folder" button at the top opens it.
     Put other hulls (jaguar-hull JSON) there to pick them in the form.
+  * To check a canoe drawn in CAD: Hull > "Import CAD file", pick its STEP (.step/.stp) or
+    STL/OBJ file. JAGUAR measures the hull, wall and depth, turns shape search off, and Run
+    checks that design (strength, floating, stability, flotation). The Race tab races it and
+    "Export PDF" writes the full calculations.
   * Settings are saved as you type.
 
 STOP

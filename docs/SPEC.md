@@ -13,7 +13,7 @@ jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no v
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
-jaguar import-mesh canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
+jaguar import-mesh canoe.step|canoe.stp|canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
 jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
@@ -335,9 +335,15 @@ Schema: `src/optimize.rs`. Ordering is deterministic (thickness, density, depth 
 same input gives byte-identical output. The terminal prints a short summary; the JSON is the record.
 
 ## CAD import (`src/meshimport.rs`)
-`jaguar import-mesh` (and the web form's "Import CAD mesh", `POST /api/import-mesh`) reads a canoe
-drawn in CAD, exported as an STL (binary or ASCII) or OBJ mesh, and writes a jaguar-hull/1 table:
-units (in/mm/cm/m/ft, detected from a 12-30 ft length or given), axes (length = longest side, up =
+`jaguar import-mesh` (and the web form's "Import CAD file", `POST /api/import-mesh`) reads a canoe
+drawn in CAD, as a STEP file or an STL (binary or ASCII) or OBJ mesh, and writes a jaguar-hull/1
+table. A STEP B-rep (`src/stepimport.rs`: faces on planes, B-splines incl. rational, cylinders,
+cones, spheres, tori; trimmed faces and holes; edges shared between faces are sampled once, so the
+mesh has no gaps) is meshed into triangles about 1/2 in across, boundary chords within 0.005 in of
+the surface; a boundary point more than 0.02 in off its surface, a face wrapping round a closed
+surface with no seam, or parts placed by an assembly transform are refused (export STL instead).
+Units (in/mm/cm/m/ft: the unit a STEP file declares, else detected from a 12-30 ft length, or
+given), axes (length = longest side, up =
 shortest, keel at the narrower end; or given), bow at the low end of the length axis (or
 `--bow-at-max`). Each of `--stations` x `--waterlines` cuts takes the outer crossing on each side
 (their mean; the difference is reported as asymmetry). The table runs from the keel to the lowest
@@ -349,7 +355,9 @@ radius, gunwale outline or shape search (the CAD shape is the shape), search pin
 wall (or `--thickness`) and depth, and to `--density` if given (else the mix range: the lightest
 passing mix). `jaguar run` then gives every check, drag, stability and flotation; a single pinned
 design that fails is shown with all its checks (it is the design asked about, not a fallback), and
-`jaguar race` races it (with a note). Verified on JAGUAR's own exported solids: wall within 0.02 in,
+`jaguar race` races it (with a note). The web import also turns shape search off and, if the
+objective is race time, sets it to weight (the Race tab races the result). Verified on JAGUAR's own
+exported solids (STL facets, and the B-spline STEP with air pockets): wall within 0.02 in (STEP 0.01),
 offsets within 0.15 in, the off1 winner reproduced (weight within 2%, punching D/C within 0.005;
 GM within 0.05 in, which is enough to cross off1's GM gate at 0.25).
 
@@ -396,7 +404,7 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
 * **PDF report** (web UI only, `Export PDF` beside STEP/STL): built in the browser from the last
   result and printed via the print dialog's "Save as PDF" (no server endpoint, no dependency).
   Page 1: snapshot of the 3D canoe top left, weight and verification, winner stats, checks, load
-  cases. Then search space, station convergence, mix fit and lab points, every input and every
+  cases, stands, and the race results per event when this winner was raced. Then search space, station convergence, mix fit and lab points, every input and every
   chart (all cases shown), then the design proof: (0) every check of every case and every gate
   (freeboard, GM, empty GM, convergence, stands, flotation) with demand, capacity, D/C or value,
   the requirement and OK/FAILS, and a conclusion; (1) design basis: load and resistance factors,

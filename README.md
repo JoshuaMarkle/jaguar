@@ -35,6 +35,9 @@ cargo build --release
 # example hulls: canoe (real), sleek, beamy, barge (bad on purpose). See docs/HULLS.md
 # bring your own hull from Michlet, or generate one: jaguar gen-hull shape.toml
 ./target/release/jaguar import-michlet off1.mlt out.mlt -o my_hull.json
+# check a canoe drawn in CAD (STEP, STL or OBJ) as drawn, then race it
+./target/release/jaguar import-mesh design.step --canoe canoe.toml   # -> design_analysis.toml
+./target/release/jaguar run design_analysis.toml -o result.json && ./target/release/jaguar race result.json
 ./target/release/jaguar export result.json -o canoe.step   # winner as a STEP solid (or -o canoe.stl)
 ```
 

@@ -40,6 +40,7 @@ pub mod section;
 pub mod serve;
 pub mod shapeopt;
 pub mod stands;
+pub mod stepimport;
 pub mod units;
 
 use anyhow::Result;

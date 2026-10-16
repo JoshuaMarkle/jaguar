@@ -28,13 +28,13 @@ enum Cmd {
         #[arg(default_value = "canoe.toml")]
         params: PathBuf,
     },
-    /// Read a canoe made in CAD (STL or OBJ mesh; solid wall or surface) into a jaguar-hull/1 JSON,
+    /// Read a canoe made in CAD (STEP, STL or OBJ; solid wall or surface) into a jaguar-hull/1 JSON,
     /// measuring its wall and depth; with --canoe, also write a canoe.toml that analyses it as drawn.
     ImportMesh {
         mesh: PathBuf,
         #[arg(short, long)]
         out: Option<PathBuf>,
-        /// Units of the mesh: in | mm | cm | m | ft (default: detected from the length)
+        /// Units of the model: in | mm | cm | m | ft (default: a STEP file's own unit, else detected from the length)
         #[arg(long)]
         units: Option<String>,
         /// Length / up axis: x | y | z (default: longest / shortest side)
@@ -221,13 +221,14 @@ fn main() -> Result<()> {
             use jaguar::meshimport::{self as mi, MeshOptions};
             let bytes = std::fs::read(&mesh)?;
             let ext = mesh.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-            let tris = match ext.as_str() {
-                "stl" => mi::parse_stl(&bytes)?,
-                "obj" => mi::parse_obj(&String::from_utf8_lossy(&bytes))?,
-                e => anyhow::bail!("mesh must be .stl or .obj (got .{e}); export one from your CAD"),
-            };
+            let (tris, declared, what) = mi::read_cad(&ext, &bytes)?;
+            println!("read {what}");
+            let given = units.as_deref().map(mi::unit_scale).transpose()?;
             let opts = MeshOptions {
-                units: units.as_deref().map(mi::unit_scale).transpose()?,
+                units: given.or(declared.as_ref().map(|d| d.0)),
+                units_from: declared
+                    .filter(|_| given.is_none())
+                    .map(|d| format!("{} (declared in the file)", d.1)),
                 length_axis: length_axis.as_deref().map(mi::axis_index).transpose()?,
                 up_axis: up_axis.as_deref().map(mi::axis_index).transpose()?,
                 flip_up,

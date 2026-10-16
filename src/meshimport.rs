@@ -1,9 +1,11 @@
-//! A canoe made in CAD, read as a triangle mesh (STL binary/ASCII or OBJ: every CAD exports
-//! one), turned into a `jaguar-hull/1` table so it is analysed like any other hull.
+//! A canoe made in CAD, read as a triangle mesh (STL binary/ASCII, OBJ, or a STEP solid / surface
+//! meshed by `stepimport`), turned into a `jaguar-hull/1` table so it is analysed like any other
+//! hull.
 //!
 //! Pure (bytes in, hull out); the CLI and web read the file.
 //!
-//! * Units: `in`, `mm`, `cm`, `m`, `ft`, or auto from the length (a canoe is 12-30 ft).
+//! * Units: `in`, `mm`, `cm`, `m`, `ft`, the unit a STEP file declares, or auto from the length
+//!   (a canoe is 12-30 ft).
 //! * Axes: length = the longest bounding-box side, up = the shortest (beam > depth for a canoe),
 //!   or given. Up points away from the keel: the end whose cross-sections are narrower is the
 //!   bottom. The bow is at the low end of the length axis unless `bow_at_max`.
@@ -30,6 +32,8 @@ type V3 = [f64; 3];
 pub struct MeshOptions {
     /// Inches per model unit.
     pub units: Option<f64>,
+    /// How `units` was decided, for the report (default: "given").
+    pub units_from: Option<String>,
     /// Axis index (0 = x, 1 = y, 2 = z) of the length and of up.
     pub length_axis: Option<usize>,
     pub up_axis: Option<usize>,
@@ -166,6 +170,30 @@ pub fn parse_obj(text: &str) -> Result<Vec<[V3; 3]>> {
     Ok(tris)
 }
 
+/// A CAD file's triangles by its extension (stl, obj, step / stp), the units it declares (STEP:
+/// inches per unit and the unit's name), and a one-line description of what was read.
+#[allow(clippy::type_complexity)]
+pub fn read_cad(ext: &str, bytes: &[u8]) -> Result<(Vec<[V3; 3]>, Option<(f64, String)>, String)> {
+    Ok(match ext.to_ascii_lowercase().as_str() {
+        "stl" => {
+            let t = parse_stl(bytes)?;
+            let d = format!("STL, {} triangles", t.len());
+            (t, None, d)
+        }
+        "obj" => {
+            let t = parse_obj(&String::from_utf8_lossy(bytes))?;
+            let d = format!("OBJ, {} triangles", t.len());
+            (t, None, d)
+        }
+        "step" | "stp" => {
+            let m = crate::stepimport::parse_step(&String::from_utf8_lossy(bytes))?;
+            let d = format!("STEP, {} faces meshed into {} triangles", m.faces, m.tris.len());
+            (m.tris, m.units, d)
+        }
+        e => bail!("CAD file must be .step, .stp, .stl or .obj (got .{e})"),
+    })
+}
+
 /// Section of the mesh at x = `x0`: segments (y, z) - (y, z).
 fn section(tris: &[[V3; 3]], x0: f64) -> Vec<[[f64; 2]; 2]> {
     let mut out = Vec::new();
@@ -215,7 +243,7 @@ pub fn hull_from_mesh(raw: &[[V3; 3]], name: &str, o: &MeshOptions) -> Result<(H
     let mut notes = Vec::new();
     // Units: a canoe is 12-30 ft long.
     let (scale, units) = match o.units {
-        Some(s) => (s, format!("{s} in/unit (given)")),
+        Some(s) => (s, o.units_from.clone().unwrap_or_else(|| format!("{s} in/unit (given)"))),
         None => {
             let l = ext[la];
             let cand =
@@ -570,6 +598,45 @@ mod tests {
         // A drawn wall under the buildable floor is still analysed, with a note.
         let (_, notes) = analysis_toml(&base, Path::new("examples"), &hp, &m, Some(0.25), None).unwrap();
         assert!(notes.iter().any(|n| n.contains("thinner than your buildable floor")));
+    }
+
+    #[test]
+    fn step_solid_reproduces_the_design_it_was_exported_from() {
+        // off1's winner (0.375 in, 12 in, 58 pcf: 98.24 lb, punching 0.904) as a B-spline STEP
+        // solid with air pockets, read back through read_cad and run as drawn.
+        let spec = ExportSpec {
+            depth_in: 12.0,
+            thickness_in: Some(0.375),
+            flare_deg: 0.0,
+            gunwale_radius_in: None,
+            stations: 161,
+            girth: 41,
+            pocket_in: Some(30.0),
+            layers: Some(2),
+        };
+        let step = crate::export::to_step(&build_mesh(&off1(), &spec).unwrap(), "off1");
+        let (tris, units, what) = read_cad("STEP", step.as_bytes()).unwrap();
+        assert!(what.starts_with("STEP, 17 faces"), "{what}");
+        let (ipu, name) = units.unwrap();
+        let o = MeshOptions { units: Some(ipu), units_from: Some(name), ..MeshOptions::new() };
+        let (h, m) = hull_from_mesh(&tris, "step", &o).unwrap();
+        assert_eq!(m.units, "inch");
+        assert!((m.length_in - 240.1).abs() < 0.5 && (m.depth_in - 12.0).abs() < 0.05, "{m:?}");
+        assert!((m.thickness_in.unwrap() - 0.375).abs() < 0.01, "{m:?}");
+        let dir = std::env::temp_dir().join(format!("jaguar_step_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let hp = dir.join("step_hull.json");
+        h.save(&hp).unwrap();
+        let base = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let (text, _) =
+            analysis_toml(&base, Path::new("examples"), &hp, &m, Some(0.375), Some(58.0)).unwrap();
+        let mut p = crate::params::Params::parse(&text, &dir).unwrap();
+        p.stability.gm_min_in = 0.0;
+        let r = crate::run(&p, &|_| {}).unwrap();
+        let c = &r.winner.expect("the drawn design passes").candidate;
+        assert!((c.hull_weight_lb / 98.24 - 1.0).abs() < 0.02, "{}", c.hull_weight_lb);
+        assert!((c.verdict.as_ref().unwrap().dc - 0.904).abs() < 0.005, "{:?}", c.verdict);
+        assert!(read_cad("dwg", b"").is_err());
     }
 
     #[test]

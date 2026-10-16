@@ -607,7 +607,9 @@ impl Grid {
         let dd = hull.draft_design;
         let mut z = hull.z.clone();
         if depth > dd {
-            z.extend(linspace(dd + 0.1, depth, TOPSIDE_LINES));
+            // From 0.1 in above the table top, or halfway when the gunwale is closer than 0.2 in
+            // (a CAD import's table ends just under its depth): the rows must rise to the depth.
+            z.extend(linspace((dd + 0.1).min(0.5 * (dd + depth)), depth, TOPSIDE_LINES));
         }
         // A stem radius above the table: rows every r/8 up its arcs there, so they are resolved
         // (the table's own waterlines resolve them below).
@@ -909,6 +911,22 @@ mod tests {
         let max = a.iter().flatten().zip(b.iter().flatten()).map(|(p, q)| (p - q).abs()).fold(0.0, f64::max);
         // 1e-4 in: the golden file used 39.3701 in/m, we use the exact factor.
         assert!(max < 1e-4, "max offset diff {max}");
+    }
+
+    #[test]
+    fn topsides_rise_to_a_depth_just_above_the_table() {
+        // A CAD import's table ends a hair under its gunwale: the topside rows must still rise
+        // monotonically to the depth (they used to start 0.1 in up and fold back down).
+        let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        for d in [h.draft_design + 1e-5, h.draft_design + 0.05, h.draft_design + 0.15] {
+            let g = Grid::build(&h, d, 41);
+            assert!(g.z.windows(2).all(|w| w[1] > w[0]), "depth {d}: {:?}", &g.z[g.z.len() - 12..]);
+            assert_eq!(*g.z.last().unwrap(), d);
+        }
+        // Wall area per station is continuous across the table top.
+        let a = |d: f64| crate::section::sections(&Grid::build(&h, d, 41), 0.375).area[20];
+        let (lo, hi) = (a(h.draft_design), a(h.draft_design + 1e-5));
+        assert!((hi / lo - 1.0).abs() < 1e-4, "{lo} vs {hi}");
     }
 
     #[test]
