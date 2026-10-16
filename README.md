@@ -12,6 +12,10 @@ survives the crew, and can optionally search the hull shape too.
 3. JAGUAR opens in your browser. Edit the inputs, press **Run optimization**. Your files live in
    **Documents/JAGUAR** (button **Open folder**); **Quit** stops it.
 
+It starts with the team's settings (`packaging/starter/canoe.toml`): hull shape search with the
+race-time objective, 4000 shapes, which takes hours. For a quick look set **Samples** to 96
+(minutes).
+
 The first open shows a security warning because the app is not signed by a paid certificate.
 Windows: **More info** > **Run anyway**. Mac: System Settings > Privacy & Security > **Open
 Anyway** (macOS 14 and earlier: Control-click > Open). Details: the `Read me.txt` in each zip
@@ -39,7 +43,8 @@ cargo build --release
 
 Contributors and agents: read `AGENTS.md`. Open work: `docs/PLAN.md`.
 New release for the download links: `git tag v0.2.0 && git push origin v0.2.0` (bump `version` in
-Cargo.toml first); `.github/workflows/release.yml` builds both zips and publishes them.
+Cargo.toml first); `.github/workflows/release.yml` builds both zips and publishes them with
+`packaging/release-notes.md` plus the generated changelog.
 
 ## Usage
 

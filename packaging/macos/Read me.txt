@@ -17,8 +17,11 @@ START
 USE
   * Edit the inputs on the left, press "Run optimization", read the result on the right.
     Hover any label for help.
+  * It starts with the team's settings: the hull shape is searched too (thousands of hull
+    shapes, each with a full wall search), so a run can take hours. For a quick look, lower
+    "Samples" under the hull shape search (e.g. 96: a few minutes).
   * Your files are in Documents/JAGUAR: canoe.toml (the settings), the hull, the lab data
-    (mix_tests.csv) and result.json. The "Open folder" button at the top opens it.
+    (mix_tests.csv) and result.json (the last run's answer). The "Open folder" button at the top opens it.
     Put other hulls (jaguar-hull JSON) there to pick them in the form.
   * Settings are saved as you type.
 

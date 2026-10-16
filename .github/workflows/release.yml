@@ -57,8 +57,11 @@ jobs:
     needs: [windows, mac]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: packaging/release-notes.md, sparse-checkout-cone-mode: false }
+      - run: cp packaging/release-notes.md notes.md
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "JAGUAR $GITHUB_REF_NAME" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "JAGUAR $GITHUB_REF_NAME" --notes-file notes.md --generate-notes
