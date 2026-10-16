@@ -1,7 +1,23 @@
 # JAGUAR
 
 Finds the lightest concrete canoe wall (thickness, mix density, mold depth) for a given hull that
-survives the crew, and can optionally search the hull shape too. Terminal first. Browser view optional.
+survives the crew, and can optionally search the hull shape too.
+
+## Download and run (no terminal, no install)
+
+1. Download from [Releases](https://github.com/JoshuaMarkle/jaguar/releases/latest):
+   **JAGUAR-windows.zip** or **JAGUAR-mac.zip** (Apple silicon and Intel).
+2. Windows: extract the zip, double-click **JAGUAR.exe**. Mac: drag **JAGUAR** to Applications,
+   double-click it.
+3. JAGUAR opens in your browser. Edit the inputs, press **Run optimization**. Your files live in
+   **Documents/JAGUAR** (button **Open folder**); **Quit** stops it.
+
+The first open shows a security warning because the app is not signed by a paid certificate.
+Windows: **More info** > **Run anyway**. Mac: System Settings > Privacy & Security > **Open
+Anyway** (macOS 14 and earlier: Control-click > Open). Details: the `Read me.txt` in each zip
+(`packaging/`).
+
+## From source (terminal)
 
 ```bash
 cargo build --release
@@ -22,6 +38,8 @@ cargo build --release
   `docs/SHAPE_SEARCH.md`)
 
 Contributors and agents: read `AGENTS.md`. Open work: `docs/PLAN.md`.
+New release for the download links: `git tag v0.2.0 && git push origin v0.2.0` (bump `version` in
+Cargo.toml first); `.github/workflows/release.yml` builds both zips and publishes them.
 
 ## Usage
 

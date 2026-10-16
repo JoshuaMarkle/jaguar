@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>JAGUAR</string>
+  <key>CFBundleDisplayName</key><string>JAGUAR</string>
+  <key>CFBundleIdentifier</key><string>io.github.joshuamarkle.jaguar</string>
+  <key>CFBundleExecutable</key><string>jaguar</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>VERSION</string>
+  <key>CFBundleVersion</key><string>VERSION</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <!-- No window or Dock icon: the program is the page it opens in the browser. -->
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>

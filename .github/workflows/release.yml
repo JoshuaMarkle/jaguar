@@ -1,0 +1,64 @@
+# Builds the downloads for people without Rust: JAGUAR-windows.zip (JAGUAR.exe) and
+# JAGUAR-mac.zip (JAGUAR.app, Apple silicon + Intel). Push a tag `v*` to publish them as a
+# GitHub release; run it by hand (Actions > release > Run workflow) to only build them.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/JAGUAR | Out-Null
+          Copy-Item target/release/jaguar.exe dist/JAGUAR/JAGUAR.exe
+          Copy-Item "packaging/windows/Read me.txt" dist/JAGUAR/
+          dist/JAGUAR/JAGUAR.exe --version
+          Compress-Archive dist/JAGUAR dist/JAGUAR-windows.zip
+      - uses: actions/upload-artifact@v4
+        with: { name: JAGUAR-windows, path: dist/JAGUAR-windows.zip }
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "aarch64-apple-darwin,x86_64-apple-darwin" }
+      - run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - run: |
+          set -e
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          APP=dist/JAGUAR/JAGUAR.app
+          mkdir -p "$APP/Contents/MacOS"
+          lipo -create -output "$APP/Contents/MacOS/jaguar" \
+            target/aarch64-apple-darwin/release/jaguar target/x86_64-apple-darwin/release/jaguar
+          sed "s/VERSION/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          plutil -lint "$APP/Contents/Info.plist"
+          # Ad-hoc signature: Apple silicon refuses to run unsigned code.
+          codesign --force --sign - "$APP"
+          cp "packaging/macos/Read me.txt" dist/JAGUAR/
+          "$APP/Contents/MacOS/jaguar" --version
+          lipo -archs "$APP/Contents/MacOS/jaguar"
+          ditto -c -k --keepParent dist/JAGUAR dist/JAGUAR-mac.zip
+      - uses: actions/upload-artifact@v4
+        with: { name: JAGUAR-mac, path: dist/JAGUAR-mac.zip }
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.zip --repo "$GITHUB_REPOSITORY" --title "JAGUAR $GITHUB_REF_NAME" --generate-notes

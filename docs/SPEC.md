@@ -7,6 +7,7 @@ Optionally the hull shape is searched too (`[shape_search]`).
 
 ## Interface
 ```
+jaguar                                         desktop app (double-click): web UI on Documents/JAGUAR
 jaguar check  [canoe.toml]                     validate inputs, print hull summary
 jaguar run    [canoe.toml] [-o result.json]    optimize; exit 0 verified, 2 no verified design, 1 error
 jaguar mix    [data/mix_tests.csv]             print lab points and the strength fit (docs/MIX_DATA.md)
@@ -24,6 +25,19 @@ restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and e
 3D view: left-drag orbits, right-, middle- or Shift-drag pans, the wheel zooms; a view cube in the
 top right turns with the camera (faces BOW, STERN, PORT, STBD, TOP, BOTTOM) and a click on a face,
 edge or corner turns the view there; Home returns to the starting view.
+
+No command (double-clicking JAGUAR.exe / JAGUAR.app, `src/launch.rs`): the canoe folder is
+`Documents/JAGUAR` (Windows: the Documents folder Explorer shows, also when OneDrive moved it).
+The first launch writes the starter `canoe.toml` (examples/canoe.toml), `off1_hull.json` and
+`mix_tests.csv` (data/mix_tests.csv, the team's current lab data) into it; an existing file is never
+overwritten. Then it serves that canoe.toml as `serve` does, with prefs in
+`~/.config/jaguar/app-prefs.toml` (home = `$HOME`, else `%USERPROFILE%`), on the first free port of
+8000-8009, and opens it in the default browser; a desktop JAGUAR already answering on one of those
+ports is opened instead of starting another. The page shows "Open folder" and "Quit". The server
+stops on Quit, or 5 min after the last request while no run is going (the open page pings every
+30 s). Windows: a console window the double-click created is closed. Errors show in a dialog.
+Downloads: `.github/workflows/release.yml` builds `JAGUAR-windows.zip` (JAGUAR.exe) and
+`JAGUAR-mac.zip` (JAGUAR.app, universal, ad-hoc signed; `packaging/`) and publishes them on a `v*` tag.
 
 ## Inputs
 
@@ -428,4 +442,4 @@ examples/canoe.toml winner (9 events) runs in about 5 s; `examples/shape_race.to
 (22 threads; mostly the per-shape straight-resistance tables, 24 Michell calls per crew).
 
 ## Out of scope (do not build)
-Running Michlet/Godzilla, desktop GUI, mix database, more than two mixes, torsion. Anything else new needs the user's approval first (ideas: docs/PLAN.md).
+Running Michlet/Godzilla, a native desktop GUI (the desktop app is the web UI), mix database, more than two mixes, torsion. Anything else new needs the user's approval first (ideas: docs/PLAN.md).

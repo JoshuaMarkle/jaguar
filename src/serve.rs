@@ -63,6 +63,13 @@
 //!   the jaguar-race/1 JSON. Synchronous (a few seconds; other requests wait). 404 if no
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //!
+//! * `GET  /api/session`   -> {"app": "jaguar", "version", "desktop": bool, "folder": str|null}.
+//!   `desktop` = started by a double-click (`launch.rs`); `folder` = its canoe folder. The
+//!   desktop page calls it every 30 s: any request keeps a desktop server alive.
+//! * `POST /api/quit`      desktop only (403 otherwise): 200 {"ok":true}, then the server stops.
+//! * `POST /api/open-folder` desktop only (403 otherwise): opens the canoe folder in
+//!   Explorer / Finder, 200 {"ok":true}.
+//!
 //! Any panic or Err inside a run must land as state "error" with a message,
 //! never kill the server.
 
@@ -73,7 +80,9 @@ use crate::params::Params;
 use crate::report;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 const INDEX_HTML: &str = include_str!("../web/index.html");
 /// three.js r128, byte-identical to cdnjs (sha512 SRI checked when vendored).
@@ -109,6 +118,12 @@ struct App {
     params: Params,
     result_path: PathBuf,
     shared: Arc<Mutex<Shared>>,
+    /// Desktop mode (`jaguar` double-clicked): its canoe folder. None for `jaguar serve`.
+    desktop: Option<PathBuf>,
+    /// Time of the last request (desktop idle quit).
+    seen: Arc<Mutex<Instant>>,
+    /// Set by `POST /api/quit`: the server stops after replying.
+    quit: AtomicBool,
 }
 
 type Reply = (u16, &'static str, String);
@@ -146,6 +161,9 @@ impl App {
             params: startup,
             result_path,
             shared: Arc::new(Mutex::new(shared)),
+            desktop: None,
+            seen: Arc::new(Mutex::new(Instant::now())),
+            quit: AtomicBool::new(false),
         })
     }
 
@@ -203,6 +221,29 @@ impl App {
             },
             ("POST", "/api/run") => self.start_run(body),
             ("POST", "/api/race") => self.race(body),
+            ("GET", "/api/session") => json_reply(
+                200,
+                serde_json::json!({
+                    "app": "jaguar",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "desktop": self.desktop.is_some(),
+                    "folder": self.desktop.as_ref().map(|d| d.display().to_string()),
+                }),
+            ),
+            ("POST", "/api/quit") | ("POST", "/api/open-folder") if self.desktop.is_none() => {
+                err_reply(403, "only when JAGUAR was opened by double-click")
+            }
+            ("POST", "/api/quit") => {
+                self.quit.store(true, Ordering::SeqCst);
+                json_reply(200, serde_json::json!({ "ok": true }))
+            }
+            ("POST", "/api/open-folder") => {
+                let dir = self.desktop.as_ref().expect("desktop checked above").display().to_string();
+                match crate::launch::open(&dir) {
+                    Ok(()) => json_reply(200, serde_json::json!({ "ok": true })),
+                    Err(e) => err_reply(500, format!("{e:#}")),
+                }
+            }
             (
                 _,
                 "/"
@@ -217,7 +258,10 @@ impl App {
                 | "/api/result"
                 | "/api/run"
                 | "/api/export"
-                | "/api/race",
+                | "/api/race"
+                | "/api/session"
+                | "/api/quit"
+                | "/api/open-folder",
             ) => err_reply(405, "method not allowed"),
             _ => err_reply(404, "not found"),
         }
@@ -597,12 +641,12 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
 }
 
 /// Default prefs location: `$XDG_CONFIG_HOME/jaguar/prefs.toml`, else
-/// `~/.config/jaguar/prefs.toml`. Err if neither variable is set.
+/// `~/.config/jaguar/prefs.toml` (home = `$HOME`, else `%USERPROFILE%`). Err if none is set.
 pub fn default_prefs_path() -> Result<PathBuf> {
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     let dir = env("XDG_CONFIG_HOME")
-        .or_else(|| env("HOME").map(|h| h.join(".config")))
-        .context("no XDG_CONFIG_HOME or HOME: pass --prefs <path>")?;
+        .or_else(|| crate::launch::home_dir().map(|h| h.join(".config")))
+        .context("no XDG_CONFIG_HOME, HOME or USERPROFILE: pass --prefs <path>")?;
     Ok(dir.join("jaguar").join("prefs.toml"))
 }
 
@@ -672,8 +716,10 @@ fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf) {
     }
 }
 
-fn serve_on(server: tiny_http::Server, app: App) {
+/// Answer requests until the server is unblocked or `POST /api/quit` (desktop) is answered.
+fn serve_on(server: &tiny_http::Server, app: &App) {
     for mut req in server.incoming_requests() {
+        *app.seen.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
         let mut raw = Vec::new();
         if req.as_reader().read_to_end(&mut raw).is_err() {
             raw.clear();
@@ -708,6 +754,9 @@ fn serve_on(server: tiny_http::Server, app: App) {
             .expect("static header is valid");
         let resp = tiny_http::Response::from_string(text).with_status_code(status).with_header(header);
         let _ = req.respond(resp);
+        if app.quit.load(Ordering::SeqCst) {
+            return;
+        }
     }
 }
 
@@ -720,7 +769,35 @@ pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
     println!("JAGUAR serving http://127.0.0.1:{port}/  (prefs {}, Ctrl-C to stop)", prefs.display());
-    serve_on(server, app);
+    serve_on(&server, &app);
+    Ok(())
+}
+
+/// Desktop mode (`launch.rs`): serve `folder`'s canoe.toml on an already bound `server` until
+/// `POST /api/quit`, or until no request came for `idle` while no run is going.
+pub fn serve_desktop(
+    params_path: &Path,
+    prefs: PathBuf,
+    server: tiny_http::Server,
+    folder: PathBuf,
+    idle: Duration,
+) -> Result<()> {
+    let mut app = App::new(params_path, prefs)?;
+    app.desktop = Some(folder);
+    let server = Arc::new(server);
+    let (srv, seen, shared) = (Arc::clone(&server), Arc::clone(&app.seen), Arc::clone(&app.shared));
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(idle.min(Duration::from_secs(10)));
+            let quiet = seen.lock().unwrap_or_else(|e| e.into_inner()).elapsed() > idle;
+            let running = shared.lock().unwrap_or_else(|e| e.into_inner()).state == "running";
+            if quiet && !running {
+                srv.unblock();
+                return;
+            }
+        }
+    });
+    serve_on(&server, &app);
     Ok(())
 }
 
@@ -1193,11 +1270,47 @@ mod tests {
     }
 
     #[test]
+    fn desktop_endpoints_only_in_desktop_mode() {
+        let mut a = app();
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/session", "").2).unwrap();
+        assert_eq!((v["app"].as_str(), v["desktop"].as_bool()), (Some("jaguar"), Some(false)));
+        assert_eq!(a.handle("POST", "/api/quit", "").0, 403);
+        assert_eq!(a.handle("POST", "/api/open-folder", "").0, 403);
+        assert!(!a.quit.load(Ordering::SeqCst));
+        a.desktop = Some(tmpdir());
+        let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/session", "").2).unwrap();
+        assert_eq!(v["desktop"].as_bool(), Some(true));
+        assert!(v["folder"].is_string());
+        assert_eq!(a.handle("POST", "/api/quit", "").0, 200);
+        assert!(a.quit.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn desktop_server_is_found_and_quits_when_idle() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let canoe = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/canoe.toml")).to_path_buf();
+        let prefs = tmpdir().join("prefs.toml");
+        let t = std::thread::spawn(move || {
+            serve_desktop(&canoe, prefs, server, tmpdir(), Duration::from_millis(300)).unwrap()
+        });
+        // The launcher recognises it (and the probe itself counts as activity) ...
+        assert!(crate::launch::running_desktop(port));
+        // ... and with no page asking, it stops by itself.
+        let t0 = Instant::now();
+        while !t.is_finished() {
+            assert!(t0.elapsed() < Duration::from_secs(10), "desktop server did not quit when idle");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!crate::launch::running_desktop(port));
+    }
+
+    #[test]
     fn socket_smoke() {
         let a = app();
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let port = server.server_addr().to_ip().unwrap().port();
-        std::thread::spawn(move || serve_on(server, a));
+        std::thread::spawn(move || serve_on(&server, &a));
         let get = |path: &str| {
             let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
             write!(s, "GET {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n").unwrap();

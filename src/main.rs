@@ -5,11 +5,12 @@ use jaguar::{hull::Hull, optimize, params::Params, report, serve};
 use std::path::PathBuf;
 
 /// JAGUAR: find the lightest concrete canoe wall that survives the crew.
+/// With no command (a double-click): open the web UI on the canoe folder Documents/JAGUAR.
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -150,7 +151,14 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
-    match Cli::parse().cmd {
+    let Some(cmd) = Cli::parse().cmd else {
+        if let Err(e) = jaguar::launch::launch() {
+            jaguar::launch::alert(&format!("{e:#}"));
+            std::process::exit(1);
+        }
+        return Ok(());
+    };
+    match cmd {
         Cmd::Run { params, out } => {
             let p = Params::load(&params)?;
             let result = jaguar::run(&p, &|_| {})?;

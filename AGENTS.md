@@ -32,13 +32,16 @@ src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt
 src/report.rs       terminal summary, result.json, race summary + result.json reader for race
 src/export.rs       STEP / STL of the winner (CAD, mold shop)
+src/launch.rs       desktop app (`jaguar`, no command): Documents/JAGUAR starter folder, browser, dialogs
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step;
                     web/vendor/three.min.js r128 embedded, so it works offline)
-src/main.rs         CLI: run | check | mix | import-michlet | import-mesh | gen-hull | export | race | serve
+src/main.rs         CLI: (none = desktop app) | run | check | mix | import-michlet | import-mesh | gen-hull | export | race | serve
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
 tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race
+packaging/          what the release zips add: macOS Info.plist, read-me per platform
+                    (.github/workflows/release.yml builds JAGUAR-windows.zip, JAGUAR-mac.zip)
 examples/           runnable canoe.toml files, hulls, frozen lab data mix_tests.csv (docs/HULLS.md)
 data/               lab mix data (mix_tests.csv, cleaned from data/raw/)
 ```
@@ -60,6 +63,7 @@ make hooks     # once per clone: enables the pre-commit hook (runs make check)
 make check     # fmt + clippy -D warnings + tests. MUST pass before every commit.
 make run       # cargo run --release -- run examples/canoe.toml
 make serve     # web UI at http://127.0.0.1:8000
+git tag v0.2.0 && git push origin v0.2.0   # release: builds and publishes the Windows + Mac zips
 ```
 
 ## Rules

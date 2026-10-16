@@ -27,6 +27,7 @@ pub mod export;
 pub mod flotation;
 pub mod hull;
 pub mod hullgen;
+pub mod launch;
 pub mod meshimport;
 pub mod mix;
 pub mod optimize;

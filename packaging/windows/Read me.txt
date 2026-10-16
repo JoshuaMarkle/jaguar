@@ -1,0 +1,32 @@
+JAGUAR for Windows
+==================
+
+Finds the lightest concrete canoe wall (thickness, mix density, mold depth) that passes
+every check under the crew.
+
+START
+  1. Right-click the zip, choose "Extract All...", and open the extracted folder.
+  2. Double-click JAGUAR.exe. JAGUAR opens in your web browser.
+     The first time, Windows may say "Windows protected your PC" (the program is not
+     signed by a paid certificate). Click "More info", then "Run anyway".
+
+USE
+  * Edit the inputs on the left, press "Run optimization", read the result on the right.
+    Hover any label for help.
+  * Your files are in Documents\JAGUAR: canoe.toml (the settings), the hull, the lab data
+    (mix_tests.csv) and result.json. The "Open folder" button at the top opens it.
+    Put other hulls (jaguar-hull JSON) there to pick them in the form.
+  * Settings are saved as you type.
+
+STOP
+  Press "Quit" at the top right. If you just close the browser tab, JAGUAR stops by
+  itself after about 5 minutes. Double-click JAGUAR.exe again to come back.
+
+UPDATE
+  Download the new zip and replace JAGUAR.exe. Your Documents\JAGUAR folder is kept.
+
+TERMINAL (optional)
+  JAGUAR.exe also works from a terminal, e.g.  JAGUAR.exe run canoe.toml
+  JAGUAR.exe --help lists every command.
+
+Source and documentation: https://github.com/JoshuaMarkle/jaguar

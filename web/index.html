@@ -172,6 +172,10 @@
   #plotctl .muted { margin-left: var(--s1); }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
   /* Chart tabs, grouped: one segmented track per group (search, structure, hull, race). */
+  /* Desktop mode (double-clicked JAGUAR): shown once the server has stopped. */
+  #stopped { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: var(--canvas); text-align: center; }
+  #stopped.on { display: grid; }
+  #stopped b { display: block; font-size: 15px; font-weight: 650; margin-bottom: var(--s2); }
   #tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3) 0; }
   #tabs .tg { display: flex; align-items: center; }
   #tabs .seg button { flex: none; height: 22px; padding: 0 10px; }
@@ -189,7 +193,11 @@
     <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
   <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
   <button id="run" class="btn primary">Run optimization</button>
+  <span id="deskbtns" hidden><div class="sep"></div>
+    <button type="button" class="btn soft" id="openfolder">Open folder</button>
+    <button type="button" class="btn soft" id="quitapp" title="Stop JAGUAR. Settings are saved; double-click JAGUAR to start it again.">Quit</button></span>
 </header>
+<div id="stopped"><div><b>JAGUAR has stopped</b><span class="muted">Your settings and results are saved. Double-click JAGUAR to open it again, then close this tab.</span></div></div>
 <aside id="left">
   <div class="panehead"><b>Inputs</b><span class="hint">hover a label for help</span></div>
   <div class="seg" id="groups"></div>
@@ -2407,7 +2415,26 @@ $('run').onclick = async () => {
   loadMix();
   if (!polling) { polling = true; poll(); }
 };
+// Desktop mode (JAGUAR double-clicked, no terminal): folder and quit buttons, and a ping that
+// keeps the server alive while this page is open (it quits a few minutes after the last page).
+async function desktopMode() {
+  let s;
+  try { s = await (await fetch('/api/session')).json(); } catch (e) { return; }
+  if (!s.desktop) return;
+  const stopped = () => $('stopped').classList.add('on');
+  $('deskbtns').hidden = false;
+  $('deskbtns').style.display = 'contents';
+  $('openfolder').title = `Open the canoe folder: ${s.folder}\nYour canoe.toml, hulls, lab data (mix_tests.csv) and result.json live here.`;
+  $('openfolder').onclick = () => fetch('/api/open-folder', { method: 'POST' }).catch(stopped);
+  $('quitapp').onclick = async () => {
+    if ($('run').disabled && !confirm('A run is going. Quit and lose it?')) return;
+    try { await fetch('/api/quit', { method: 'POST' }); } catch (e) { /* already gone */ }
+    stopped();
+  };
+  setInterval(() => fetch('/api/session').then(r => { if (!r.ok) stopped(); }, stopped), 30000);
+}
 (async () => {
+  desktopMode();
   const p = await (await fetch('/api/params')).json();
   parseTomlBits(p.toml);
   buildForm();
