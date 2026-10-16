@@ -891,6 +891,11 @@ mod tests {
             )
             + "\n[flotation]\nair_pocket_max_in = 30.0\nswamp_factor = 1.2\n"
             + "\n[turning]\nspeed_mps = 2.0\nradius_in = 400.0\n";
+        // The file's [race] names load case 2M: a form without it is refused, saying why.
+        let renamed = text.replacen("name = \"2M\"", "name = \"2Mx\"", 1);
+        let (st, _, body) = a.handle("POST", "/api/prefs", &renamed);
+        assert_eq!(st, 400, "{body}");
+        assert!(body.contains("no load case named '2M'"), "{body}");
         let (st, _, body) = a.handle("POST", "/api/prefs", &text);
         assert_eq!(st, 200, "{body}");
         let p = &params_of(&a)["params"];

@@ -177,14 +177,24 @@ pub enum Side {
     Starboard,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// One race. The crew is `weights_lb` or `load_case` (exactly one in the canoe.toml): a
+/// `[[load_case]]`'s crew, so a structural load case and the races it paddles stay one input;
+/// light crews that never govern the structure give their own `weights_lb` instead of costing
+/// the search a load case. Serialized in that input form (`load_case` without its resolved
+/// weights), so a prefs file or a result's params read back the same way.
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RaceEvent {
     pub name: String,
     /// Name of a `[[race.course]]`.
     pub course: String,
-    /// Paddler weights, lb (one per paddler).
+    /// Paddler weights, lb (one per paddler). With `load_case` these are filled from that load
+    /// case by [`RaceParams::resolve_crews`]; empty only before that.
+    #[serde(default)]
     pub weights_lb: Vec<f64>,
+    /// Name of the `[[load_case]]` whose crew paddles this race.
+    #[serde(default)]
+    pub load_case: Option<String>,
     /// Share of the score this race carries (event weights sum to 1).
     pub weight: f64,
     /// Overrides `race.paddler_power_w` for this race (e.g. lower for the endurance race).
@@ -192,7 +202,49 @@ pub struct RaceEvent {
     pub paddler_power_w: Option<f64>,
 }
 
+impl Serialize for RaceEvent {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("RaceEvent", 5)?;
+        st.serialize_field("name", &self.name)?;
+        st.serialize_field("course", &self.course)?;
+        match &self.load_case {
+            Some(lc) => st.serialize_field("load_case", lc)?,
+            None => st.serialize_field("weights_lb", &self.weights_lb)?,
+        }
+        st.serialize_field("weight", &self.weight)?;
+        if let Some(p) = self.paddler_power_w {
+            st.serialize_field("paddler_power_w", &p)?;
+        }
+        st.end()
+    }
+}
+
 impl RaceParams {
+    /// Fill each `load_case` event's crew from that load case. Exactly one of `weights_lb` and
+    /// `load_case` per event; an unknown load case name is an error.
+    pub fn resolve_crews(&mut self, load_cases: &[LoadCase]) -> Result<()> {
+        for e in &mut self.events {
+            match (&e.load_case, e.weights_lb.is_empty()) {
+                (Some(_), false) => {
+                    bail!("race event '{}': give weights_lb or load_case, not both", e.name)
+                }
+                (None, true) => bail!("race event '{}': give weights_lb or load_case", e.name),
+                (Some(n), true) => match load_cases.iter().find(|c| &c.name == n) {
+                    Some(c) => e.weights_lb = c.weights_lb.clone(),
+                    None => bail!(
+                        "race event '{}': no load case named '{}' (load cases: {})",
+                        e.name,
+                        n,
+                        load_cases.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                },
+                (None, false) => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn validate(&self) -> Result<()> {
         let pos = |v: f64| v.is_finite() && v > 0.0;
         if !(pos(self.paddler_power_w)
@@ -817,6 +869,9 @@ impl Params {
             let sym = ss.symmetric || p.hull.doubly_symmetric;
             (ss.symmetric, p.hull.doubly_symmetric) = (sym, sym);
         }
+        if let Some(r) = &mut p.race {
+            r.resolve_crews(&p.load_cases)?;
+        }
         p.validate()?;
         Ok(p)
     }
@@ -1023,6 +1078,17 @@ impl Params {
         }
         if let Some(r) = &self.race {
             r.validate()?;
+            // A load_case event paddles exactly that load case's crew.
+            for e in &r.events {
+                if let Some(n) = &e.load_case
+                    && !self.load_cases.iter().any(|c| &c.name == n && c.weights_lb == e.weights_lb)
+                {
+                    bail!(
+                        "race event '{}': crew differs from load case '{n}' (or no such load case)",
+                        e.name
+                    );
+                }
+            }
         }
         if let Some(z) = &self.zones {
             let [lo, hi, st] = z.dense_pcf;
@@ -1147,6 +1213,47 @@ mod tests {
         assert_eq!((inv.orientation, inv.pad_in), (StandOrientation::Inverted, 4.0));
         assert!(parse("pad_in = 0.0\n").is_err());
         assert!(parse("width = 6.0\n").is_err());
+    }
+
+    /// A race event takes its crew from a load case or its own weights_lb, exactly one, and is
+    /// written back in that form (prefs and result params read back the same).
+    #[test]
+    fn race_event_crew_from_a_load_case() {
+        // Line endings normalized: a Windows checkout of the example has CRLF.
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap().replace("\r\n", "\n");
+        let p = Params::parse(&text, Path::new("examples")).unwrap();
+        let r = p.race.as_ref().unwrap();
+        let ev = r.events.iter().find(|e| e.load_case.as_deref() == Some("2M")).expect("an event names 2M");
+        let lc = p.load_cases.iter().find(|c| c.name == "2M").unwrap();
+        assert_eq!(ev.weights_lb, lc.weights_lb);
+        // Serialized in input form: load_case only, so it parses again.
+        let back = toml::to_string(&p).unwrap();
+        let ev_json = serde_json::to_value(ev).unwrap();
+        assert!(ev_json.get("weights_lb").is_none() && ev_json["load_case"] == "2M");
+        let p2 = Params::parse(&back, Path::new("")).unwrap();
+        assert_eq!(
+            p2.race.unwrap().events.iter().find(|e| e.name == ev.name).unwrap().weights_lb,
+            lc.weights_lb
+        );
+        // A load case change reaches its races.
+        // The first [175, 165] in the file is load case 2M (its races name it instead).
+        let heavier = text.replacen("weights_lb = [175.0, 165.0]", "weights_lb = [185.0, 165.0]", 1);
+        let p3 = Params::parse(&heavier, Path::new("examples")).unwrap();
+        let e3 = p3.race.unwrap().events.into_iter().find(|e| e.load_case.as_deref() == Some("2M")).unwrap();
+        assert_eq!(e3.weights_lb, [185.0, 165.0]);
+        // Both, neither, or an unknown name: errors.
+        let both = text.replacen("load_case = \"2M\"", "load_case = \"2M\"\nweights_lb = [175.0, 165.0]", 1);
+        assert!(Params::parse(&both, Path::new("examples")).unwrap_err().to_string().contains("not both"));
+        let neither = text.replacen("load_case = \"2M\"\n", "", 1);
+        assert!(
+            Params::parse(&neither, Path::new("examples"))
+                .unwrap_err()
+                .to_string()
+                .contains("give weights_lb or load_case")
+        );
+        let unknown = text.replacen("load_case = \"2M\"", "load_case = \"9X\"", 1);
+        let e = Params::parse(&unknown, Path::new("examples")).unwrap_err().to_string();
+        assert!(e.contains("no load case named '9X'") && e.contains("2M, 2F"), "{e}");
     }
 
     #[test]

@@ -363,6 +363,11 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
 each is kept on, finish line x = `finish_x_m`); `examples/canoe.toml` has the ASCE 2026 sprint
 200/400, slalom 200 and endurance 600 courses and the Symposium and Finals events, with the
 geometry the rules leave to the site marked as assumptions.
+* **Crew**: each event gives `load_case = "<name>"` (that `[[load_case]]`'s `weights_lb`, filled
+  in by `RaceParams::resolve_crews` when the params are read) or its own `weights_lb`, exactly one;
+  an unknown name is an error. A shared crew stays one input; light crews that never govern the
+  structure keep their own weights and cost the search no load case. Params serialize an event
+  in that input form; a result's race output names each event's `load_case`.
 * **Path**: standing start on x = 0 heading +x, a circular arc around each mark (buoy inside
   the circle, `buoy_clearance_m` in from the arc), common tangents between arcs, straight to the
   finish once heading at it. Free: start y, each arc's radius (>= `min_turn_radius_m`) and centre

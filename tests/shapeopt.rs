@@ -206,6 +206,8 @@ fn small_race() -> Params {
         .retain(|e| e.course == "sprint_200" && e.name.starts_with("Symposium") && e.weights_lb.len() == 2);
     for e in rp.events.iter_mut() {
         e.weight = 0.5;
+        // The crews move to params with other load cases: keep them as their resolved weights.
+        e.load_case = None;
     }
     p.race = Some(rp);
     p.objective.kind = jaguar::params::ObjectiveKind::Race;

@@ -640,6 +640,9 @@ pub struct EventResult {
     pub name: String,
     pub course: String,
     pub crew_lb: f64,
+    /// The `[[load_case]]` the crew came from (None: the event's own `weights_lb`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_case: Option<String>,
     pub paddlers: usize,
     pub paddler_power_w: f64,
     pub weight: f64,
@@ -721,6 +724,7 @@ pub fn run_event(top: &Hull, hull_lb: f64, rp: &RaceParams, e: &RaceEvent) -> Re
         name: e.name.clone(),
         course: e.course.clone(),
         crew_lb: e.weights_lb.iter().sum(),
+        load_case: e.load_case.clone(),
         paddlers: e.weights_lb.len(),
         paddler_power_w: power,
         weight: e.weight,
@@ -906,6 +910,7 @@ mod tests {
                 name: "2M".into(),
                 course: "sprint".into(),
                 weights_lb: vec![175.0, 165.0],
+                load_case: None,
                 weight: 1.0,
                 paddler_power_w: None,
             }],

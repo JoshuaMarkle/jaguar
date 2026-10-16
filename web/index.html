@@ -740,7 +740,7 @@ function raceToml(r) {
     out.push(`marks = [${c.marks.map(m => `{ x_m = ${fl(m.x_m)}, y_m = ${fl(m.y_m)}, keep = ${tstr(m.keep)} }`).join(', ')}]`);
   }
   for (const e of r.event) {
-    out.push('', '[[race.event]]', `name = ${tstr(e.name)}`, `course = ${tstr(e.course)}`, `weights_lb = [${e.weights_lb.map(fl).join(', ')}]`, `weight = ${fl(e.weight)}`);
+    out.push('', '[[race.event]]', `name = ${tstr(e.name)}`, `course = ${tstr(e.course)}`, e.load_case != null ? `load_case = ${tstr(e.load_case)}` : `weights_lb = [${e.weights_lb.map(fl).join(', ')}]`, `weight = ${fl(e.weight)}`);
     if (e.paddler_power_w != null) out.push(`paddler_power_w = ${fl(e.paddler_power_w)}`);
   }
   out.push('');
@@ -1650,7 +1650,7 @@ function plotRace(ctx, W, H) {
   row(`${raceRes.hull} at ${raceRes.hull_lb.toFixed(1)} lb: weighted time ${raceRes.weighted_time_s.toFixed(1)} s`, 652);
   // One row per event: name, then right-aligned columns (straight / turning as metres / seconds).
   const cols = [['time s', k => k.time_s.toFixed(1)], ['straight m / s', k => `${k.straight_m.toFixed(0)} / ${k.straight_s.toFixed(0)}`],
-    ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0)]];
+    ['turning m / s', k => `${k.turn_m.toFixed(0)} / ${k.turn_s.toFixed(0)}`], ['crew lb', k => k.crew_lb.toFixed(0) + (k.load_case ? ` (${k.load_case})` : '')]];
   const cw = 70, nameW = Math.max(110, W - x - 12 - cw * cols.length);
   const cells = (name, vals, w, col) => {
     ctx.font = font(11, w); ctx.fillStyle = col; ctx.textAlign = 'left';

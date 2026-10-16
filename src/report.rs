@@ -694,7 +694,15 @@ pub fn race_input(text: &str) -> Result<RaceInput> {
     hull.validate()?;
     let race = match &v["params"]["race"] {
         serde_json::Value::Null => None,
-        r => Some(serde_json::from_value(r.clone()).context("params.race")?),
+        r => {
+            let mut rp: crate::params::RaceParams =
+                serde_json::from_value(r.clone()).context("params.race")?;
+            // Events may name a load case: their crew comes from the result's own load cases.
+            let lcs: Vec<crate::params::LoadCase> =
+                serde_json::from_value(v["params"]["load_case"].clone()).context("params.load_case")?;
+            rp.resolve_crews(&lcs)?;
+            Some(rp)
+        }
     };
     Ok(RaceInput {
         hull,
@@ -729,16 +737,17 @@ pub fn race_lines(r: &crate::race::RaceResult) -> Vec<String> {
     let mut out = vec![
         format!("race: {} at {:.1} lb hull, weighted time {:.1} s", r.hull, r.hull_lb, r.weighted_time_s),
         format!(
-            "{:<34} {:>6} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7} {:>7}",
-            "event", "crew", "time s", "dist m", "straight", "turning", "turns", "S_str", "S_turn"
+            "{:<34} {:>6} {:<5} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7} {:>7}",
+            "event", "crew", "case", "time s", "dist m", "straight", "turning", "turns", "S_str", "S_turn"
         ),
     ];
     for e in &r.events {
         let turns = e.segments.iter().filter(|s| s.radius_m.is_some()).count();
         out.push(format!(
-            "{:<34} {:>6.0} {:>7.1} {:>7.1} {:>4.0}m/{:>3.0}s {:>4.0}m/{:>3.0}s {:>6} {:>7.3} {:>7.3}",
+            "{:<34} {:>6.0} {:<5} {:>7.1} {:>7.1} {:>4.0}m/{:>3.0}s {:>4.0}m/{:>3.0}s {:>6} {:>7.3} {:>7.3}",
             e.name,
             e.crew_lb,
+            e.load_case.as_deref().unwrap_or("-"),
             e.time_s,
             e.distance_m,
             e.straight_m,
