@@ -12,6 +12,12 @@ outer (shapeopt.rs): shape s inside the [shape_search] bounds   ~100-400 shapes
   score(s) = objective of the inner winner (+inf if nothing passes)
 ```
 
+The table has 41 even stations plus the first and last 4 intervals split in 4 (65 stations),
+so the table's straight lines between stations follow the curved ends. A full end (`wp` < 1, a
+round nose in Series 7) is eased to a pointed tip over its last ~13% (`hullgen::waterplane`:
+same value and slope as X^wp there, finite entry angle). Before 2026-10-18 the table ran one
+chord from the tip to the 5.4 in station, a corner in top view (37 -> 21 deg at wp 0.62).
+
 The outer loop only changes the hull it hands to the inner search, so all strength, freeboard and
 stability logic lives in one place.
 

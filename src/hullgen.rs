@@ -5,8 +5,10 @@
 //! `X = 4u(1-u)`, `u = 0.5 * (distance from end / zone length)`, goes from 0
 //! at the end to 1 where the zone meets the parallel midbody (X = 1).
 //! Half-breadth at depth fraction `zn = (draft - z)/draft` is
-//! `0.5 * beam * X^wp * (1 - zn^2 / X^(2 rocker))^section`, and zero below
-//! the keel line where `X^rocker < zn`.
+//! `0.5 * beam * W(X) * (1 - zn^2 / X^(2 rocker))^section`, and zero below
+//! the keel line where `X^rocker < zn`. W(X) = X^wp, except near the tips of a full end
+//! ([`waterplane`]: pointed, no corner). The table has extra stations near each tip
+//! ([`stations`]), so its straight lines between stations follow the curved ends.
 
 use crate::hull::{FORMAT, Hull, linspace};
 use anyhow::{Result, ensure};
@@ -22,7 +24,7 @@ pub struct ShapeParams {
     /// Design draft (top waterline of the table), in.
     pub draft_in: f64,
     /// Fore waterplane exponent (>= 0). Larger = finer, more hollow bow
-    /// waterlines; 0 = full width all the way to the stem (blunt).
+    /// waterlines; below 1 = fuller, still pointed at the stem ([`waterplane`]).
     pub fore_wp: f64,
     /// Section exponent (> 0). Small (~0.1) = boxy, near-vertical sides and
     /// a flat bottom; 0.5 = elliptic; 1 = parabolic V-ish sections.
@@ -114,6 +116,48 @@ fn station(p: &ShapeParams, xg: f64) -> (f64, f64, f64) {
     }
 }
 
+/// Taper factor X below which a full end (wp < 1) is eased to a point (about the last 13% of
+/// the taper zone; X = 4u(1 - u), u = 0.5 d / zone).
+const TIP_X: f64 = 0.25;
+
+/// Waterplane factor W(X) of a station: X^wp. For wp < 1, X^wp has a vertical tangent at the
+/// tip (a round, bulbous nose) that a table with stations 5.4 in apart turned into a straight
+/// wedge with a corner at its first station (37 -> 21 deg at wp 0.62). Below [`TIP_X`] it is
+/// instead the quadratic in X with the same value and slope there: 0 at the tip, a finite entry
+/// angle, no corner. wp >= 1 (straight or hollow ends) is unchanged.
+pub fn waterplane(xx: f64, wp: f64) -> f64 {
+    if wp >= 1.0 || xx >= TIP_X {
+        return xx.powf(wp);
+    }
+    let s = xx / TIP_X;
+    TIP_X.powf(wp) * s * ((2.0 - wp) + (wp - 1.0) * s)
+}
+
+/// Even intervals at each end split into [`TIP_SPLIT`] (the curved ends, about 20 in of a 216 in
+/// hull at 41 stations).
+const TIP_INTERVALS: usize = 4;
+const TIP_SPLIT: usize = 4;
+
+/// Table stations: `n` even over the length, plus the first and last [`TIP_INTERVALS`] intervals
+/// split in [`TIP_SPLIT`], so the table (linear between stations) follows the curved ends
+/// instead of one chord from the tip to the first even station.
+pub fn stations(l: f64, n: usize) -> Vec<f64> {
+    let mut x = linspace(0.0, l, n);
+    if n < 2 {
+        return x;
+    }
+    let h = l / (n - 1) as f64;
+    for i in 0..TIP_INTERVALS.min((n - 1) / 2) {
+        for k in 1..TIP_SPLIT {
+            let d = h * (i as f64 + k as f64 / TIP_SPLIT as f64);
+            x.extend([d, l - d]);
+        }
+    }
+    x.sort_by(f64::total_cmp);
+    x.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    x
+}
+
 /// Keel height above the lowest keel point at x, in (analytic: X^rocker = zn).
 pub fn keel_z(p: &ShapeParams, xg: f64) -> f64 {
     let (xx, _, pr) = station(p, xg);
@@ -126,7 +170,7 @@ pub fn metrics(p: &ShapeParams) -> ShapeMetrics {
     let (l, t) = (p.length_in, p.draft_in);
     let xe = END_FRAC * l;
     let (xx, pw, _) = station(p, xe);
-    let y = 0.5 * p.beam_in * xx.powf(pw);
+    let y = 0.5 * p.beam_in * waterplane(xx, pw);
     let n = 400;
     let dx = l / n as f64;
     let mut m = 0.0;
@@ -145,6 +189,7 @@ pub fn metrics(p: &ShapeParams) -> ShapeMetrics {
     }
 }
 
+/// The hull table: `n_stations` even stations plus the tip stations ([`stations`]).
 pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &str) -> Result<Hull> {
     let (l, b, t) = (p.length_in, p.beam_in, p.draft_in);
     ensure!(l > 0.0 && b > 0.0 && t > 0.0, "length, beam, draft must be > 0");
@@ -160,7 +205,7 @@ pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &
         ensure!(v.is_finite() && v >= 0.0, "{n} must be finite and >= 0, got {v}");
     }
     ensure!(p.section > 0.0, "section must be > 0");
-    let x = linspace(0.0, l, n_stations);
+    let x = stations(l, n_stations);
     let z = linspace(0.0, t, n_waterlines);
     let half_breadth = x
         .iter()
@@ -176,7 +221,7 @@ pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &
                         return 0.0;
                     }
                     let g = (1.0 - zn * zn / xx.powf(2.0 * pr)).max(0.0);
-                    0.5 * xx.powf(pw) * g.powf(p.section) * b
+                    0.5 * waterplane(xx, pw) * g.powf(p.section) * b
                 })
                 .collect()
         })
@@ -227,8 +272,7 @@ mod tests {
         let m = metrics(&s);
         // Keel rise from the table: lowest wetted waterline at the 5% station.
         let h = generate(&s, 241, 601, "t").unwrap();
-        let i = 12; // x = 0.05 L
-        assert!((h.x[i] - END_FRAC * s.length_in).abs() < 1e-9);
+        let i = h.x.iter().position(|&x| (x - END_FRAC * s.length_in).abs() < 1e-9).unwrap();
         let k = h.half_breadth[i].iter().position(|&v| v > 0.0).unwrap();
         assert!((h.z[k] - m.rocker_bow_in).abs() < 0.02, "{} vs {}", h.z[k], m.rocker_bow_in);
         let y = h.half_breadth[i][600];
@@ -248,13 +292,63 @@ mod tests {
     #[test]
     fn midbody_has_full_beam_and_ends_are_zero() {
         let h = generate(&shape(), 41, 21, "t").unwrap();
-        let mid = &h.half_breadth[20];
+        let mid = &h.half_breadth[h.x.iter().position(|&x| x == 120.0).unwrap()];
         let max = mid.iter().cloned().fold(0.0, f64::max);
         assert!((max - 12.0).abs() < 1e-12);
         assert!((mid[20] - 12.0).abs() < 1e-12);
         assert!(h.half_breadth[0].iter().all(|v| *v == 0.0));
-        assert!(h.half_breadth[40].iter().all(|v| *v == 0.0));
+        assert!(h.half_breadth.last().unwrap().iter().all(|v| *v == 0.0));
         h.validate().unwrap();
+    }
+
+    #[test]
+    fn tip_stations_split_the_end_intervals() {
+        let x = stations(240.0, 41);
+        assert_eq!(x.len(), 41 + 2 * TIP_INTERVALS * (TIP_SPLIT - 1));
+        assert_eq!((x[0], x[1], *x.last().unwrap()), (0.0, 1.5, 240.0));
+        assert!(linspace(0.0, 240.0, 41).iter().all(|e| x.contains(e)), "even stations kept");
+        assert!(x.windows(2).all(|w| w[1] > w[0]));
+        assert_eq!(stations(240.0, 3).len(), 3 + 2 * (TIP_SPLIT - 1));
+    }
+
+    #[test]
+    fn full_ends_are_pointed_without_a_corner() {
+        // wp < 1: X^wp is vertical at the tip (round nose); W is 0 there with a finite slope,
+        // and value and slope match X^wp at TIP_X. wp >= 1 is untouched.
+        for wp in [0.0, 0.1, 0.3, 0.62, 0.95] {
+            assert_eq!(waterplane(0.0, wp), 0.0);
+            let tip = waterplane(1e-6, wp) / 1e-6;
+            assert!(tip.is_finite() && tip > 0.0 && tip <= (2.0 - wp) * TIP_X.powf(wp - 1.0) + 1e-9);
+            let d = 1e-7;
+            let (lo, hi) = (TIP_X - d, TIP_X + d);
+            assert!((waterplane(lo, wp) - TIP_X.powf(wp)).abs() < 1e-6);
+            let (sl, sr) = (
+                (waterplane(TIP_X, wp) - waterplane(lo, wp)) / d,
+                (waterplane(hi, wp) - waterplane(TIP_X, wp)) / d,
+            );
+            assert!((sl - sr).abs() < 1e-4, "wp {wp}: slope {sl} vs {sr} at TIP_X");
+            let mut prev = 0.0;
+            for k in 1..=100 {
+                let w = waterplane(TIP_X * k as f64 / 100.0, wp);
+                assert!(w > prev, "monotone");
+                prev = w;
+            }
+        }
+        for wp in [1.0, 1.6] {
+            assert_eq!(waterplane(0.1, wp), 0.1f64.powf(wp));
+        }
+        // The generated table: at wp 0.62 the bow waterline turns smoothly (no 16 deg corner).
+        let s = ShapeParams { length_in: 216.0, beam_in: 30.0, fore_wp: 0.62, aft_wp: 0.62, ..shape() };
+        let h = generate(&s, 41, 21, "t").unwrap();
+        let top = h.z.len() - 1;
+        let ang: Vec<f64> =
+            h.x.windows(2)
+                .zip(h.half_breadth.windows(2))
+                .take(20)
+                .map(|(x, y)| ((y[1][top] - y[0][top]) / (x[1] - x[0])).atan().to_degrees())
+                .collect();
+        let worst = ang.windows(2).map(|a| (a[1] - a[0]).abs()).fold(0.0, f64::max);
+        assert!(worst < 3.0, "waterline corner {worst} deg: {ang:?}");
     }
 
     #[test]

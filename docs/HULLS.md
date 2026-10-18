@@ -9,8 +9,8 @@
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 10 | 103.5 | 10.3 | punching 0.90 |
 | barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 125.7 | 55.5 | punching 0.90 |
 | shape_opt.toml | shape search pick (entry 8.3 deg, rocker 3.8/3.4 in) | 216 x 23.6 (18 ft) | 0.375 | 58 | 12 | **82.5** | 1.74 | punching 0.90 |
-| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 430 in, waterline ends fore_wp 1.47 / aft_wp 1.60; 23.4 in at the waterline) | 228 x 26.0 overall (19 ft) | 0.375 | 58 | 11 | 89.1 | 2.64 | punching 0.90 |
-| shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 99.8 | 1.08 | punching 0.90 |
+| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 430 in, waterline ends fore_wp 1.47 / aft_wp 1.60; 23.4 in at the waterline) | 228 x 26.0 overall (19 ft) | 0.375 | 58 | 11 | 89.1 | 2.65 | punching 0.90 |
+| shape_race.toml | shape search, race-time objective (full ends, fore_wp 0.75 / aft_wp 0.89: pointed tips since 2026-10-18, was 99.8 lb, GM 1.08) | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 100.0 | 0.91 | punching 0.90 |
 
 All verified at 321 stations, on the smooth-keel loft (docs/SPEC.md Physics 1; until 2026-10-15
 the table was blended at fixed heights, which put phantom hull under the rockered keel between
