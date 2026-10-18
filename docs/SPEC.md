@@ -128,10 +128,12 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    for a whole interval and then stepped, up to 0.4 in on off1.) Topsides above `draft_design` are
    extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`,
    eased in near the tips so the stem stays a sharp line up to the gunwale: with F = (D - draft)
-   tan(flare) and u = waterline half-breadth / F, the gunwale offset is F (u - u^2/4) up to u = 2,
-   then F (at most the waterline half-breadth, smooth in top view; `hull::flared`). Until
-   2026-10-18 a tip with a sliver of waterline got the full flare: a flat face 2F wide above the
-   water, 0.74 in at 3 deg over 7 in. Unchanged wherever the waterline half-breadth is >= 2F.
+   tan(flare), w = max(4 in, 2F) and v = waterline half-breadth / w, the gunwale offset is
+   F v (2 - v) up to v = 1, then F (`hull::flared`): smooth in top view, leaving the tip at
+   (1 + 2F/w) times the waterline's slope (team winner, 3 deg: gunwale 19.6 -> 16.8 deg over the
+   first 15 in), with less side lean there. Until 2026-10-18 a tip with a sliver of waterline got
+   the full flare: a flat face 2F wide above the water, 0.74 in at 3 deg over 7 in. Unchanged
+   wherever the waterline half-breadth is >= w.
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`
    = [min, max] searched as a shape variable): in top view the gunwale runs straight from the bow
    tip, tangent onto one arc of radius R, then straight to the stern tip (`hull::Gunwale`); each

@@ -1311,7 +1311,7 @@ function loftOf(h) {
 // Port of hull.rs flared: the flare eased in near the tips (sheer <= 2x waterline, no corner).
 function flaredHb(top, dz, rise, flare) {
   const f = rise * flare; if (f <= 0) return top;
-  const u = top / f; return top + dz * flare * (u >= 2 ? 1 : u - 0.25 * u * u);
+  const v = top / Math.max(4, 2 * f); return top + dz * flare * (v >= 1 ? 1 : v * (2 - v)); // 4 = FLARE_EASE_IN
 }
 function hbAt(h, x, z, flare, gw, depth) {
   const L = loftOf(h), dd = h.draft_design;

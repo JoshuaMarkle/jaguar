@@ -639,18 +639,24 @@ impl Grid {
 /// Flared topside half-breadth `dz` above the table top, whose half-breadth is `top`, on a
 /// topside `rise` tall: leaning out by `flare` (tan), eased in near the tips so a tip with a
 /// sliver of waterline stays a sharp stem instead of a flat face as wide as the flare (0.74 in at
-/// 3 deg over 7 in). With F = rise * flare (the full gunwale offset) and u = top / F, the offset is
-/// F s(u), s = u - u^2/4 up to u = 2, then 1: at most `top` (sheer <= 2x waterline), and C1 in
-/// `top`, so the gunwale has no corner where the full flare takes over. Unchanged wherever
-/// top >= 2 F; 0 at a closed tip.
+/// 3 deg over 7 in). With F = rise * flare (the full gunwale offset), w = max([`FLARE_EASE_IN`],
+/// 2 F) and v = top / w, the offset is F v (2 - v) up to v = 1, then F: C1 in `top`, at most `top`,
+/// and the gunwale leaves the tip at (1 + 2 F / w) times the waterline's slope, so in top view it
+/// turns only a few degrees (team winner, 3 deg: 19.6 -> 16.8 deg over the first 15 in; easing
+/// over 2 F instead turned 31 -> 16.8 deg in 2.7 in, a visible hook). Unchanged wherever
+/// top >= w; 0 at a closed tip.
 fn flared(top: f64, dz: f64, rise: f64, flare: f64) -> f64 {
     let f = rise * flare;
     if f <= 0.0 {
         return top;
     }
-    let u = top / f;
-    top + dz * flare * if u >= 2.0 { 1.0 } else { u - 0.25 * u * u }
+    let v = top / FLARE_EASE_IN.max(2.0 * f);
+    top + dz * flare * if v >= 1.0 { 1.0 } else { v * (2.0 - v) }
 }
+
+/// Waterline half-breadth, in, below which the flare eases in toward the tips ([`flared`]).
+/// Larger = straighter gunwale near the tips, less side lean there.
+const FLARE_EASE_IN: f64 = 4.0;
 
 pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
     if n == 1 {
@@ -981,7 +987,7 @@ mod tests {
         for (i, x) in xs.iter().enumerate() {
             let (wl, sheer) = (g.y(i, nw - 1), g.y(i, g.nz() - 1));
             assert!(sheer <= 2.0 * wl + 1e-12, "x {x}: sheer {sheer} vs waterline {wl}");
-            if wl >= 2.0 * full {
+            if wl >= FLARE_EASE_IN.max(2.0 * full) {
                 assert!((sheer - wl - full).abs() < 1e-9, "full flare where the waterline is wide");
             }
         }
@@ -991,19 +997,27 @@ mod tests {
     #[test]
     fn flare_eases_in_without_a_corner() {
         // The gunwale offset is C1 in the waterline half-breadth: no kink in top view where the
-        // full flare takes over (a hard cap min(top, F) turned 31 -> 17 deg there).
+        // full flare takes over (a hard cap min(top, F) turned 31 -> 17 deg there), and it
+        // leaves the tip close to the waterline's angle (no hook at the tip).
         let (rise, flare) = (7.0, 3f64.to_radians().tan());
         let f = rise * flare;
         let sheer = |top: f64| flared(top, rise, rise, flare);
         let slope = |top: f64| (sheer(top + 1e-7) - sheer(top - 1e-7)) / 2e-7;
         assert_eq!(sheer(0.0), 0.0);
-        assert!((slope(1e-6) - 2.0).abs() < 1e-3, "sheer leaves the tip at 2x the waterline");
+        let tip = 1.0 + 2.0 * f / FLARE_EASE_IN;
+        assert!(
+            tip < 1.2 && (slope(1e-6) - tip).abs() < 1e-3,
+            "sheer leaves the tip near the waterline's angle"
+        );
         for k in 1..400 {
-            let top = 2.5 * f * k as f64 / 400.0;
+            let top = 1.2 * FLARE_EASE_IN * k as f64 / 400.0;
             assert!(sheer(top) <= 2.0 * top + 1e-12);
             assert!((slope(top) - slope(top + 1e-5)).abs() < 1e-3, "corner at top = {top}");
         }
-        assert_eq!(sheer(2.0 * f), 2.0 * f + f);
+        assert_eq!(sheer(FLARE_EASE_IN), FLARE_EASE_IN + f);
+        // A big flare eases over 2 F: still C1 and never wider than 2x the waterline.
+        let big = |top: f64| flared(top, 7.0, 7.0, 1.0);
+        assert!(big(3.0) <= 6.0 && (big(14.0) - 21.0).abs() < 1e-12);
         assert_eq!(flared(1.0, 7.0, 7.0, 0.0), 1.0, "no flare: unchanged");
     }
 
