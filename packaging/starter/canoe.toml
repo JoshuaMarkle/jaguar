@@ -65,13 +65,27 @@ speed_mps = 3.0
 straight_weight = 1.0
 turn_radius_in = 600.0
 
+# One condition per load case the races use, at the share of the score its races carry
+# (Symposium and Finals 50% each: 4 Symposium races x 12.5%, 5 Finals races x 10%).
 [[objective.displacements]]
-crew_lb = 350.0
-weight = 0.75
+load_case = "2M, 2F"
+weight = 0.325
 
 [[objective.displacements]]
-crew_lb = 700.0
-weight = 0.25
+load_case = "2M"
+weight = 0.225
+
+[[objective.displacements]]
+load_case = "2F"
+weight = 0.225
+
+[[objective.displacements]]
+load_case = "1M, 1F"
+weight = 0.125
+
+[[objective.displacements]]
+load_case = "2M, 1F"
+weight = 0.1
 
 [punching]
 method = "aci_22_6"

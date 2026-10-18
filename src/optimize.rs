@@ -251,6 +251,8 @@ pub struct Calc {
     pub wall_volume_in3: f64,
     /// Service equilibrium: real crew weight (freeboard, GM, drag).
     pub service: CalcFloat,
+    /// Freeboard at the nominal seats and at the best and worst seat sample (the gate is worst).
+    pub freeboard: FreeboardRange,
     /// Equilibrium the stress checks use (factored for lrfd).
     pub strength: CalcFloat,
     pub split_slope_psi_per_pcf: f64,
@@ -563,6 +565,7 @@ fn calc(
             .map(|i| 0.5 * (sec.area[i] + sec.area[i - 1]) * (grid.x[i] - grid.x[i - 1]))
             .sum(),
         service: float(&e.service, 1.0 / mat.dynamic_load_factor),
+        freeboard: env.freeboard.clone(),
         strength: float(loads, live),
         split_slope_psi_per_pcf: fit.split_slope_psi_per_pcf,
         split_intercept_psi: fit.split_intercept_psi,
@@ -658,6 +661,9 @@ pub struct CaseDiagrams {
     pub trim_in: Option<f64>,
     pub gm_in: Option<f64>,
     pub freeboard_in: Option<f64>,
+    /// Freeboard at the nominal seats (expected), the best and the worst seat sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freeboard: Option<FreeboardRange>,
     /// x, V, M, tension, waterline etc. (same shape as `Winner.diagrams`).
     #[serde(flatten)]
     pub diagrams: Diagrams,
@@ -1787,19 +1793,45 @@ fn finish_winner(
     };
     let verify_dc = v.verdict.as_ref().map_or(f64::MAX, |v| v.dc);
     let conv = convergence(params, wall_fit, hull, c, seats, zoned);
-    let verified = v.verdict.is_some()
+    let dc_ok = v.verdict.is_some()
         && match conv.extrapolated {
             Some(x) => x.max(conv.dc[2]) <= params.gates.dc_verify,
             None => verify_dc <= params.gates.dc_verify,
         };
-    let verify_failure = (!verified).then(|| match (v.verdict.is_some(), conv.extrapolated) {
-        (false, _) => "no verdict at the verification stations".to_string(),
-        (true, Some(x)) => {
-            format!("D/C at finer stations {:.4} > dc_verify {}", x.max(conv.dc[2]), params.gates.dc_verify)
+    // The floating gates (freeboard, loaded GM) are re-checked at the finer stations too: a
+    // design the search passed by a hair can miss them there.
+    let fb = v.verdict.as_ref().map(|v| v.freeboard_in);
+    let fb_ok = fb.is_some_and(|f| f >= params.gates.freeboard_min_in);
+    let gm_ok = v.gm_in.is_some_and(|g| g >= params.stability.gm_min_in);
+    let verified = dc_ok && fb_ok && gm_ok;
+    let verify_failure = (!verified).then(|| {
+        let mut why = Vec::new();
+        match (v.verdict.is_some(), conv.extrapolated) {
+            (false, _) => why.push("no verdict at the verification stations".to_string()),
+            (true, _) if dc_ok => {}
+            (true, Some(x)) => why.push(format!(
+                "D/C at finer stations {:.4} > dc_verify {}",
+                x.max(conv.dc[2]),
+                params.gates.dc_verify
+            )),
+            (true, None) => why.push(format!(
+                "D/C at {stations} stations {verify_dc:.4} > dc_verify {}",
+                params.gates.dc_verify
+            )),
         }
-        (true, None) => {
-            format!("D/C at {stations} stations {verify_dc:.4} > dc_verify {}", params.gates.dc_verify)
+        if let Some(f) = fb.filter(|_| !fb_ok) {
+            why.push(format!(
+                "freeboard at {stations} stations {f:.4} in < {} in (worst seat sample)",
+                params.gates.freeboard_min_in
+            ));
         }
+        if let Some(g) = v.gm_in.filter(|_| v.verdict.is_some() && !gm_ok) {
+            why.push(format!(
+                "loaded GM at {stations} stations {g:.4} in < {} in",
+                params.stability.gm_min_in
+            ));
+        }
+        why.join("; ")
     });
     let search_space = search_space(params, fit, c)?;
     let walls = &search_space[..3];
@@ -1956,7 +1988,7 @@ fn curves_on(params: &Params, hull: &Hull, w: &mut Winner) {
     for d in params.objective.displacements.iter().flatten() {
         out.objective_drag.push(crate::curves::drag_case(
             &table,
-            &format!("{:.0} lb crew", d.crew_lb),
+            &d.label(),
             d.crew_lb,
             c.hull_weight_lb + d.crew_lb,
             speed,
@@ -2416,6 +2448,42 @@ pub struct CaseEnvelope {
     pub gm_in: f64,
     /// Seats of the sample `verdict` comes from.
     pub verdict_seats_in: Vec<f64>,
+    /// Freeboard at the nominal seats and the best / worst sample (`verdict.freeboard_in` = worst).
+    pub freeboard: FreeboardRange,
+}
+
+/// The service float at one seat sample, as far as freeboard goes.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FreeboardAt {
+    /// Knee x per paddler (`weights_lb` order), in.
+    pub seats_in: Vec<f64>,
+    pub draft_in: f64,
+    pub trim_in: f64,
+    /// Highest local waterline above the keel, in (freeboard = depth - this).
+    pub waterline_max_in: f64,
+    pub freeboard_in: f64,
+}
+
+impl FreeboardAt {
+    fn of(grid: &Grid, seats: &[f64], l: &Loads) -> Self {
+        let fb = freeboard(grid, l);
+        FreeboardAt {
+            seats_in: seats.to_vec(),
+            draft_in: l.draft_in,
+            trim_in: l.trim_in,
+            waterline_max_in: grid.depth - fb,
+            freeboard_in: fb,
+        }
+    }
+}
+
+/// Freeboard of a load case over its seat samples: at the nominal seats (what the crew is
+/// expected to sit at), and the most and least of every sample (each knee +/- `seats.variance_in`).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FreeboardRange {
+    pub expected: FreeboardAt,
+    pub best: FreeboardAt,
+    pub worst: FreeboardAt,
 }
 
 /// Fails a gate (search D/C, freeboard, GM)?
@@ -2457,17 +2525,26 @@ pub fn eval_envelope_wall(
     let mut all = seats::samples(seats, params.seats.variance_in, grid).into_iter();
     let first = all.next().unwrap_or_default();
     let nominal = eval_case_wall(params, fit, grid, sec, wall, case, &first)?;
+    let at = FreeboardAt::of(grid, &first, &nominal.service);
     let mut env = CaseEnvelope {
         verdict: nominal.verdict.clone(),
         gm_in: nominal.service.gm_in,
         verdict_seats_in: first,
         nominal,
+        freeboard: FreeboardRange { expected: at.clone(), best: at.clone(), worst: at },
     };
     for s in all {
         if early_exit && misses_gate(params, &env.verdict, env.gm_in) {
             break;
         }
         let e = eval_case_wall(params, fit, grid, sec, wall, case, &s)?;
+        let at = FreeboardAt::of(grid, &s, &e.service);
+        if at.freeboard_in > env.freeboard.best.freeboard_in {
+            env.freeboard.best = at.clone();
+        }
+        if at.freeboard_in < env.freeboard.worst.freeboard_in {
+            env.freeboard.worst = at;
+        }
         let fb = env.verdict.freeboard_in.min(e.verdict.freeboard_in);
         env.gm_in = env.gm_in.min(e.service.gm_in);
         if e.verdict.dc.is_nan() || e.verdict.dc > env.verdict.dc {
@@ -2534,6 +2611,7 @@ pub fn case_diagrams_wall(
         trim_in: Some(service.trim_in),
         gm_in: Some(env.gm_in),
         freeboard_in: Some(verdict.freeboard_in),
+        freeboard: Some(env.freeboard),
         compression_allow_psi: Some(fc_cap),
         shear_allow_psi: Some(v_cap),
         ..Default::default()

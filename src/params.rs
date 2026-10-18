@@ -748,13 +748,73 @@ fn turn_radius() -> f64 {
     600.0
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+/// One race condition of the drag objective. The crew is `crew_lb` or `load_case` (exactly one
+/// in the canoe.toml), like a race event's. Serialized in that input form.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Displacement {
-    /// Crew (plus gear) weight for this race condition, lb.
+    /// Crew (plus gear) weight for this race condition, lb. With `load_case` filled from that
+    /// load case by [`Params::parse`]; NaN only before that (parse fails if it stays unset).
+    #[serde(default = "unset_crew")]
     pub crew_lb: f64,
+    /// Name of the `[[load_case]]` whose crew this condition carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load_case: Option<String>,
     /// Share of the race distance raced at this displacement (0..1).
     pub weight: f64,
+}
+
+fn unset_crew() -> f64 {
+    f64::NAN
+}
+
+impl Displacement {
+    /// A condition with its own crew weight (no load case).
+    pub fn crew(crew_lb: f64, weight: f64) -> Self {
+        Displacement { crew_lb, load_case: None, weight }
+    }
+
+    /// "2M, 2F (660 lb)" or "350 lb crew".
+    pub fn label(&self) -> String {
+        match &self.load_case {
+            Some(n) => format!("{n} ({:.0} lb)", self.crew_lb),
+            None => format!("{:.0} lb crew", self.crew_lb),
+        }
+    }
+}
+
+impl Serialize for Displacement {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Displacement", 2)?;
+        match &self.load_case {
+            Some(lc) => st.serialize_field("load_case", lc)?,
+            None => st.serialize_field("crew_lb", &self.crew_lb)?,
+        }
+        st.serialize_field("weight", &self.weight)?;
+        st.end()
+    }
+}
+
+/// Fill each `load_case` displacement's crew from that load case (exactly one of `crew_lb` and
+/// `load_case` each; an unknown load case name is an error).
+fn resolve_displacements(ds: &mut [Displacement], load_cases: &[LoadCase]) -> Result<()> {
+    for d in ds {
+        match (&d.load_case, d.crew_lb.is_nan()) {
+            (Some(n), false) => bail!("objective.displacements '{n}': give crew_lb or load_case, not both"),
+            (None, true) => bail!("objective.displacements: give crew_lb or load_case in every entry"),
+            (Some(n), true) => match load_cases.iter().find(|c| &c.name == n) {
+                Some(c) => d.crew_lb = c.weights_lb.iter().sum(),
+                None => bail!(
+                    "objective.displacements: no load case named '{}' (load cases: {})",
+                    n,
+                    load_cases.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+            },
+            (None, false) => {}
+        }
+    }
+    Ok(())
 }
 
 /// Bounds for hull-shape optimization. Every field is `[min, max]`; set
@@ -885,6 +945,9 @@ impl Params {
         if let Some(ss) = &mut p.shape_search {
             let sym = ss.symmetric || p.hull.doubly_symmetric;
             (ss.symmetric, p.hull.doubly_symmetric) = (sym, sym);
+        }
+        if let Some(ds) = &mut p.objective.displacements {
+            resolve_displacements(ds, &p.load_cases)?;
         }
         if let Some(r) = &mut p.race {
             r.resolve_crews(&p.load_cases)?;
@@ -1071,6 +1134,17 @@ impl Params {
                 if !(d.crew_lb.is_finite() && d.crew_lb >= 0.0 && d.weight.is_finite() && d.weight >= 0.0) {
                     bail!("objective.displacements: need crew_lb >= 0 and weight >= 0");
                 }
+                // A load_case condition carries exactly that load case's crew.
+                if let Some(n) = &d.load_case
+                    && !self
+                        .load_cases
+                        .iter()
+                        .any(|c| &c.name == n && c.weights_lb.iter().sum::<f64>() == d.crew_lb)
+                {
+                    bail!(
+                        "objective.displacements: crew differs from load case '{n}' (or no such load case)"
+                    );
+                }
             }
             let sum: f64 = ds.iter().map(|d| d.weight).sum();
             if (sum - 1.0).abs() > 1e-6 {
@@ -1215,6 +1289,35 @@ mod tests {
     }
 
     #[test]
+    fn displacement_crew_from_a_load_case() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let line = "# displacements = [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]";
+        assert!(text.contains(line));
+        let with = |d: &str| text.replacen(line, &format!("displacements = [{d}]"), 1);
+        let p = Params::parse(
+            &with(r#"{ load_case = "2M", weight = 0.75 }, { crew_lb = 700, weight = 0.25 }"#),
+            Path::new("examples"),
+        )
+        .unwrap();
+        let ds = p.objective.displacements.as_ref().unwrap();
+        assert_eq!((ds[0].crew_lb, ds[0].load_case.as_deref()), (340.0, Some("2M")));
+        assert_eq!((ds[1].crew_lb, ds[1].load_case.as_deref()), (700.0, None));
+        assert_eq!(ds[0].label(), "2M (340 lb)");
+        // Serialized in input form (load_case only), so it parses again.
+        let back = toml::to_string(&p).unwrap();
+        let p2 = Params::parse(&back, Path::new("")).unwrap();
+        assert_eq!(p2.objective.displacements, p.objective.displacements);
+        let err = |d: &str| Params::parse(&with(d), Path::new("examples")).unwrap_err().to_string();
+        assert!(err(r#"{ load_case = "2M", crew_lb = 340, weight = 1.0 }"#).contains("not both"));
+        assert!(err(r#"{ weight = 1.0 }"#).contains("give crew_lb or load_case"));
+        assert!(err(r#"{ load_case = "9X", weight = 1.0 }"#).contains("no load case named '9X'"));
+        // A hand-edited Params whose crew drifted from its load case fails validation.
+        let mut q = p.clone();
+        q.objective.displacements.as_mut().unwrap()[0].crew_lb = 300.0;
+        assert!(q.validate().unwrap_err().to_string().contains("crew differs from load case '2M'"));
+    }
+
+    #[test]
     fn race_objective_needs_race_and_shape_search() {
         let text = std::fs::read_to_string("examples/canoe.toml")
             .unwrap()
@@ -1326,7 +1429,7 @@ mod tests {
     fn displacement_weights_must_sum_to_one() {
         let mut p = Params::load(Path::new("examples/shape_opt.toml")).unwrap();
         p.objective.kind = ObjectiveKind::Drag;
-        let d = |c, w| Displacement { crew_lb: c, weight: w };
+        let d = Displacement::crew;
         p.objective.displacements = Some(vec![d(350.0, 0.675), d(525.0, 0.10), d(700.0, 0.225)]);
         p.validate().unwrap();
         p.objective.displacements = Some(vec![d(350.0, 0.75), d(700.0, 0.20)]);

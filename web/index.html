@@ -349,7 +349,17 @@ const ROCKER_T = 'Allowed keel rise, min and max, at 5% of the length from the b
 const SYM_T = 'Doubly symmetric canoe, for manufacturability (one end mold makes both ends): bow and stern identical as well as port and starboard. A hull file is made symmetric by averaging each station with its mirror; with shape search the stern factors follow the bow ones (their bounds are ignored). Templates, stem radius, flare, gunwale and export all keep it.';
 // objective.displacements presets: [crew_lb, share of race distance].
 const DISP_PRESETS = { regionals: [[350, 0.75], [700, 0.25]], nationals: [[350, 0.60], [525, 0.20], [700, 0.20]], total: [[350, 0.675], [525, 0.10], [700, 0.225]] };
-const DISP_T = 'Drag objective only. None = drag of the heaviest load case at its loaded draft. Otherwise the drag is the weighted sum over race conditions, each floating level at hull weight + crew. Regionals 350/700 lb at 75/25%, Nationals 350/525/700 at 60/20/20%, Total 350/525/700 at 67.5/10/22.5%. Shares must sum to 1.';
+const DISP_T = 'Drag objective (and the report\u2019s weighted drag). None = drag of the heaviest load case at its loaded draft. Otherwise the drag is the weighted sum over race conditions, each floating level at hull weight + crew. Each condition is a load case (its crew, kept in sync, like the race events) or a custom crew weight. Races = one condition per load case the race events use, at the share of the score its races carry. Regionals 350/700 lb at 75/25%, Nationals 350/525/700 at 60/20/20%, Total 350/525/700 at 67.5/10/22.5%. Shares must sum to 1.';
+const FB_T = 'Gunwale above the water at the lowest point, for the load case that sits lowest. Trim, and so freeboard, depends on where the crew kneels: expected = at the planned seats; best and worst = over every seat sample (each knee moved by the seat variance). The gate uses the worst.';
+// Freeboard of the lowest case: expected / best / worst seat sample (gate = worst).
+function fbCase(win) { return (win.cases || []).filter(k => k.freeboard).reduce((a, k) => !a || k.freeboard.worst.freeboard_in < a.freeboard.worst.freeboard_in ? k : a, null); }
+function fbWorst(win, v) { const k = fbCase(win); return k ? k.freeboard.worst.freeboard_in : v.freeboard_in; }
+function fbTxt(win, v, f) {
+  const k = fbCase(win), gate = `gate &ge; ${f(fbGate, 2)}`;
+  if (!k) return `${f(v.freeboard_in, 2)} in <span class="muted">${gate}</span>`;
+  const F = k.freeboard;
+  return `${f(F.worst.freeboard_in, 2)} in <span class="muted">worst seats, ${gate}; expected ${f(F.expected.freeboard_in, 2)}, best ${f(F.best.freeboard_in, 2)} (${esc(k.name)})</span>`;
+}
 let dispMode = 'none';
 const PUNCH = [
   ['knee_split', 'Knee split', '-', 'With 2 knees: share of the paddler\'s weight on the heavier knee. 0.5 = even, 1 = all on one.', 'any', 0.5],
@@ -496,7 +506,7 @@ function buildForm() {
       row('', 'Optimize for', ot, '<span class="hint">chosen in the top bar, next to Run</span>')
       + FIELDS.objective.map(f => numRow('objective', f)).join('')
       + row('', 'Race displacements', DISP_T, '<span class="hint" id="dispnote"></span>')
-      + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${['none', 'regionals', 'nationals', 'total', 'custom'].map(m => `<button type="button" data-disp="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}</div>`
+      + `<div class="seg" id="dispseg" title="${esc(DISP_T)}">${[['none', 'None'], ['races', 'Races'], ['regionals', 'Regionals'], ['nationals', 'Nationals'], ['total', 'Total'], ['custom', 'Custom']].map(([m, t]) => `<button type="button" data-disp="${m}">${t}</button>`).join('')}</div>`
       + '<div id="disps" style="display:grid;gap:var(--s1)"></div>'
       + `<div id="dispadd">${row('', '', 'Add another race condition.', '<button type="button" class="btn soft" id="dispaddbtn">Add condition</button>')}</div>`)
     + section('race', '<div id="raceevs" style="display:grid;gap:var(--s1)"></div>');
@@ -509,7 +519,7 @@ function buildForm() {
   $('zones.on').onchange = setZones;
   $('material.method').onchange = setMethod;
   for (const b of $('dispseg').children) b.onclick = () => setDispMode(b.dataset.disp);
-  $('dispaddbtn').onclick = () => { dispRow('', ''); dispMode = 'custom'; dispRefresh(); };
+  $('dispaddbtn').onclick = () => { dispRow({ crew_lb: '' }, ''); dispMode = 'custom'; dispRefresh(); };
   for (const k of ['length_in', 'beam_in', 'draft_in']) for (const n of [0, 1]) $(`shape.${k}.${n}`).oninput = shapeHints;
   // Sections into the input groups (one shown at a time; the mix data sits in Material).
   for (const [g, , ids] of GROUPS) {
@@ -555,20 +565,44 @@ function setMethod() {
   for (const k of ['lrfd_dead', 'lrfd_dead_only', 'lrfd_live']) $(`material.${k}`).closest('.row').style.display = lrfd ? '' : 'none';
 }
 function setZones() { $('zonebody').style.display = $('zones.on').checked ? 'grid' : 'none'; }
-// Race displacement rows: crew lb + share. The segmented control fills presets; editing a row makes it custom.
+// Race displacement rows: crew (a load case, or a custom weight) + share. The segmented control
+// fills presets; editing a row makes it custom. A row's crew: { load_case } or { crew_lb }.
 function dispRow(crew, w) {
   const d = document.createElement('div'); d.className = 'row'; d.title = DISP_T;
-  d.innerHTML = `<label>Crew, share</label><div class="multi"><input type="number" class="dcrew" step="any" min="0" placeholder="crew lb" value="${crew}" title="Crew plus gear weight for this race condition, lb."><input type="number" class="dw" step="any" min="0" max="1" placeholder="share" value="${w}" title="Share of the race distance at this displacement (0..1)."></div><button type="button" class="btn soft x" title="Remove this condition">&times;</button>`;
+  const lc = crew.load_case != null ? crew.load_case : CUSTOM;
+  d.innerHTML = `<label>Crew, share</label><div class="multi" style="grid-template-columns:1.3fr 1fr"><select class="dlc" title="Crew of this race condition: a load case (its weights, kept in sync) or a custom crew weight."></select><input type="number" class="dcrew" step="any" min="0" placeholder="crew lb" value="${crew.crew_lb != null ? crew.crew_lb : ''}" title="Crew plus gear weight for this race condition, lb."><input type="number" class="dw" step="any" min="0" max="1" placeholder="share" value="${w}" title="Share of the race distance at this displacement (0..1)."></div><button type="button" class="btn soft x" title="Remove this condition">&times;</button>`;
+  const sel = d.querySelector('.dlc'), cw = d.querySelector('.dcrew');
+  const show = () => { cw.style.display = sel.value === CUSTOM ? '' : 'none'; };
+  crewOptions(sel, lc, 'custom crew lb'); show();
+  sel.addEventListener('mousedown', () => crewOptions(sel, sel.value, 'custom crew lb'));
+  sel.addEventListener('focus', () => crewOptions(sel, sel.value, 'custom crew lb'));
+  sel.addEventListener('change', () => { show(); dispMode = 'custom'; dispRefresh(); });
   d.querySelector('button').onclick = () => { d.remove(); dispMode = $('disps').children.length ? 'custom' : 'none'; dispRefresh(); };
   for (const i of d.querySelectorAll('input')) i.addEventListener('input', () => { dispMode = 'custom'; dispRefresh(); });
   $('disps').appendChild(d);
 }
-const dispRows = () => [...$('disps').children].map(d => [d.querySelector('.dcrew').value, d.querySelector('.dw').value]);
+const dispRows = () => [...$('disps').children].map(d => {
+  const v = d.querySelector('.dlc').value;
+  return [v === CUSTOM ? { crew_lb: d.querySelector('.dcrew').value } : { load_case: v }, d.querySelector('.dw').value];
+});
 function setDisps(list) { $('disps').innerHTML = ''; for (const [c, w] of list) dispRow(c, w); }
+// One condition per load case (or own-weights crew) the race events use, at the share of the
+// score its races carry (the event weights summed).
+function raceDisps() {
+  const evs = (loadedRace && loadedRace.event) || [], out = [];
+  let r; try { r = raceFromForm(); } catch (e) { r = loadedRace; }
+  ((r && r.event) || evs).forEach(e => {
+    const key = e.load_case != null ? { load_case: e.load_case } : { crew_lb: (e.weights_lb || []).reduce((a, b) => a + b, 0) };
+    const hit = out.find(([k]) => key.load_case != null ? k.load_case === key.load_case : k.crew_lb === key.crew_lb);
+    if (hit) hit[1] += e.weight; else out.push([key, e.weight]);
+  });
+  return out.map(([k, w]) => [k, +w.toFixed(6)]);
+}
 function setDispMode(m) {
   if (m === 'none') setDisps([]);
-  else if (DISP_PRESETS[m]) setDisps(DISP_PRESETS[m]);
-  else if (!$('disps').children.length) setDisps([[350, 1]]);
+  else if (m === 'races') setDisps(raceDisps());
+  else if (DISP_PRESETS[m]) setDisps(DISP_PRESETS[m].map(([c, w]) => [{ crew_lb: c }, w]));
+  else if (!$('disps').children.length) setDisps([[{ crew_lb: 350 }, 1]]);
   dispMode = m; dispRefresh();
 }
 function dispRefresh() {
@@ -581,8 +615,12 @@ function dispRefresh() {
   $('dispnote').className = ok ? 'hint' : 'hint t-error';
 }
 // Which preset (if any) a displacement list is, so a reload highlights the same button.
-const dispModeOf = ds => !ds || !ds.length ? 'none'
-  : Object.keys(DISP_PRESETS).find(k => DISP_PRESETS[k].length === ds.length && DISP_PRESETS[k].every(([c, w], i) => c === ds[i].crew_lb && Math.abs(w - ds[i].weight) < 1e-9)) || 'custom';
+const dispModeOf = ds => {
+  if (!ds || !ds.length) return 'none';
+  const rd = raceDisps();
+  if (rd.length === ds.length && rd.every(([k, w], i) => (k.load_case != null ? k.load_case === ds[i].load_case : ds[i].load_case == null && k.crew_lb === ds[i].crew_lb) && Math.abs(w - ds[i].weight) < 1e-6)) return 'races';
+  return Object.keys(DISP_PRESETS).find(k => DISP_PRESETS[k].length === ds.length && DISP_PRESETS[k].every(([c, w], i) => ds[i].load_case == null && c === ds[i].crew_lb && Math.abs(w - ds[i].weight) < 1e-9)) || 'custom';
+};
 function shapeHints() {
   for (const k of ['length_in', 'beam_in', 'draft_in']) {
     const v = [0, 1].map(n => Number($(`shape.${k}.${n}`).value));
@@ -671,13 +709,14 @@ function fillForm(p, hulls) {
   if (p.objective.straight_weight == null) p.objective.straight_weight = 1;
   if (p.objective.turn_radius_in == null) p.objective.turn_radius_in = 600;
   const ds = p.objective.displacements;
-  setDisps((ds || []).map(d => [d.crew_lb, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   for (const sec of ['hull', 'material', 'gates', 'stability', 'objective']) for (const [k] of FIELDS[sec]) $(`${sec}.${k}`).value = p[sec][k];
   $('stability.gm_empty_min_in').value = p.stability.gm_empty_min_in ?? '';
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
   raceEvents();
+  // After the load cases and race events: a row's load case list and the Race events preset need them.
+  setDisps((ds || []).map(d => [d.load_case != null ? { load_case: d.load_case } : { crew_lb: d.crew_lb }, d.weight])); dispMode = dispModeOf(ds); dispRefresh();
   const st = p.seats || { auto: true, spacing_min_in: 30, bow_clear_in: 36, stern_clear_in: 36, variance_in: 3 };
   $('seats.auto').checked = !!st.auto; for (const [k] of FIELDS.seats) $(`seats.${k}`).value = st[k];
 }
@@ -729,7 +768,7 @@ function formToml() {
       }
     }
     const ds = sec === 'objective' ? dispRows() : [];
-    if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ crew_lb = ${fl(c)}, weight = ${fl(w)} }`).join(', ')}]`);
+    if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ ${c.load_case != null ? `load_case = ${tstr(c.load_case)}` : `crew_lb = ${fl(c.crew_lb)}`}, weight = ${fl(w)} }`).join(', ')}]`);
     out.push('');
   }
   out.push('[punching]', `method = ${tstr(g('punching.method'))}`, `knees = ${int('punching.knees')}`);
@@ -788,13 +827,14 @@ function formToml() {
 // event's crew is picked in the Race events section: a load case (load_case) or custom weights
 // (weights_lb), never both.
 let loadedRace = null;
-const CUSTOM = '\u0000custom';
+// The "custom" option's value: no control characters (the HTML parser rewrites NUL in option values).
+const CUSTOM = '__custom__';
 const lcNames = () => [...document.querySelectorAll('#cases .lcname')].map(i => i.value.trim()).filter(Boolean);
-function crewOptions(sel, cur) {
+function crewOptions(sel, cur, custom = 'custom weights') {
   const names = lcNames();
   const opts = names.map(n => [n, n]);
   if (cur && cur !== CUSTOM && !names.includes(cur)) opts.push([cur, `${cur} (no such load case)`]);
-  opts.push([CUSTOM, 'custom weights']);
+  opts.push([CUSTOM, custom]);
   sel.innerHTML = opts.map(([v, t]) => `<option value="${esc(v)}">${esc(t)}</option>`).join('');
   sel.value = cur;
 }
@@ -806,7 +846,7 @@ function raceEvents() {
   }
   const tc = 'Crew of this race: a load case (its weights, kept in sync) or custom weights for a crew that is not a load case (a light crew that never governs the structure costs the search nothing this way).';
   box.innerHTML = loadedRace.event.map((e, i) => `<div class="raceev" data-i="${i}" style="display:grid;gap:var(--s1)">`
-    + row(`raceev.${i}`, esc(e.name), tc, `<select id="raceev.${i}"></select>`)
+    + row(`raceev.${i}`, esc(e.name), tc + ` Counts ${+(e.weight * 100).toFixed(2)}% of the weighted race time ([[race.event]] weight).`, `<select id="raceev.${i}"></select>`, `${+(e.weight * 100).toFixed(1)}%`)
     + `<div class="racew">${row('', 'Custom weights', 'Paddler weights in lb, comma separated.', `<input class="racewin" value="${(e.weights_lb || []).join(', ')}">`, 'lb')}</div></div>`).join('');
   loadedRace.event.forEach((e, i) => {
     const sel = $(`raceev.${i}`), w = sel.closest('.raceev').querySelector('.racew');
@@ -1496,7 +1536,7 @@ function plotFreeboard(ctx, W, H) {
   for (const k of ks) line(ctx, a, k.x_in, fb(k.waterline_in), ...caseStyle(k.i));
   if (ok) line(ctx, a, e.x_in, fb(e.waterline_in), C.accent);
   caseKnees(ctx, a, r, ks);
-  const items = ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, `${k.name}: min ${k.freeboard_in.toFixed(2)} in (worst seats)`, dash]; });
+  const items = ks.map(k => { const [col, dash] = caseStyle(k.i); const F = k.freeboard; return [col, F ? `${k.name}: expected ${F.expected.freeboard_in.toFixed(2)}, best ${F.best.freeboard_in.toFixed(2)}, worst ${F.worst.freeboard_in.toFixed(2)} in` : `${k.name}: min ${k.freeboard_in.toFixed(2)} in (worst seats)`, dash]; });
   items.push(ok ? [C.accent, `no crew: min ${e.freeboard_in.toFixed(2)} in`] : [C.error, `no crew: ${e && e.error ? e.error : 'not in this result'}`]);
   if (typeof fbGate === 'number') items.push([C.error, `min freeboard gate ${fbGate} in`, [5, 4]]);
   legend(ctx, r.l + 10, r.t + 16, items);
@@ -1852,7 +1892,7 @@ function plotRace(ctx, W, H) {
   y += 6; const rec = raceRes.recommended;
   row('Recommended [objective] (from time sensitivity)', 652);
   row(`straight_weight = ${rec.straight_weight.toFixed(3)}    turn_radius_in = ${rec.turn_radius_in.toFixed(0)}`);
-  const ds = rec.displacements.map(d => `${d.crew_lb.toFixed(0)} lb: ${d.weight.toFixed(3)}`);
+  const ds = rec.displacements.map(d => `${d.load_case != null ? d.load_case + ' ' : ''}${d.crew_lb.toFixed(0)} lb: ${d.weight.toFixed(3)}`);
   for (let i = 0; i < ds.length; i += 3) row((i ? '' : 'displacements  ') + ds.slice(i, i + 3).join('   '), 450, C.muted);
   y += 6;
   const tn = e.segments.filter(sg => sg.radius_m != null);
@@ -1944,7 +1984,7 @@ function showWinner() {
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
     ${typeof c.drag_n === 'number' ? kv('Drag', dragTxt(c.drag_n)) : ''}
     ${gmRows(c, f)}
-    ${kv('Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>${fbGate != null && v.freeboard_in < fbGate ? ' <span class="t-error">below gate</span>' : ''}`)}
+    ${kv('Freeboard', fbTxt(win, v, f) + (fbGate != null && fbWorst(win, v) < fbGate ? ' <span class="t-error">below gate</span>' : ''), FB_T)}
     ${pocketRow(c)}
     ${kv('D/C search', `${f(v.dc, 3)}`)}
     ${kv(`D/C verify`, `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`)}
@@ -1996,7 +2036,7 @@ function reportCharts() {
       add('Shear and bending moment', 'Along the hull, per load case. Triangles mark the knees.', plotHull, 440);
       add('Stress and waterline', 'Bending tension against the allowable (top); loaded waterline against the gunwale (bottom).', plotStress, 440);
       add('D/C along the hull', 'Max of bending tension, compression, shear and biaxial at each station.', plotDcx, 300);
-      add('Freeboard', 'Gunwale above the local waterline per load case and with no crew aboard (worst seat sample in the legend). Dashed: freeboard gate.', plotFreeboard, 300);
+      add('Freeboard', 'Gunwale above the local waterline per load case at the planned seats and with no crew aboard. Legend: expected (planned seats), best and worst over the seat samples; the gate is the worst. Dashed: freeboard gate.', plotFreeboard, 300);
     }
     if (winCurves() && !winCurves().error) {
       const t0 = tab;
@@ -2065,7 +2105,7 @@ function reportHtml(canoeImg, charts) {
     ['Hull weight', `${f(c.hull_weight_lb, 1)} lb`], typeof c.drag_n === 'number' ? ['Drag', `${dragTxt(c.drag_n)} at ${f(p.objective && p.objective.speed_mps, 1)} m/s`] : null,
     typeof c.gm_empty_in === 'number' ? ['GM, empty canoe', `${f(c.gm_empty_in, 2)} in${p.stability && p.stability.gm_empty_min_in != null ? ` <span class="muted">gate &ge; ${f(p.stability.gm_empty_min_in, 2)}</span>` : ''}`] : null,
     ['GM, loaded', `${typeof c.gm_in === 'number' ? f(c.gm_in, 2) + ' in' : 'not computed'} <span class="muted">worst case, gate &ge; ${f(gmGate, 2)}</span>${Array.isArray(c.gm_cases_in) && c.gm_cases_in.length ? ' (' + c.gm_cases_in.map((g, i) => `${esc((p.load_case[i] || {}).name || i + 1)} ${f(g, 2)}`).join(', ') + ')' : ''}`],
-    ['Freeboard', `${f(v.freeboard_in, 2)} in <span class="muted">gate &ge; ${f(fbGate, 2)}</span>`], pocket ? ['Air pocket', pocket] : null,
+    ['Freeboard', fbTxt(win, v, f)], pocket ? ['Air pocket', pocket] : null,
     ['D/C search', f(v.dc, 3)], ['D/C verify', `${f(win.verify_dc, 3)} <span class="muted">at ${win.verify_stations} stations</span>`],
     win.dc_extrapolated != null ? ['D/C extrapolated', f(win.dc_extrapolated, 4)] : null,
     ['Governing', `${esc(c.governing_case || '-')} / ${esc(v.governing_check || '-')}`],
@@ -2073,10 +2113,11 @@ function reportHtml(canoeImg, charts) {
   ].filter(Boolean);
   const checks = Array.isArray(v.checks) ? table(['check', 'demand psi', 'capacity psi', 'D/C', 'at x, in'], v.checks.map(k =>
     `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td><td>${f(k.dc, 3)}</td><td>${f(k.x_in, 1)}</td></tr>`)) : '';
-  const cases = table(['case', 'knee in @ lb, bow to stern', 'seats', 'draft in', 'trim in', 'GM in', 'freeboard in', 'D/C', 'governs'],
+  const fbCell = k => k.freeboard ? `${f(k.freeboard.expected.freeboard_in, 2)} / ${f(k.freeboard.best.freeboard_in, 2)} / <b>${f(k.freeboard.worst.freeboard_in, 2)}</b>` : f(k.freeboard_in, 2);
+  const cases = table(['case', 'knee in @ lb, bow to stern', 'seats', 'draft in', 'trim in', 'GM in', 'freeboard in, expected / best / worst', 'D/C', 'governs'],
     (win.cases || []).map(k => k.error ? `<tr><td>${esc(k.name)}</td><td class="l" colspan="8">${esc(k.error)}</td></tr>`
       : `<tr><td>${esc(k.name)}</td><td>${k.seats_in.map((x, j) => [x, k.weights_lb[j]]).sort((a, b) => a[0] - b[0]).map(([x, w]) => `${f(x, 0)}@${f(w, 0)}`).join(', ')}</td><td>${esc(k.seat_source || '')}${k.seat_variance_in ? ' &plusmn;' + f(k.seat_variance_in, 1) : ''}</td>
-        <td>${f(k.draft_in, 2)}</td><td>${f(k.trim_in, 2)}</td><td>${f(k.gm_in, 2)}</td><td>${f(k.freeboard_in, 2)}</td><td>${f(k.verdict && k.verdict.dc, 3)}</td><td>${esc(k.verdict ? k.verdict.governing_check : '-')}</td></tr>`));
+        <td>${f(k.draft_in, 2)}</td><td>${f(k.trim_in, 2)}</td><td>${f(k.gm_in, 2)}</td><td>${fbCell(k)}</td><td>${f(k.verdict && k.verdict.dc, 3)}</td><td>${esc(k.verdict ? k.verdict.governing_check : '-')}</td></tr>`));
   const s0 = result.strength;
   const notes = [
     win.on_grid_edge ? `${failing ? 'This design' : 'Winner'} is on the search grid edge. Widen the search range.` : '',
@@ -2197,7 +2238,7 @@ function calcHtml(win) {
       const ratio = ck.name === 'biaxial'; // Kupfer: principal stress over its reduced capacity, worked in section 4
       row(`${esc(q.name)}: ${CHECK[ck.name] || esc(ck.name)}`, ck.x_in != null ? `x = ${g(ck.x_in, 1)}` : 'knee', ratio ? 'section 4' : `${g(ck.demand, 1)} psi`, ratio ? '' : `${g(ck.capacity, 1)} psi`, g(ck.dc, 3), `&le; ${g(dcv, 2)}`, ck.dc <= dcv);
     }
-    row(`${esc(q.name)}: freeboard`, 'min over hull', '-', '-', `${g(q.freeboard_in, 2)} in`, `&ge; ${g(G.freeboard_min_in, 2)} in`, q.freeboard_in >= G.freeboard_min_in);
+    row(`${esc(q.name)}: freeboard`, q.freeboard ? `worst seat sample (expected ${g(q.freeboard.expected.freeboard_in, 2)}, best ${g(q.freeboard.best.freeboard_in, 2)})` : 'min over hull', '-', '-', `${g(q.freeboard_in, 2)} in`, `&ge; ${g(G.freeboard_min_in, 2)} in`, q.freeboard_in >= G.freeboard_min_in);
     row(`${esc(q.name)}: GM<sub>T</sub>`, 'worst seat sample', '-', '-', `${g(q.gm_in, 2)} in`, `&ge; ${g(ST.gm_min_in, 2)} in`, q.gm_in >= ST.gm_min_in);
   }
   if (e && !e.error) {
@@ -2300,8 +2341,18 @@ function calcHtml(win) {
     sec.push(eq('Draft d and trim &theta; from force and moment balance (local waterline d + &theta;(x &minus; L/2)/L, buoyancy 62.4 A<sub>sub</sub>/1728 per inch):',
       '&int; b(x) dx = W, &nbsp; &int; b(x) (x &minus; L/2) dx = &Sigma; W<sub>i</sub>(x<sub>i</sub> &minus; L/2)',
       `service: d = <b>${g(sv.draft_in, 3)} in</b>, &theta; = ${g(sv.trim_in, 3)} in${asd ? '' : `; factored: d = ${g(st.draft_in, 3)} in, &theta; = ${g(st.trim_in, 3)} in`}`));
-    sec.push(eq('Freeboard = mold depth minus the highest local waterline:', 'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
-      `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(sv.freeboard_in >= G.freeboard_min_in)}`));
+    if (k.freeboard) {
+      // Freeboard moves with where the crew sits (trim): expected at the planned seats, best and
+      // worst over every seat sample; the gate is the worst.
+      const F = k.freeboard, fbl = (lbl, s, gate) => `${lbl}: knees ${s.seats_in.map(x => g(x, 1)).join(', ')} in; d = ${g(s.draft_in, 3)} in, &theta; = ${g(s.trim_in, 3)} in; f = ${g(k.depth_in, 2)} &minus; ${g(s.waterline_max_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`
+        + (gate ? ` ${s.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(s.freeboard_in >= G.freeboard_min_in)}` : '');
+      sec.push(eq(`Freeboard = mold depth minus the highest local waterline. Trim, and so freeboard, depends on where the crew sits: expected at the planned seats, best and worst over every seat sample (each knee &plusmn;${g(q.seat_variance_in, 1)} in); the gate is the worst:`,
+        'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
+        [fbl('expected (planned seats)', F.expected), fbl('best', F.best), fbl('worst', F.worst, true)].join('<br>')));
+    } else {
+      sec.push(eq('Freeboard = mold depth minus the highest local waterline:', 'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
+        `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(sv.freeboard_in >= G.freeboard_min_in)}`));
+    }
     sec.push(eq('Transverse stability:', 'GM = KB + BM &minus; KG, &nbsp; BM = I<sub>wp</sub> / V, &nbsp; KG = (&int; w z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W',
       `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> at this sample; worst sample ${g(q.gm_in, 3)} in ${q.gm_in >= ST.gm_min_in ? '&ge;' : '&lt;'} ${g(ST.gm_min_in, 2)} in ${ok(q.gm_in >= ST.gm_min_in)}`));
     // loads along the hull
@@ -2458,6 +2509,12 @@ function calcHtml(win) {
   }
   return out.join('');
 }
+// File name (no extension) of the exports: the winning hull's name, as /api/export names the
+// STEP and STL (letters, digits, - and _ kept, anything else _).
+function exportStem() {
+  const name = (result && result.winner_hull && result.winner_hull.name) || (hull && hull.name) || 'jaguar-report';
+  return [...name].map(c => /[A-Za-z0-9_-]/.test(c) ? c : '_').join('');
+}
 async function exportPdf() {
   if (!result || !result.winner || !hull) return;
   // The proof's race-time section needs a race of this design: race it first if not yet.
@@ -2471,7 +2528,7 @@ async function exportPdf() {
     fr.id = 'pdfframe'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
     // Chrome names the saved PDF after the top document title.
     const title = document.title;
-    document.title = `jaguar-report-${result.winner.candidate.hull_weight_lb.toFixed(1)}lb`;
+    document.title = exportStem();
     fr.onload = () => { fr.contentWindow.onafterprint = () => { document.title = title; }; fr.contentWindow.focus(); fr.contentWindow.print(); };
     fr.srcdoc = html; document.body.appendChild(fr);
   } catch (e) { $('err').textContent = 'pdf: ' + e.message; }

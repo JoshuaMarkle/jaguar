@@ -160,7 +160,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    than weights_lb: input error.
    Every case is then checked at the nominal seats and all 2^k corners with each knee moved
    +/- `variance_in` (default 3 in); the case verdict is the worst sample, freeboard and GM the
-   minimum. Search candidates stop sampling at the first sample that misses a gate.
+   minimum. Search candidates stop sampling at the first sample that misses a gate. Freeboard is
+   also reported at the nominal seats (expected) and at the best sample (`freeboard` in each case:
+   `expected`, `best`, `worst`, each with its seats, draft, trim, highest waterline).
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
    vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
    optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (under
@@ -212,7 +214,8 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    (1.89 + 1.62 log10(L / ks))^-2.5; no form factor. The same drag feeds the race and the power
    curves. Drag is taken at the heaviest load case's loaded draft, or, with
    `objective.displacements = [{crew_lb, weight}, ...]` (weights sum to 1), as the weighted sum of
-   resistance at the level draft each (hull weight + crew_lb) floats at. `objective.straight_weight`
+   resistance at the level draft each (hull weight + crew_lb) floats at. Each entry gives `crew_lb`
+   or `load_case` (a `[[load_case]]` name: its crew total, like a race event's), not both. `objective.straight_weight`
    (default 1, needs drag + `[shape_search]`) blends in the steady-turn drag at `objective.turn_radius_in`
    (default 600), see docs/SHAPE_SEARCH.md. `race` (needs `[race]` and `[shape_search]`) = shortest
    weighted race time over the `[race]` events on paths planned for the midpoint shape
@@ -227,7 +230,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    series stays below it even at max + 2 x its largest step; then VERIFIED iff
    max(dc_extrapolated, D/C at 4n-3) <= `dc_verify` (never below a computed value). Otherwise
    `dc_extrapolated` is null, `convergence.note` says which series, and VERIFIED iff the 2n-1 D/C
-   <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin.
+   <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin. The floating gates
+   are re-checked at 2n-1 stations too: VERIFIED also needs freeboard >= `freeboard_min_in` and
+   loaded GM >= `gm_min_in` there (a design the search passed by a hair can miss them).
    `verify_failure` says why when not verified.
 8b. **Stands** (optional `[stands]`, `src/stands.rs`; `optimize::verify_stands`, called once by
    `jaguar::run` after either search, never a search gate): the winner at 2n-1 stations, empty,
@@ -327,7 +332,7 @@ not flagged. `diagrams` is the governing case at verification resolution. `cases
 per `[[load_case]]` (input order): name, nominal `seats_in` (`weights_lb` order), `crew_order`
 (paddler indices bow to stern), `seat_source` (given/even/auto), `seat_variance_in`,
 `verdict_seats_in` (the sample the verdict comes from), weights, draft, trim (nominal seats), GM,
-freeboard (worst sample), x, V, M, tension/compression/shear stress, waterline, `zbar_in`,
+freeboard (worst sample; `freeboard` = expected / best / worst), x, V, M, tension/compression/shear stress, waterline, `zbar_in`,
 `buoyancy_lbpin` and `self_weight_lbpin` (strength combination, lb/in; their difference integrates
 to V, the knee patches added in closed form), and
 per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at
@@ -463,7 +468,8 @@ geometry the rules leave to the site marked as assumptions.
   (radius, turn angle, entry / min / exit speed, drift), the path, speed along it, and the time sensitivities
   S = d ln t / d ln D for straight and turning drag. `weighted_time_s` = sum of event weight x
   time. `recommended`: `straight_weight` = sum w t S_straight / sum w t (S_straight + S_turn),
-  `displacements` (same shares grouped by crew), `turn_radius_in` (turn-time weighted radius):
+  `displacements` (same shares grouped by load case, or by crew for own-weights events),
+  `turn_radius_in` (turn-time weighted radius):
   values to put in `[objective]`.
 * Courses in examples/canoe.toml follow the ASCE figures in `races/` (Fig. 3 slalom, Fig. 4
   endurance slalom, Fig. 5 sprint; lane 5, its buoy line y = 0). Endurance: the lane-5 slalom,

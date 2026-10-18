@@ -88,6 +88,52 @@ fn variance_is_never_less_conservative() {
 }
 
 #[test]
+fn freeboard_range_spans_the_seat_samples() {
+    let (mut p, _, fit, g, s) = setup();
+    p.seats.variance_in = 6.0;
+    // Lopsided crew so moving every knee one way trims the canoe.
+    let case = &p.load_cases[1];
+    let x = [80.0, 160.0];
+    let env = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
+    let f = &env.freeboard;
+    // Expected = the nominal seats, worst = the gated value, best >= expected >= worst.
+    assert_eq!(f.expected.seats_in, x.to_vec());
+    assert_eq!(f.expected.freeboard_in, env.nominal.verdict.freeboard_in);
+    assert_eq!(f.worst.freeboard_in, env.verdict.freeboard_in);
+    assert!(f.best.freeboard_in >= f.expected.freeboard_in && f.expected.freeboard_in > f.worst.freeboard_in);
+    for a in [&f.expected, &f.best, &f.worst] {
+        // Freeboard = depth - highest local waterline (d + |trim| / 2 at an end).
+        assert!((a.freeboard_in - (g.depth - a.waterline_max_in)).abs() < 1e-12);
+        assert!((a.waterline_max_in - (a.draft_in + 0.5 * a.trim_in.abs())).abs() < 1e-9);
+        let e = eval_case(&p, &fit, &g, &s, 58.0, case, &a.seats_in).unwrap();
+        assert_eq!(e.verdict.freeboard_in, a.freeboard_in, "reproduced at its seats");
+    }
+    // The worst sample moves every knee the same way (the most trim).
+    let d: Vec<f64> = f.worst.seats_in.iter().zip(&x).map(|(a, b)| a - b).collect();
+    assert!(d.iter().all(|v| (v.abs() - 6.0).abs() < 1e-9) && d.windows(2).all(|w| w[0] == w[1]), "{d:?}");
+}
+
+#[test]
+fn verification_rechecks_freeboard() {
+    let (mut p, h, ..) = setup();
+    p.seats.variance_in = 6.0;
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    assert!(w.verified, "{:?}", w.verify_failure);
+    let worst = w.cases.iter().map(|k| k.freeboard_in.unwrap()).fold(f64::INFINITY, f64::min);
+    // A freeboard gate just above the winner's: the search may pass it, verification must not.
+    let mut q = p.clone();
+    q.gates.freeboard_min_in = worst + 1e-6;
+    let r = optimize::run(&q, &h).unwrap();
+    if let Some(w2) = r.winner {
+        let fb = w2.cases.iter().map(|k| k.freeboard_in.unwrap()).fold(f64::INFINITY, f64::min);
+        assert!(!(w2.verified && fb < q.gates.freeboard_min_in), "verified below the freeboard gate");
+        if fb < q.gates.freeboard_min_in {
+            assert!(w2.verify_failure.unwrap().contains("freeboard"));
+        }
+    }
+}
+
+#[test]
 fn infeasible_seat_constraints_fail_candidates() {
     let (mut p, h, ..) = setup();
     p.seats.bow_clear_in = 190.0;

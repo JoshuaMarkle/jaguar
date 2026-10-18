@@ -852,7 +852,10 @@ pub fn race_lines(r: &crate::race::RaceResult) -> Vec<String> {
         rec.displacements
             .iter()
             .zip(&milli)
-            .map(|(d, m)| format!("{{ crew_lb = {:.0}, weight = {:.3} }}", d.crew_lb, *m as f64 / 1000.0))
+            .map(|(d, m)| match &d.load_case {
+                Some(n) => format!("{{ load_case = {n:?}, weight = {:.3} }}", *m as f64 / 1000.0),
+                None => format!("{{ crew_lb = {:.0}, weight = {:.3} }}", d.crew_lb, *m as f64 / 1000.0),
+            })
             .collect::<Vec<_>>()
             .join(", ")
     ));

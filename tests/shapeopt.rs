@@ -189,7 +189,7 @@ fn turn_drag_falls_with_rocker_and_rises_with_length() {
     assert_eq!(td(&base), t0, "deterministic");
     // One displacement at the heaviest crew = the default.
     let mut q = small(false);
-    q.objective.displacements = Some(vec![jaguar::params::Displacement { crew_lb: 340.0, weight: 1.0 }]);
+    q.objective.displacements = Some(vec![jaguar::params::Displacement::crew(340.0, 1.0)]);
     let h = jaguar::hullgen::generate(&base, 41, 21, "t").unwrap();
     assert_eq!(
         jaguar::shapeopt::loaded_turn(&q, &base, &h, 90.0, 12.0, q.hull.flare_deg).unwrap().drag_n,

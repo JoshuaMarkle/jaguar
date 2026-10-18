@@ -679,7 +679,8 @@ pub struct EventResult {
 pub struct Recommended {
     /// For `objective.straight_weight`.
     pub straight_weight: f64,
-    /// For `objective.displacements` (crew_lb rounded to 1 lb).
+    /// For `objective.displacements`: one per load case the events name, plus one per own-weights
+    /// crew (crew_lb rounded to 1 lb).
     pub displacements: Vec<Displacement>,
     /// Turn-time weighted mean arc radius, in (for `objective.turn_radius_in`).
     pub turn_radius_in: f64,
@@ -842,11 +843,11 @@ pub fn recommend(events: &[EventResult]) -> Result<Recommended> {
     ensure!(a + b > 0.0, "race: time does not depend on drag (no events with weight?)");
     let mut ds: Vec<Displacement> = Vec::new();
     for e in events {
-        let crew = e.crew_lb.round();
+        let crew = if e.load_case.is_some() { e.crew_lb } else { e.crew_lb.round() };
         let w = e.weight * e.time_s * (e.sens_straight + e.sens_turn) / (a + b);
-        match ds.iter_mut().find(|d| d.crew_lb == crew) {
+        match ds.iter_mut().find(|d| d.load_case == e.load_case && d.crew_lb == crew) {
             Some(d) => d.weight += w,
-            None => ds.push(Displacement { crew_lb: crew, weight: w }),
+            None => ds.push(Displacement { crew_lb: crew, load_case: e.load_case.clone(), weight: w }),
         }
     }
     ds.sort_by(|p, q| p.crew_lb.total_cmp(&q.crew_lb));
@@ -1154,6 +1155,8 @@ mod tests {
         assert!(rec.straight_weight > 0.5 && rec.straight_weight < 1.0, "{}", rec.straight_weight);
         assert_eq!(rec.displacements.len(), 1);
         assert!((rec.displacements[0].weight - 1.0).abs() < 1e-12);
+        // Grouped by the load case the events name (crew kept exact, not rounded).
+        assert_eq!(rec.displacements[0].load_case, r.events[0].load_case);
         let p = calibrate_power(
             &topsides(&hull, 12.0, Topsides::default()),
             100.0,

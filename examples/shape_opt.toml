@@ -65,6 +65,7 @@ gm_min_in = 0.25          # min loaded metacentric height (> 0 = rights itself).
 kind = "weight"           # "weight" = lightest hull, "drag" = least water resistance
 speed_mps = 2.5           # race speed for the drag objective
 # Drag only: weight the drag over race displacements (hull weight + crew_lb, level draft).
+# Each entry: crew_lb, or load_case = "<[[load_case]] name>" (its crew), plus weight.
 # Absent = heaviest load case. Weights must sum to 1. Presets:
 #   Regionals: [{ crew_lb = 350, weight = 0.75 }, { crew_lb = 700, weight = 0.25 }]
 #   Nationals: [{ crew_lb = 350, weight = 0.60 }, { crew_lb = 525, weight = 0.20 }, { crew_lb = 700, weight = 0.20 }]

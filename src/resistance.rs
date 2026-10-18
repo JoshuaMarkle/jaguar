@@ -463,12 +463,11 @@ mod tests {
     #[test]
     fn weighted_drag_with_one_displacement_equals_single_drag() {
         let h = box_hull();
-        let one = [Displacement { crew_lb: 350.0, weight: 1.0 }];
+        let one = [Displacement::crew(350.0, 1.0)];
         let d = level_draft_in(&h, 100.0 + 350.0).unwrap();
         let single = resistance(&h, d, 2.5, 0.0).unwrap().total_n;
         assert_eq!(weighted_resistance(&h, 100.0, &one, 2.5, 0.0).unwrap(), single);
-        let two =
-            [Displacement { crew_lb: 350.0, weight: 0.75 }, Displacement { crew_lb: 700.0, weight: 0.25 }];
+        let two = [Displacement::crew(350.0, 0.75), Displacement::crew(700.0, 0.25)];
         let heavy = resistance(&h, level_draft_in(&h, 800.0).unwrap(), 2.5, 0.0).unwrap().total_n;
         let wsum = weighted_resistance(&h, 100.0, &two, 2.5, 0.0).unwrap();
         assert!((wsum - (0.75 * single + 0.25 * heavy)).abs() < 1e-9 && heavy > single);
