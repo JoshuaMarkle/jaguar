@@ -2,6 +2,20 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.3.0
+* **Your work comes back:** reopening JAGUAR shows the last result again, not just your settings.
+* **Run history:** every finished run is kept. **History** (above the result) lists them with date,
+  pass/fail, weight and race time; **Open** brings back all of a run's charts, the export and the
+  PDF; **Delete** removes it.
+* **Freeboard: expected, best and worst.** Freeboard depends on where the crew kneels. The result,
+  the load case table and the PDF proof now show it at the planned seats (expected) and over every
+  seat shift (best, worst); the 6.2 in gate uses the worst. A design that only passed freeboard at
+  coarse resolution is no longer marked Verified.
+* **Race displacements follow the load cases**, like the race events. **Races** sets one per crew,
+  weighted by the share of the score its races carry. Each race event shows its share (%).
+* **Export PDF** is named like the STEP and STL export (the hull's name).
+* Fixed: picking "custom weights" for a race event did not work.
+
 ## New in 0.2.0
 * **Check a canoe drawn in CAD:** Hull > **Import CAD file** takes a STEP file (.step/.stp) as well
   as STL or OBJ. JAGUAR measures the hull, wall and depth, turns shape search off, and Run checks
