@@ -3,9 +3,24 @@ check under the crew, and can search the hull shape too. It runs in your web bro
 no terminal.
 
 ## New in 0.4.0
+* **Freeboard is checked like the RFP:** where the hull lettering sits, with the crew at their
+  marked seats (static, at staging), against the rule minimum plus a staging margin.
+  * Search > Gates: **Min freeboard (rule)** 5.75 in (6 in less the 0.25 in tolerance),
+    **Freeboard margin** (added on top), **Freeboard seat shift** (0 = marked seats; e.g. 2-3 in
+    for slack).
+  * Search > **Lettering**: school name (at the bow) and canoe name (at the stern), letter height,
+    width, distance below the gunwale and from the ends. JAGUAR shows where they land.
+  * The result, the PDF proof and the Freeboard chart show the freeboard at the lettering, the
+    lowest point of the hull, and how far it moves if the crew shifts (not gated).
+  * Updating keeps your settings: to use the new check, set Min freeboard 5.75, a margin, and
+    turn Lettering on with your names.
 * **Export options:** Export STEP and Export STL still give the complete shelled canoe with its
   air pockets; the arrow next to each also gives the shelled canoe without air pockets, or the
   unshelled canoe (the hull filled in to the gunwale, to check freeboard in CAD).
+* **Sharp bow and stern above the water:** with side flare, the ends above the waterline were a
+  flat face (about 3/4 in wide at 3 deg). The flare now eases in at the tips, so the stem is a
+  sharp line from keel to gunwale, with no corner in the gunwale line. Weight and checks barely
+  move; re-run to export the new ends.
 
 ## New in 0.3.0
 * **Your work comes back:** reopening JAGUAR shows the last result again, not just your settings.
