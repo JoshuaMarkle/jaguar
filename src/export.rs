@@ -80,6 +80,10 @@ pub struct Mesh {
     /// falls back to the facets (a hull whose ends are not stem lines, or whose inner wall does
     /// not reach the mold depth at the sheer).
     pub brep: Option<Brep>,
+    /// With a wall and no air pockets: the inner wall over the hollow run, one row per station
+    /// (sheer at the mold depth first, centreline keel last). The male mold's surface
+    /// (`manufacture.rs`). None otherwise.
+    pub inner_rows: Option<Vec<NetRow>>,
 }
 
 /// One station of a structured net: x, and the starboard half girth from the sheer (first) to
@@ -557,8 +561,10 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     let brep_ok = stems
         && (spec.filled || !closed || inner_net.as_ref().is_some_and(|n| n.len() >= 2 && flat(n, z_top)))
         && voids.iter().all(|(zc, v)| v.len() >= 2 && flat(v, *zc));
+    let inner_rows =
+        if voids.is_empty() { inner_net.clone().filter(|n| n.len() >= 2 && flat(n, z_top)) } else { None };
     let brep = brep_ok.then_some(Brep { z_top, outer: outer_net, inner: inner_net, voids });
-    let mut mesh = clean(Mesh { verts, tris, closed, brep });
+    let mut mesh = clean(Mesh { verts, tris, closed, brep, inner_rows });
     orient(&mut mesh)?;
     if closed {
         // Each shell on its own: the outer one (largest volume) encloses positive volume, the
@@ -743,7 +749,7 @@ fn clean(m: Mesh) -> Mesh {
             })
         })
         .collect();
-    Mesh { verts: out, tris, closed: m.closed, brep: m.brep }
+    Mesh { verts: out, tris, closed: m.closed, brep: m.brep, inner_rows: m.inner_rows }
 }
 
 /// Binary STL (80-byte header, little endian).

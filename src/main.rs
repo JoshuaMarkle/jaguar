@@ -126,6 +126,33 @@ enum Cmd {
         #[arg(long)]
         filled: bool,
     },
+    /// Hardboard mold boards of the winner (male mold: foam layers with hardboard between), packed
+    /// onto sheets, one DXF per sheet for the water jet (src/manufacture.rs).
+    Mold {
+        #[arg(default_value = "result.json")]
+        result: PathBuf,
+        /// Folder for the DXF files and mold.json (created if missing)
+        #[arg(short, long, default_value = "mold")]
+        out: PathBuf,
+        /// Boards standing upright across the canoe (ribs) instead of laid flat
+        #[arg(long)]
+        vertical: bool,
+        /// Foam sheet thickness, in
+        #[arg(long, default_value_t = 2.0)]
+        foam: f64,
+        /// Hardboard thickness, in
+        #[arg(long, default_value_t = 0.125)]
+        board: f64,
+        /// Hardboard sheet length, in
+        #[arg(long, default_value_t = 96.0)]
+        sheet_length: f64,
+        /// Hardboard sheet width, in
+        #[arg(long, default_value_t = 48.0)]
+        sheet_width: f64,
+        /// Least space between pieces and from the sheet edge, in
+        #[arg(long, default_value_t = 0.25)]
+        gap: f64,
+    },
     /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
     /// and recommended drag-objective weightings (src/race.rs).
     Race {
@@ -458,6 +485,40 @@ fn main() -> Result<()> {
                     "air pockets {l:.1} in from each tip, sealed by a bulkhead and a top cover {b:.3} in thick ({one}; --no-pockets to leave out)"
                 );
             }
+        }
+        Cmd::Mold { result, out, vertical, foam, board, sheet_length, sheet_width, gap } => {
+            use jaguar::manufacture::{self, MoldSpec, Orientation};
+            let spec = MoldSpec {
+                orientation: if vertical { Orientation::Vertical } else { Orientation::Flat },
+                foam_in: foam,
+                board_in: board,
+                sheet_length_in: sheet_length,
+                sheet_width_in: sheet_width,
+                gap_in: gap,
+            };
+            let l = manufacture::from_result(&std::fs::read_to_string(&result)?, &spec)?;
+            std::fs::create_dir_all(&out)?;
+            for k in 0..l.sheets.len() {
+                std::fs::write(out.join(manufacture::dxf_name(&l, k)), manufacture::to_dxf(&l, k)?)?;
+            }
+            std::fs::write(out.join("mold.json"), serde_json::to_string_pretty(&l)?)?;
+            let s = &l.stack;
+            println!(
+                "{}: {} hardboard boards ({}), {} foam layers, {:.2} in {}",
+                l.hull,
+                s.boards,
+                if vertical { "upright ribs" } else { "laid flat" },
+                s.foam_layers,
+                s.height_in,
+                if vertical { "long" } else { "high" }
+            );
+            println!(
+                "{} pieces on {} sheets of {sheet_length} x {sheet_width} in ({:.0}% used); wrote {}",
+                l.pieces.len(),
+                l.sheets.len(),
+                100.0 * l.utilization,
+                out.display()
+            );
         }
         Cmd::Race { result, params, out, measured } => {
             use jaguar::race;

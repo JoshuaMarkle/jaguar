@@ -456,7 +456,8 @@ fn box_pockets_are_sealed_voids_under_a_cover_and_behind_a_bulkhead() {
     assert_eq!(comp.iter().max(), Some(&2));
     let mut vols = [0.0; 3];
     for (t, &k) in m.tris.iter().zip(&comp) {
-        let one = Mesh { verts: m.verts.clone(), tris: vec![*t], closed: false, brep: None };
+        let one =
+            Mesh { verts: m.verts.clone(), tris: vec![*t], closed: false, brep: None, inner_rows: None };
         vols[k] += one.volume();
     }
     let mut v = vols.to_vec();

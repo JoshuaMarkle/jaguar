@@ -193,6 +193,7 @@
   #plotctl button.pill { height: 24px; padding: 0 var(--s3); border-radius: 999px; border: 1px solid var(--hair); background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
   #plotctl button.pill.on { color: var(--ink); border-color: var(--ink); }
   #plotctl .muted { margin-left: var(--s1); }
+  #plotctl input.mfgn { width: 52px; height: 24px; }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
   /* Chart tabs, grouped: one segmented track per group (search, structure, hull, race). */
   /* Desktop mode (double-clicked JAGUAR): shown once the server has stopped. */
@@ -1212,9 +1213,9 @@ function pocketCover(group, x0, x1, gw, depth) {
 }
 
 // ---------- plot tabs ----------
-const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C(x)'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall map'], ['xsec', 'Sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race'], ['power', 'Power'], ['gz', 'Stability']];
+const TABS = [['cands', 'Candidates'], ['hull', 'Along hull'], ['stress', 'Stress'], ['dcx', 'D/C(x)'], ['fb', 'Freeboard'], ['checks', 'Checks'], ['map', 'Wall map'], ['xsec', 'Sections'], ['zones', 'Mix zones'], ['shape', 'Shape search'], ['race', 'Race'], ['power', 'Power'], ['gz', 'Stability'], ['mfg', 'Manufacture']];
 // Chart tabs by what they answer: the search, the structure of the winner, its hull, the race.
-const TAB_GROUPS = [['Search', ['cands', 'map', 'shape']], ['Structure', ['hull', 'stress', 'dcx', 'checks']], ['Hull', ['fb', 'xsec', 'zones']], ['Race', ['race']], ['Performance', ['power', 'gz']]];
+const TAB_GROUPS = [['Search', ['cands', 'map', 'shape']], ['Structure', ['hull', 'stress', 'dcx', 'checks']], ['Hull', ['fb', 'xsec', 'zones']], ['Race', ['race']], ['Performance', ['power', 'gz']], ['Manufacture', ['mfg']]];
 let tab = 'cands';
 const AXES = {
   weight: ['hull weight', 'lb', k => k.hull_weight_lb], dc: ['D/C', '-', k => k.verdict ? k.verdict.dc : null],
@@ -1234,8 +1235,9 @@ function buildTabs() {
   const xa = axSel.x || defaultX();
   $('plotctl').innerHTML = tab === 'cands' ? `<span class="muted">x</span><select id="axx">${opts(xa)}</select><span class="muted">y</span><select id="axy">${opts(axSel.y)}</select>
     <span class="hint" style="margin-left:auto">green = passes, grey = fails, red cross = analysis error, blue ring = winner</span>`
-    : CASE_TABS.includes(tab) ? casePills() : tab === 'race' ? raceCtl() : CURVE_TABS.includes(tab) ? curveCtl() : '';
+    : CASE_TABS.includes(tab) ? casePills() : tab === 'race' ? raceCtl() : tab === 'mfg' ? mfgCtl() : CURVE_TABS.includes(tab) ? curveCtl() : '';
   if (tab === 'race') raceWire();
+  if (tab === 'mfg') mfgWire();
   if (CURVE_TABS.includes(tab)) curveWire();
   if (CASE_TABS.includes(tab)) for (const b of $('plotctl').querySelectorAll('button[data-case]')) b.onclick = () => { const n = b.dataset.case; caseHidden.has(n) ? caseHidden.delete(n) : caseHidden.add(n); buildTabs(); drawPlot(); };
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
@@ -1454,7 +1456,7 @@ function drawPlot() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
-  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, zones: plotZones, shape: plotShape, race: plotRace, power: plotPower, gz: plotGz })[tab](ctx, W, H);
+  ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, zones: plotZones, shape: plotShape, race: plotRace, power: plotPower, gz: plotGz, mfg: plotMfg })[tab](ctx, W, H);
 }
 function plotCands(ctx, W, H) {
   if (!cands.length) return msg(ctx, W, H, 'Run an optimization to see candidates.');
@@ -1837,6 +1839,92 @@ async function raceGo() {
     if (r.ok) { raceRes = v; raceEv = Math.min(raceEv, v.events.length - 1); } else raceErr = `race failed (${r.status}): ${v.error || ''}`;
   } catch (e) { raceErr = 'race failed: ' + e.message; }
   raceBusy = false; buildTabs(); drawPlot();
+}
+// ---------- manufacture tab: POST /api/manufacture lays out the winner's male mold (src/manufacture.rs) ----------
+// Foam layers with hardboard between; the hardboard outlines packed onto sheets, one DXF per sheet.
+// Settings are a per-browser convenience (localStorage); a layout belongs to the result it was made from.
+const MFG_DEF = { orientation: 'flat', foam_in: 2, board_in: 0.125, sheet_length_in: 96, sheet_width_in: 48, gap_in: 0.25 };
+let mfgSpec = (() => { try { return { ...MFG_DEF, ...JSON.parse(store.get('mfg') || '{}') }; } catch (e) { return { ...MFG_DEF }; } })();
+let mfgRes = null, mfgFor = null, mfgView = 0, mfgBusy = false, mfgErr = '';
+const MFG_NUM = [['foam_in', 'foam', 'Foam sheet thickness, in (hand-shaped, not water-jet cut).'], ['board_in', 'board', 'Hardboard thickness, in.'],
+  ['sheet_length_in', 'sheet', 'Hardboard sheet length, in.'], ['sheet_width_in', '×', 'Hardboard sheet width, in.'], ['gap_in', 'gap', 'Least space between pieces and from the sheet edge, in (water-jet kerf and lead-ins).']];
+const mfgLive = () => mfgRes && mfgFor === result ? mfgRes : null;
+function mfgCtl() {
+  const m = mfgLive(), win = !!(result && result.winner);
+  const nums = MFG_NUM.map(([k, l, t]) => `<span class="muted" title="${t}">${l}</span><input type="number" class="mfgn" id="mfg.${k}" step="any" min="0" value="${mfgSpec[k]}" title="${t}">`).join('');
+  const views = m ? `<span class="muted">view</span><select id="mfgview">${['Stack', ...m.sheets.map((s, i) => `Sheet ${i + 1} (${s.parts.length})`)].map((t, i) => `<option value="${i}" ${i === mfgView ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <button type="button" class="btn" id="mfgdxf" ${mfgView ? '' : 'disabled'} title="This sheet as DXF (inches; layer CUT = outlines, LABEL = names and marks, SHEET = sheet edge)">DXF</button>
+    <button type="button" class="btn" id="mfgall" title="Every sheet, one DXF each">All DXF</button>` : '';
+  return `<select id="mfg.orientation" title="Hardboard laid flat between foam layers, or standing upright across the canoe like ribs"><option value="flat" ${mfgSpec.orientation === 'flat' ? 'selected' : ''}>layers flat</option><option value="vertical" ${mfgSpec.orientation === 'vertical' ? 'selected' : ''}>layers upright</option></select>${nums}
+    <button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out boards'}</button>${views}`;
+}
+function mfgWire() {
+  const save = () => store.set('mfg', JSON.stringify(mfgSpec));
+  $('mfg.orientation').onchange = e => { mfgSpec.orientation = e.target.value; save(); };
+  for (const [k] of MFG_NUM) $('mfg.' + k).onchange = e => { const v = Number(e.target.value); if (isFinite(v) && v >= 0) { mfgSpec[k] = v; save(); } };
+  $('mfggo').onclick = mfgGo;
+  const v = $('mfgview'); if (v) v.onchange = e => { mfgView = Number(e.target.value); buildTabs(); drawPlot(); };
+  const d = $('mfgdxf'); if (d) d.onclick = () => mfgSave(mfgView - 1);
+  const a = $('mfgall'); if (a) a.onclick = async () => { for (let k = 0; k < mfgRes.dxf.length; k++) { mfgSave(k); await new Promise(r => setTimeout(r, 300)); } };
+}
+function mfgSave(k) {
+  const f = mfgRes && mfgRes.dxf[k]; if (!f) return;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([f.text], { type: 'application/dxf' })); a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function mfgGo() {
+  mfgBusy = true; mfgErr = ''; buildTabs(); drawPlot();
+  const at = result;
+  try {
+    const r = await fetch('/api/manufacture', { method: 'POST', body: JSON.stringify(mfgSpec) });
+    const v = await r.json();
+    if (r.ok) { mfgRes = v; mfgFor = at; mfgView = Math.min(mfgView, v.sheets.length); } else { mfgRes = null; mfgErr = `layout failed (${r.status}): ${v.error || ''}`; }
+  } catch (e) { mfgRes = null; mfgErr = 'layout failed: ' + e.message; }
+  mfgBusy = false; buildTabs(); drawPlot();
+}
+function plotMfg(ctx, W, H) {
+  const m = mfgLive();
+  if (!m) return msg(ctx, W, H, mfgBusy ? 'Laying out the mold boards...' : mfgErr
+    || (result && result.winner ? 'Set the foam, hardboard and sheet sizes, then press "Lay out boards".' : 'Run an optimization first, then lay out its mold.'));
+  const s = m.stack, sp = m.spec, flat = sp.orientation === 'flat', used = (100 * m.utilization).toFixed(0);
+  ctx.fillStyle = C.muted; ctx.font = font(11);
+  ctx.fillText(`Male mold, upside down on the gunwale: ${s.boards} hardboard ${flat ? 'layers' : 'ribs'} (${m.pieces.length} pieces) between ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}, ${s.height_in.toFixed(2)} in ${flat ? 'high' : 'long'}. Inner surface = hull less the ${s.wall_in} in wall. ${m.sheets.length} sheets of ${sp.sheet_length_in} × ${sp.sheet_width_in} in, ${used}% used.`, 12, 16);
+  const poly = (pts, X, Y) => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.closePath(); };
+  if (mfgView > 0) {
+    const sh = m.sheets[mfgView - 1], L = sp.sheet_length_in, Wd = sp.sheet_width_in;
+    const sc = Math.min((W - 40) / L, (H - 60) / Wd), ox = (W - L * sc) / 2, oy = 34 + (H - 50 - Wd * sc) / 2 + Wd * sc;
+    const X = x => ox + x * sc, Y = y => oy - y * sc;
+    ctx.strokeStyle = C.muted; ctx.strokeRect(X(0), Y(Wd), L * sc, Wd * sc);
+    for (const p of sh.parts) {
+      const pc = m.pieces[p.piece];
+      poly(p.outline, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.lineWidth = 1; ctx.stroke();
+      ctx.strokeStyle = C.faint; for (const [a, b] of p.marks) { ctx.beginPath(); ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); ctx.stroke(); }
+      ctx.save(); ctx.translate(X(p.text_at[0]), Y(p.text_at[1])); ctx.rotate(-p.text_deg * Math.PI / 180);
+      ctx.fillStyle = C.ink; ctx.font = font(Math.max(8, Math.min(11, pc.text_h * sc * 1.2))); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(pc.label, 0, 0); ctx.restore();
+    }
+    ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left'; ctx.fillStyle = C.muted;
+    ctx.fillText(`Sheet ${mfgView} of ${m.sheets.length}: ${sh.parts.length} pieces, ${(100 * sh.used_in2 / (L * Wd)).toFixed(0)}% used. Grey lines: centreline and 12 in station ticks (LABEL layer: etch or skip).`, 12, H - 8);
+    return;
+  }
+  // Stack view. Flat: each board in plan, floor (gunwale, L1) at the bottom, the joints between pieces
+  // visible. Upright: the ribs in side view, each from the floor to the inner keel.
+  if (flat) {
+    const xs = m.pieces.flatMap(p => p.outline.map(q => q[0])), x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const n = m.layers.length, rowH = (H - 50) / n, yMax = Math.max(...m.pieces.flatMap(p => p.outline.map(q => Math.abs(q[1])))) || 1;
+    const sc = Math.min((W - 110) / (x1 - x0), (rowH - 6) / (2 * yMax));
+    m.layers.forEach((ly, i) => {
+      const cy = H - 22 - rowH * (i + 0.5), X = x => 90 + (x - x0) * sc, Y = y => cy - y * sc;
+      ctx.fillStyle = C.soft; ctx.textAlign = 'left'; ctx.fillText(`${ly.label}  ${ly.pos_in.toFixed(2)} in`, 8, cy + 4);
+      for (const pi of ly.pieces) { poly(m.pieces[pi].outline, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.stroke(); }
+    });
+    ctx.fillStyle = C.muted; ctx.fillText('Boards from the floor (gunwale, L1) up toward the keel; height = underside of the board above the floor. Bow at left.', 12, H - 6);
+  } else {
+    const xs = m.layers.map(l => l.cut_in), hs = m.pieces.map(p => Math.max(...p.outline.map(q => q[1])));
+    const r = { l: 64, t: 34, w: W - 84, h: H - 80 };
+    const a = axes(ctx, r, [Math.min(...xs), Math.max(...xs)], [0, Math.max(...hs) * 1.1], 'x from bow, in', 'rib height above floor, in');
+    ctx.strokeStyle = C.ink; m.layers.forEach((l, i) => { ctx.beginPath(); ctx.moveTo(a.px(l.cut_in), a.py(0)); ctx.lineTo(a.px(l.cut_in), a.py(hs[i])); ctx.stroke(); });
+  }
 }
 // Interpolate a column of rows sorted by column `k` at value v: returns [row index, fraction].
 function bracket(rows, k, v) {

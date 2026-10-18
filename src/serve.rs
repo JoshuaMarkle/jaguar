@@ -85,6 +85,12 @@
 //!   Races the last result's winner (`race::run`, docs/SPEC.md "Race simulator") and returns
 //!   the jaguar-race/1 JSON. Synchronous (a few seconds). 404 if no
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
+//! * `POST /api/manufacture` body = JSON `manufacture::MoldSpec` (fields left out take their
+//!   defaults: flat layers, 2 in foam, 1/8 in hardboard, 96 x 48 in sheets, 1/4 in gap). Lays out
+//!   the last result's winner as hardboard mold boards (`manufacture.rs`) and returns the
+//!   jaguar-mold/1 layout plus "dxf": [{"name", "text"}], one R12 DXF per sheet. Synchronous
+//!   (about a second). 400 bad spec, 404 no result yet, 409 a run is going or no winner, 422 if
+//!   the layout fails (a piece fits no sheet).
 //!
 //! * `GET  /api/session`   -> {"app": "jaguar", "version", "desktop": bool, "folder": str|null}.
 //!   `desktop` = started by a double-click (`launch.rs`); `folder` = its canoe folder. The
@@ -385,6 +391,7 @@ impl App {
             ("DELETE", "/api/runs") => self.delete_run(query),
             ("POST", "/api/runs/open") => self.open_run(query),
             ("POST", "/api/race") => self.race(body),
+            ("POST", "/api/manufacture") => self.manufacture(body),
             ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/stop") => {
                 let mut s = self.lock();
                 if s.state != "running" {
@@ -446,6 +453,7 @@ impl App {
                 | "/api/runs/open"
                 | "/api/export"
                 | "/api/race"
+                | "/api/manufacture"
                 | "/api/pause"
                 | "/api/resume"
                 | "/api/stop"
@@ -771,6 +779,43 @@ impl App {
             .and_then(|r| Ok(serde_json::to_string(&r)?))
         {
             Ok(s) => (200, "application/json", s),
+            Err(e) => err_reply(422, format!("{e:#}")),
+        }
+    }
+
+    /// `POST /api/manufacture`: mold boards of the last winner.
+    fn manufacture(&self, body: &str) -> Reply {
+        use crate::manufacture;
+        let spec: manufacture::MoldSpec =
+            match serde_json::from_str(if body.trim().is_empty() { "{}" } else { body }) {
+                Ok(s) => s,
+                Err(e) => return err_reply(400, format!("mold settings: {e}")),
+            };
+        let (state, result) = {
+            let s = self.lock();
+            (s.state, s.result.clone())
+        };
+        if state == "running" {
+            return err_reply(409, "a run is going: lay out its winner when it is done");
+        }
+        let Some(result) = result else {
+            return err_reply(404, "no result yet: run first");
+        };
+        if !serde_json::from_str::<serde_json::Value>(&result)
+            .is_ok_and(|v| v["winner"]["candidate"].is_object())
+        {
+            return err_reply(409, "the result has no winner: nothing to build");
+        }
+        let built = manufacture::from_result(&result, &spec).and_then(|l| {
+            let dxf = (0..l.sheets.len())
+                .map(|k| Ok(serde_json::json!({"name": manufacture::dxf_name(&l, k), "text": manufacture::to_dxf(&l, k)?})))
+                .collect::<Result<Vec<_>>>()?;
+            let mut v = serde_json::to_value(&l)?;
+            v["dxf"] = serde_json::Value::Array(dxf);
+            Ok(v)
+        });
+        match built {
+            Ok(v) => json_reply(200, v),
             Err(e) => err_reply(422, format!("{e:#}")),
         }
     }
@@ -1257,6 +1302,29 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("mix.csv.bak")).unwrap(), orig);
         let v: serde_json::Value = serde_json::from_str(&a.handle("GET", "/api/mix", "").2).unwrap();
         assert_eq!(v["points"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn manufacture_lays_out_the_winner() {
+        let a = app();
+        assert_eq!(a.handle("POST", "/api/manufacture", "").0, 404, "no result yet");
+        a.lock().result = Some(std::fs::read_to_string("examples/result.json").unwrap());
+        assert_eq!(a.handle("POST", "/api/manufacture", r#"{"bogus": 1}"#).0, 400);
+        let (st, ct, out) = a.handle("POST", "/api/manufacture", r#"{"orientation": "vertical"}"#);
+        assert_eq!((st, ct), (200, "application/json"), "{out}");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["format"], crate::manufacture::MOLD_FORMAT);
+        assert_eq!(v["spec"]["foam_in"], 2.0, "defaults fill what the body leaves out");
+        let dxf = v["dxf"].as_array().unwrap();
+        assert_eq!(dxf.len(), v["sheets"].as_array().unwrap().len());
+        assert!(dxf[0]["text"].as_str().unwrap().ends_with(
+            "EOF
+"
+        ));
+        let tiny = r#"{"sheet_length_in": 10, "sheet_width_in": 10}"#;
+        assert_eq!(a.handle("POST", "/api/manufacture", tiny).0, 422, "pieces fit no sheet");
+        a.lock().state = "running";
+        assert_eq!(a.handle("POST", "/api/manufacture", "{}").0, 409);
     }
 
     #[test]
