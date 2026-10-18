@@ -1313,7 +1313,7 @@ function hbAt(h, x, z, flare, gw, depth) {
   const uncut = (xx, zz) => {
     if (zz <= dd) return L.breadth(xx, zz);
     const t = L.breadth(xx, dd);
-    return gw && depth > dd ? t + (gw.hb(xx) - t) * Math.min(1, (zz - dd) / (depth - dd)) : t > 0 ? t + (zz - dd) * Math.tan(flare * Math.PI / 180) : t;
+    return gw && depth > dd ? t + (gw.hb(xx) - t) * Math.min(1, (zz - dd) / (depth - dd)) : t + (zz - dd) * Math.min(Math.tan(flare * Math.PI / 180), t / Math.max(depth - dd, 1e-9));
   };
   if (h.stem) {
     const k = L.tableKeel(x), kc = L.keelAt(x);

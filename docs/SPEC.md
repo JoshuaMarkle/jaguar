@@ -126,7 +126,11 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    waterline to waterline, and the table top is the plain linear blend. 0 below K. (Up to
    2026-10-15 the table was blended at fixed heights: the keel sat at the lower station's height
    for a whole interval and then stepped, up to 0.4 in on off1.) Topsides above `draft_design` are
-   extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`.
+   extended to the mold depth D (10 extra waterlines), vertical or leaning out by `hull.flare_deg`,
+   but by at most the waterline half-breadth at the gunwale (sheer <= 2x waterline), so the stem
+   stays a sharp line up to the gunwale (until 2026-10-18 a tip with a sliver of waterline got the
+   full flare: a flat face 2 (D - draft) tan(flare) wide above the water, 0.74 in at 3 deg over 7 in).
+   Unchanged wherever the waterline half-breadth is at least (D - draft) tan(flare).
    Optional constructable gunwale (`hull.gunwale_radius_in` = R, or `shape_search.gunwale_radius_in`
    = [min, max] searched as a shape variable): in top view the gunwale runs straight from the bow
    tip, tangent onto one arc of radius R, then straight to the stern tip (`hull::Gunwale`); each

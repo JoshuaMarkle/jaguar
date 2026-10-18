@@ -548,8 +548,7 @@ impl Grid {
             let t = loft.breadth(x, dd);
             match &gunwale {
                 Some(gw) => t + (gw.half_breadth(x) - t) * (z - dd) / (depth - dd),
-                None if t > 0.0 => t + (z - dd) * flare,
-                None => t,
+                None => flared(t, z - dd, depth - dd, flare),
             }
         };
         g.cut_stem(&loft, uncut);
@@ -592,8 +591,8 @@ impl Grid {
 
     /// Like [`Grid::build`], but the topsides above the design waterline lean
     /// OUTWARD by `flare_deg` from vertical: half-breadth grows by
-    /// `(z - draft_design) * tan(flare)` at every station that has a waterline
-    /// (stations with zero top half-breadth, the stem tips, stay closed).
+    /// `(z - draft_design) * tan(flare)` at every station that has a waterline, less near the
+    /// tips ([`flared`]: the stem stays a sharp line up to the gunwale).
     /// 0 = vertical sides (as in the golden reference). Flare adds wall area (weight), raises
     /// reserve buoyancy and widens the gunwale (stability, freeboard).
     pub fn build_flared(hull: &Hull, depth: f64, n: usize, flare_deg: f64) -> Grid {
@@ -629,17 +628,20 @@ impl Grid {
             let c = loft.col(xi);
             let top = loft.at(&c, dd);
             for k in 0..nz {
-                y[i * nz + k] = if z[k] <= dd {
-                    loft.at(&c, z[k])
-                } else if top > 0.0 {
-                    top + (z[k] - dd) * flare
-                } else {
-                    top
-                };
+                y[i * nz + k] =
+                    if z[k] <= dd { loft.at(&c, z[k]) } else { flared(top, z[k] - dd, depth - dd, flare) };
             }
         }
         Grid { x, z, y, depth }
     }
+}
+
+/// Flared topside half-breadth `dz` above the table top, whose half-breadth is `top`, on a
+/// topside `rise` tall: leaning out by `flare` (tan), but at most `top` more at the gunwale, so a
+/// tip with a sliver of waterline stays a sharp stem instead of a flat face as wide as the flare
+/// (0.74 in at 3 deg over 7 in). Unchanged wherever top >= rise * flare; 0 at a closed tip.
+fn flared(top: f64, dz: f64, rise: f64, flare: f64) -> f64 {
+    top + dz * flare.min(top / rise.max(1e-9))
 }
 
 pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
@@ -955,6 +957,27 @@ mod tests {
         let want = (14.0 - h.draft_design) * 10f64.to_radians().tan();
         assert!((gunwale - want).abs() < 1e-9, "{gunwale} vs {want}");
         assert_eq!(f.y(0, f.nz() - 1), 0.0, "closed stem stays closed");
+    }
+
+    #[test]
+    fn flare_keeps_the_stem_sharp_above_the_waterline() {
+        // Stations a hair from the tips have a sliver of waterline: the full flare there would
+        // make the stem a flat face (2 (D - draft) tan(flare) wide) from the waterline up.
+        let h = Hull::load(Path::new("tests/golden/off1_hull.json")).unwrap();
+        let nw = h.z.len();
+        let xs = [1e-3, 0.05 * h.length, 0.5 * h.length, h.length - 1e-3];
+        let ts = Topsides { flare_deg: 10.0, ..Topsides::default() };
+        let (g, why) = Grid::build_topsides_at(&h, 14.0, &xs, ts);
+        assert!(why.is_none());
+        let full = (14.0 - h.draft_design) * 10f64.to_radians().tan();
+        for (i, x) in xs.iter().enumerate() {
+            let (wl, sheer) = (g.y(i, nw - 1), g.y(i, g.nz() - 1));
+            assert!(sheer <= 2.0 * wl + 1e-12, "x {x}: sheer {sheer} vs waterline {wl}");
+            if wl >= full {
+                assert!((sheer - wl - full).abs() < 1e-9, "full flare where the waterline is wide");
+            }
+        }
+        assert!(g.y(0, g.nz() - 1) < 0.05, "tip sheer {} in", g.y(0, g.nz() - 1));
     }
 
     #[test]
