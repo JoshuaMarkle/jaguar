@@ -9,8 +9,6 @@
 #   form one tested mix (strength_model = "tested_mixes"); add a mix_id column to override.
 # Edit or add rows here; JAGUAR fits final split tensile vs density from this file.
 mix,cured_days,density_pcf,split_tensile_psi,fraction_of_final,note,flexural_psi,compressive_psi
-M2 A,,56.40764331,190.6666667,1,set 2026-09-27; dry density 50.90 pcf,,866.3893333
-M2 B,,54.85987261,193.3333333,1,,,878.5066667
-M2 A.2,,63.65,282.6666667,1,,,1284.437333
 M4 A,,65.35031847,313.3333333,1,,,1423.786667
 M5,,58.17652411,224.4444444,1,,,1019.875556
+M2 Avg,,58.30583864,222.2222222,1,,,1009.777778
