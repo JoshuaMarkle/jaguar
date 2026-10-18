@@ -517,6 +517,7 @@ mod tests {
             girth: 41,
             pocket_in: None,
             layers: None,
+            filled: false,
         };
         parse_stl(&to_stl(&build_mesh(&off1(), &spec).unwrap(), "off1")).unwrap()
     }
@@ -613,6 +614,7 @@ mod tests {
             girth: 41,
             pocket_in: Some(30.0),
             layers: Some(2),
+            filled: false,
         };
         let step = crate::export::to_step(&build_mesh(&off1(), &spec).unwrap(), "off1");
         let (tris, units, what) = read_cad("STEP", step.as_bytes()).unwrap();

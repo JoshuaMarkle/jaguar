@@ -1593,6 +1593,7 @@ mod tests {
             girth: 41,
             pocket_in: pocket,
             layers: Some(2),
+            filled: false,
         }
     }
 

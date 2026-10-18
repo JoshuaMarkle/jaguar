@@ -14,7 +14,7 @@ jaguar mix    [data/mix_tests.csv]             print lab points and the strength
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
 jaguar import-mesh canoe.step|canoe.stp|canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
-jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets]
+jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets] [--filled]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
@@ -431,7 +431,15 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   pocket shorter than the solid end at the export's station spacing is an error (use more
   `--stations`, or `--no-pockets`).
 * A flat bottom (lowest offset at the keel height) keeps its chine corner.
-* `GET /api/export?format=step|stl` in the web UI exports the last run's winner (with pockets; stations refined below the pocket length).
+* **Unshelled** (`--filled`): the outer hull filled in, closed by a flat deck at the mold depth
+  (and a planar end over a station that is not a stem line), one solid with no wall or pockets:
+  for measuring freeboard and displacement in CAD. STEP: the outer B-spline faces and the deck
+  plane as a `MANIFOLD_SOLID_BREP`. Its volume is the analysis grid's to the mold depth within 1%.
+* `GET /api/export?format=step|stl[&shell=pockets|wall|filled]` in the web UI exports the last
+  run's winner. The Export STEP / Export STL buttons give the complete shelled canoe with its air
+  pockets (`pockets`, the default; stations refined below the pocket length); their dropdown arrow
+  also gives the shelled wall without pockets (`wall`, as `--no-pockets`, file `<hull>_no_pockets`)
+  and the unshelled canoe (`filled`, as `--filled`, file `<hull>_filled`).
 * **PDF report** (web UI only, `Export PDF` beside STEP/STL): built in the browser from the last
   result and printed via the print dialog's "Save as PDF" (no server endpoint, no dependency).
   Page 1: snapshot of the 3D canoe top left, weight and verification, winner stats, checks, load

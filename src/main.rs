@@ -122,6 +122,9 @@ enum Cmd {
         /// Leave out the air pocket bulkheads (result.json with [flotation])
         #[arg(long)]
         no_pockets: bool,
+        /// Unshelled: the outer hull filled in to the mold depth, one solid (no wall, no pockets)
+        #[arg(long)]
+        filled: bool,
     },
     /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
     /// and recommended drag-objective weightings (src/race.rs).
@@ -369,6 +372,7 @@ fn main() -> Result<()> {
             stations,
             girth,
             no_pockets,
+            filled,
         } => {
             use jaguar::export;
             let text = std::fs::read_to_string(&input)?;
@@ -391,6 +395,7 @@ fn main() -> Result<()> {
                         girth,
                         pocket_in: None,
                         layers: None,
+                        filled: false,
                     },
                 )
             };
@@ -406,8 +411,12 @@ fn main() -> Result<()> {
             if gunwale_radius.is_some() {
                 spec.gunwale_radius_in = gunwale_radius;
             }
-            if no_pockets {
+            if no_pockets || filled {
                 spec.pocket_in = None;
+            }
+            if filled {
+                spec.thickness_in = None;
+                spec.filled = true;
             }
             let pockets = spec.pocket_in.filter(|&l| l > 0.0 && spec.thickness_in.is_some());
             let fmt = format
@@ -423,12 +432,22 @@ fn main() -> Result<()> {
             println!(
                 "wrote {} ({}, {} facets, {:.1} x {:.1} x {:.1} in{})",
                 out.display(),
-                if mesh.closed { "solid" } else { "mold surface" },
+                if spec.filled {
+                    "filled hull"
+                } else if mesh.closed {
+                    "solid"
+                } else {
+                    "mold surface"
+                },
                 mesh.tris.len(),
                 hi[0] - lo[0],
                 hi[1] - lo[1],
                 hi[2] - lo[2],
-                if mesh.closed { format!(", wall volume {:.0} in^3", mesh.volume()) } else { String::new() }
+                match (spec.filled, mesh.closed) {
+                    (true, _) => format!(", volume to the mold depth {:.0} in^3", mesh.volume()),
+                    (false, true) => format!(", wall volume {:.0} in^3", mesh.volume()),
+                    _ => String::new(),
+                }
             );
             if let (Some(l), Some(b)) = (pockets, spec.bulkhead_in()) {
                 let one = match spec.layers {

@@ -100,6 +100,7 @@ fn the_whole_build_chain_stays_symmetric() {
         girth: 41,
         pocket_in: Some(12.0),
         layers: Some(2),
+        filled: false,
     };
     let m = jaguar::export::build_mesh(&h, &spec).unwrap();
     let key =

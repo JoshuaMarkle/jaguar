@@ -44,6 +44,7 @@ fn spec(depth: f64, t: Option<f64>) -> ExportSpec {
         girth: 41,
         pocket_in: None,
         layers: None,
+        filled: false,
     }
 }
 
@@ -106,6 +107,54 @@ fn surface_is_open_and_stl_matches() {
     let stl = to_stl(&m, "off1");
     assert_eq!(stl.len(), 84 + 50 * m.tris.len());
     assert_eq!(u32::from_le_bytes(stl[80..84].try_into().unwrap()) as usize, m.tris.len());
+}
+
+/// Volume inside the analysis grid's mold line up to the mold depth (trapz in z, then x), in^3.
+fn grid_volume(h: &Hull, s: &ExportSpec) -> f64 {
+    let g = Grid::build_flared(h, s.depth_in, s.stations, s.flare_deg);
+    let area: Vec<f64> = (0..g.nx())
+        .map(|i| {
+            let y = g.row(i);
+            (1..g.z.len()).map(|k| (y[k] + y[k - 1]) * (g.z[k] - g.z[k - 1])).sum()
+        })
+        .collect();
+    (1..g.nx()).map(|i| 0.5 * (area[i] + area[i - 1]) * (g.x[i] - g.x[i - 1])).sum()
+}
+
+#[test]
+fn filled_box_is_the_hull_volume_to_the_deck() {
+    // 20 wide x 12 deep, ends tapering to zero over one 5 in table spacing each: 240 in^2 over
+    // 90 in plus two wedges of half that over 5 in each.
+    let h = boxy(100.0, 10.0, 6.0);
+    let m = build_mesh(&h, &ExportSpec { filled: true, ..spec(12.0, None) }).unwrap();
+    assert!(m.closed && watertight(&m));
+    let v = m.volume();
+    assert!((v / (240.0 * 95.0) - 1.0).abs() < 0.01, "filled volume {v:.0} in^3");
+    let (lo, hi) = m.bbox();
+    assert!(lo[2].abs() < 1e-9 && (hi[2] - 12.0).abs() < 1e-9);
+}
+
+#[test]
+fn off1_filled_is_a_smooth_solid_of_the_hull_volume() {
+    let h = off1();
+    let s = ExportSpec { filled: true, ..spec(12.0, None) };
+    let m = build_mesh(&h, &s).unwrap();
+    assert!(m.closed && watertight(&m), "filled hull must be a watertight solid");
+    // Same outer surface as the shelled export, so the same size.
+    let shell = build_mesh(&h, &spec(12.0, Some(0.375))).unwrap();
+    assert_eq!(m.bbox(), shell.bbox());
+    // Its volume is what the analysis grid holds to the mold depth (the solid is the smooth
+    // loft resampled by girth, the grid its waterline offsets).
+    let (v, vg) = (m.volume(), grid_volume(&h, &s));
+    assert!((v / vg - 1.0).abs() < 0.01, "filled {v:.0} vs grid {vg:.0} in^3");
+    assert!(v > shell.volume() * 5.0);
+    // STEP: one B-spline solid closed by the deck plane, no voids, no open shell.
+    let step = to_step(&m, "off1");
+    assert!(step.contains("MANIFOLD_SOLID_BREP") && step.contains("B_SPLINE_SURFACE"), "smooth solid");
+    assert!(!step.contains("OPEN_SHELL") && !step.contains("BREP_WITH_VOIDS"));
+    assert!(step.contains("PLANE("));
+    // A wall and filled at once is a contradiction.
+    assert!(build_mesh(&h, &ExportSpec { filled: true, ..spec(12.0, Some(0.375)) }).is_err());
 }
 
 #[test]

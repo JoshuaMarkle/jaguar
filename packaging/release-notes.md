@@ -2,6 +2,11 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.4.0
+* **Export options:** Export STEP and Export STL still give the complete shelled canoe with its
+  air pockets; the arrow next to each also gives the shelled canoe without air pockets, or the
+  unshelled canoe (the hull filled in to the gunwale, to check freeboard in CAD).
+
 ## New in 0.3.0
 * **Your work comes back:** reopening JAGUAR shows the last result again, not just your settings.
 * **Run history:** every finished run is kept. **History** (above the result) lists them with date,

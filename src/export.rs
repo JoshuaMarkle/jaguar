@@ -13,7 +13,9 @@
 //!   t in the section plane (mitred, capped at 2t). Near the bow and stern, where the offset wall
 //!   would close on itself, the end is solid concrete: the inner surface stops at the first/last
 //!   station with a proper hollow, a planar bulkhead closes it there, and a flat top covers the
-//!   solid end. A rim closes the sheer. `None`: the outer mold surface only, as an open shell.
+//!   solid end. A rim closes the sheer. `None`: the outer mold surface only, as an open shell,
+//!   or with `filled` the unshelled canoe: that surface closed by a flat deck at the mold depth
+//!   (and a planar end over any station that is not a stem line), one solid.
 //! * `pocket_in = Some(l)` (with a wall): the sealed bow/stern air pockets of the swamped-flotation
 //!   gate (`flotation.rs`: from each tip of the analysis grid, x0 and xn, inward l, interior up to
 //!   the mold depth). A solid bulkhead one casting layer thick (b = t / `layers`, or t when the
@@ -55,6 +57,10 @@ pub struct ExportSpec {
     /// Casting passes of the wall (`punching.layers`): the bulkheads are t / layers thick, one
     /// pass. None = the whole wall thickness t.
     pub layers: Option<u32>,
+    /// Unshelled: the outer hull filled in, closed by a flat deck at the mold depth, as one
+    /// solid (for measuring freeboard and displacement in CAD). Needs `thickness_in = None`;
+    /// air pockets are ignored.
+    pub filled: bool,
 }
 
 impl ExportSpec {
@@ -225,6 +231,7 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     ensure!(spec.girth >= 5 && spec.girth % 2 == 1, "girth points must be odd and >= 5, got {}", spec.girth);
     if let Some(t) = spec.thickness_in {
         ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
+        ensure!(!spec.filled, "a filled (unshelled) export has no wall thickness");
     }
     // The export draws what it is given; buildability limits were the run's to apply.
     let ts = crate::hull::Topsides {
@@ -348,7 +355,24 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             quad(&mut tris, a, b, b + 1, a + 1);
         }
     }
-    let closed = spec.thickness_in.is_some();
+    let closed = spec.thickness_in.is_some() || spec.filled;
+    if spec.filled {
+        // Deck at the mold depth: each cell's two sheer-to-sheer lines (a stem line's collapse
+        // to one point, the degenerate facet dropped by `clean`). A row that is not a stem line
+        // (a blunt end) gets a planar end fanned from its top centre.
+        for (r, (x, half)) in rows.iter().enumerate() {
+            ensure!((half[0].1 - z_top).abs() < 1e-9, "sheer below the mold depth at x = {x:.2} in");
+            if r + 1 < nr {
+                quad(&mut tris, outer[r], outer[r] + m - 1, outer[r + 1] + m - 1, outer[r + 1]);
+            }
+            if (r == 0 || r == nr - 1) && half.iter().any(|p| p.0.abs() > 1e-9) {
+                let c = push_row(*x, &[(0.0, z_top)]);
+                for j in 0..m - 1 {
+                    tris.push([c as u32, (outer[r] + j) as u32, (outer[r] + j + 1) as u32]);
+                }
+            }
+        }
+    }
     let (mut inner_net, mut voids): (Option<Vec<NetRow>>, Vec<VoidNet>) = (None, vec![]);
     let outer_net = rows.clone();
     if let Some(t) = spec.thickness_in {
@@ -531,7 +555,7 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     let stems =
         [&outer_net[0], &outer_net[outer_net.len() - 1]].iter().all(|r| r.1.iter().all(|p| p.0.abs() < 1e-9));
     let brep_ok = stems
-        && (!closed || inner_net.as_ref().is_some_and(|n| n.len() >= 2 && flat(n, z_top)))
+        && (spec.filled || !closed || inner_net.as_ref().is_some_and(|n| n.len() >= 2 && flat(n, z_top)))
         && voids.iter().all(|(zc, v)| v.len() >= 2 && flat(v, *zc));
     let brep = brep_ok.then_some(Brep { z_top, outer: outer_net, inner: inner_net, voids });
     let mut mesh = clean(Mesh { verts, tris, closed, brep });
@@ -980,7 +1004,8 @@ fn brep_faces(w: &mut StepW, b: &Brep, closed: bool) -> (Vec<usize>, Vec<Vec<usi
 }
 
 /// STEP AP214 (AUTOMOTIVE_DESIGN), length unit inch: a MANIFOLD_SOLID_BREP (BREP_WITH_VOIDS with
-/// air pockets) or, for the open mold surface, a SHELL_BASED_SURFACE_MODEL. With the structured
+/// air pockets; for a filled hull the outer surface and the deck plane) or, for the open mold
+/// surface, a SHELL_BASED_SURFACE_MODEL. With the structured
 /// nets (`mesh.brep`) the faces are cubic B-spline surfaces and planes sharing their boundary
 /// curves ([`Brep`]); otherwise the mesh's planar triangles.
 pub fn to_step(mesh: &Mesh, name: &str) -> String {
@@ -1156,6 +1181,7 @@ pub fn from_result(text: &str, stations: usize, girth: usize) -> Result<(Hull, E
         layers: serde_json::from_value::<crate::params::Punching>(v["params"]["punching"].clone())
             .ok()
             .and_then(|p| p.layer_count()),
+        filled: false,
     };
     Ok((hull, spec))
 }
@@ -1197,6 +1223,7 @@ mod tests {
             girth: 21,
             pocket_in: None,
             layers: None,
+            filled: false,
         };
         let m = build_mesh(&off1(), &spec).unwrap();
         assert!(!m.closed);
@@ -1217,6 +1244,7 @@ mod tests {
             girth: 21,
             pocket_in: None,
             layers: None,
+            filled: false,
         };
         assert!(build_mesh(&h, &ExportSpec { girth: 20, ..ok.clone() }).is_err());
         assert!(build_mesh(&h, &ExportSpec { depth_in: 0.0, ..ok.clone() }).is_err());
