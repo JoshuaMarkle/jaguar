@@ -2,6 +2,13 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.4.2
+* **No more kink at the bow and stern of searched hulls:** hulls with full ends (Bow/Stern
+  waterplane below 1) were drawn with a straight wedge from the tip and a corner about 5 in in.
+  Full ends now curve smoothly into a pointed tip, and the hull is stored with more stations near
+  each end, so the export, the 3D view and the analysis all follow the curve. Re-run the shape
+  search to get the new ends; saved designs keep their old shape.
+
 ## New in 0.4.1
 * **Smoother bow and stern in top view:** the sharp ends from 0.4.0 bent the gunwale in sharply in
   the last few inches (a hook at each tip). The side flare now eases in over about the last 15 in,
