@@ -637,11 +637,19 @@ impl Grid {
 }
 
 /// Flared topside half-breadth `dz` above the table top, whose half-breadth is `top`, on a
-/// topside `rise` tall: leaning out by `flare` (tan), but at most `top` more at the gunwale, so a
-/// tip with a sliver of waterline stays a sharp stem instead of a flat face as wide as the flare
-/// (0.74 in at 3 deg over 7 in). Unchanged wherever top >= rise * flare; 0 at a closed tip.
+/// topside `rise` tall: leaning out by `flare` (tan), eased in near the tips so a tip with a
+/// sliver of waterline stays a sharp stem instead of a flat face as wide as the flare (0.74 in at
+/// 3 deg over 7 in). With F = rise * flare (the full gunwale offset) and u = top / F, the offset is
+/// F s(u), s = u - u^2/4 up to u = 2, then 1: at most `top` (sheer <= 2x waterline), and C1 in
+/// `top`, so the gunwale has no corner where the full flare takes over. Unchanged wherever
+/// top >= 2 F; 0 at a closed tip.
 fn flared(top: f64, dz: f64, rise: f64, flare: f64) -> f64 {
-    top + dz * flare.min(top / rise.max(1e-9))
+    let f = rise * flare;
+    if f <= 0.0 {
+        return top;
+    }
+    let u = top / f;
+    top + dz * flare * if u >= 2.0 { 1.0 } else { u - 0.25 * u * u }
 }
 
 pub fn linspace(a: f64, b: f64, n: usize) -> Vec<f64> {
@@ -973,11 +981,30 @@ mod tests {
         for (i, x) in xs.iter().enumerate() {
             let (wl, sheer) = (g.y(i, nw - 1), g.y(i, g.nz() - 1));
             assert!(sheer <= 2.0 * wl + 1e-12, "x {x}: sheer {sheer} vs waterline {wl}");
-            if wl >= full {
+            if wl >= 2.0 * full {
                 assert!((sheer - wl - full).abs() < 1e-9, "full flare where the waterline is wide");
             }
         }
         assert!(g.y(0, g.nz() - 1) < 0.05, "tip sheer {} in", g.y(0, g.nz() - 1));
+    }
+
+    #[test]
+    fn flare_eases_in_without_a_corner() {
+        // The gunwale offset is C1 in the waterline half-breadth: no kink in top view where the
+        // full flare takes over (a hard cap min(top, F) turned 31 -> 17 deg there).
+        let (rise, flare) = (7.0, 3f64.to_radians().tan());
+        let f = rise * flare;
+        let sheer = |top: f64| flared(top, rise, rise, flare);
+        let slope = |top: f64| (sheer(top + 1e-7) - sheer(top - 1e-7)) / 2e-7;
+        assert_eq!(sheer(0.0), 0.0);
+        assert!((slope(1e-6) - 2.0).abs() < 1e-3, "sheer leaves the tip at 2x the waterline");
+        for k in 1..400 {
+            let top = 2.5 * f * k as f64 / 400.0;
+            assert!(sheer(top) <= 2.0 * top + 1e-12);
+            assert!((slope(top) - slope(top + 1e-5)).abs() < 1e-3, "corner at top = {top}");
+        }
+        assert_eq!(sheer(2.0 * f), 2.0 * f + f);
+        assert_eq!(flared(1.0, 7.0, 7.0, 0.0), 1.0, "no flare: unchanged");
     }
 
     #[test]

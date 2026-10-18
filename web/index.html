@@ -1308,12 +1308,17 @@ function loftOf(h) {
 // Half-breadth at (x, z): the loft up to the table top, then the topsides (flared, or ruled to the
 // gunwale gw built for `depth`, as hull.rs build_topsides). Over a stem radius (hull.rs Grid::cut_stem)
 // the column is that surface stretched from its keel K .. depth onto the arc K' .. depth.
+// Port of hull.rs flared: the flare eased in near the tips (sheer <= 2x waterline, no corner).
+function flaredHb(top, dz, rise, flare) {
+  const f = rise * flare; if (f <= 0) return top;
+  const u = top / f; return top + dz * flare * (u >= 2 ? 1 : u - 0.25 * u * u);
+}
 function hbAt(h, x, z, flare, gw, depth) {
   const L = loftOf(h), dd = h.draft_design;
   const uncut = (xx, zz) => {
     if (zz <= dd) return L.breadth(xx, zz);
     const t = L.breadth(xx, dd);
-    return gw && depth > dd ? t + (gw.hb(xx) - t) * Math.min(1, (zz - dd) / (depth - dd)) : t + (zz - dd) * Math.min(Math.tan(flare * Math.PI / 180), t / Math.max(depth - dd, 1e-9));
+    return gw && depth > dd ? t + (gw.hb(xx) - t) * Math.min(1, (zz - dd) / (depth - dd)) : flaredHb(t, zz - dd, depth - dd, Math.tan(flare * Math.PI / 180));
   };
   if (h.stem) {
     const k = L.tableKeel(x), kc = L.keelAt(x);
