@@ -2,6 +2,11 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.4.1
+* **Smoother bow and stern in top view:** the sharp ends from 0.4.0 bent the gunwale in sharply in
+  the last few inches (a hook at each tip). The side flare now eases in over about the last 15 in,
+  so the gunwale runs nearly straight into the tip. Re-run and re-export to get the new ends.
+
 ## New in 0.4.0
 * **Freeboard is checked like the RFP:** where the hull lettering sits, with the crew at their
   marked seats (static, at staging), against the rule minimum plus a staging margin.
