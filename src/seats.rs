@@ -145,7 +145,7 @@ pub fn score(params: &Params, v: &Verdict, gm_in: f64) -> f64 {
 fn utilization(params: &Params, dc: f64, fb: f64, gm: f64) -> f64 {
     let margin = |min: f64, v: f64| 1.0 - (v - min) / min.max(1.0);
     let u = (dc / params.gates.dc_search)
-        .max(margin(params.gates.freeboard_min_in, fb))
+        .max(margin(params.gates.freeboard_required_in(), fb))
         .max(margin(params.stability.gm_min_in, gm));
     if u.is_finite() { u } else { f64::INFINITY }
 }
@@ -201,12 +201,18 @@ impl<'a> Surrogate<'a> {
         let n = grid.nx();
         let x = grid.x.clone();
         let mut cap = [f64::NAN; 4];
+        // Freeboard where the gate looks. Lettering that does not fit makes the exact check
+        // fail the candidate; the surrogate (a seat heuristic) then just uses the whole hull.
+        let spans: Vec<[f64; 2]> = params
+            .freeboard_spans(x[n - 1])
+            .map(|s| s.iter().map(|s| [s.x0_in, s.x1_in]).collect())
+            .unwrap_or_default();
         let nn = if hi > lo { NODES } else { 1 };
         let nodes = (0..nn)
             .map(|j| {
                 let xe = if nn == 1 { lo } else { lo + (hi - lo) * j as f64 / (nn - 1) as f64 };
                 let service = solve(grid, sec, rho, &[CrewLoad { x_in: xe, lb: w_real }], patch, cg).ok()?;
-                let fb = crate::check::freeboard(grid, &service);
+                let fb = crate::check::freeboard_over(grid, &service, &spans).0;
                 let (mut v0, mut m0, mut hoop) = (Vec::new(), Vec::new(), Vec::new());
                 for &(dead, live) in &combos {
                     let ld = if (dead, live * mat.dynamic_load_factor) == (1.0, 1.0) {
@@ -262,21 +268,27 @@ impl<'a> Surrogate<'a> {
         Surrogate { params, x, st, lo, hi, nodes, lb, combos, cap }
     }
 
-    /// Surrogate score of knees at `seats` (`weights_lb` order): the worst of the nominal
-    /// seats and the whole crew moved forward / aft by the seat variance ([`shifted`]).
+    /// Surrogate score of knees at `seats` (`weights_lb` order): D/C and GM the worst of the
+    /// nominal seats and the whole crew moved forward / aft by the seat variance ([`shifted`]),
+    /// freeboard the worst over `gates.freeboard_seat_shift_in` (what the gate sees).
     fn score(&self, seats: &[f64]) -> f64 {
-        let v = self.params.seats.variance_in;
-        if v <= 0.0 {
-            return self.score_at(seats);
-        }
         let (x0, xl) = (self.x[0], self.x[self.x.len() - 1]);
-        [-v, 0.0, v]
-            .iter()
-            .map(|d| self.score_at(&seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect::<Vec<_>>()))
-            .fold(0.0, f64::max)
+        let at = |d: f64| self.parts(&seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect::<Vec<_>>());
+        let shifts = |v: f64| if v > 0.0 { vec![-v, 0.0, v] } else { vec![0.0] };
+        let (mut dc, mut gm, mut fb) = (0.0_f64, f64::INFINITY, f64::INFINITY);
+        for d in shifts(self.params.seats.variance_in) {
+            let Some((a, _, g)) = at(d) else { return f64::INFINITY };
+            (dc, gm) = (dc.max(a), gm.min(g));
+        }
+        for d in shifts(self.params.gates.freeboard_seat_shift_in) {
+            let Some((_, f, _)) = at(d) else { return f64::INFINITY };
+            fb = fb.min(f);
+        }
+        utilization(self.params, dc, fb, gm)
     }
 
-    fn score_at(&self, seats: &[f64]) -> f64 {
+    /// (D/C, freeboard, GM) at `seats`; None where the float could not be solved.
+    fn parts(&self, seats: &[f64]) -> Option<(f64, f64, f64)> {
         let w: f64 = self.lb.iter().sum();
         let xe = self.lb.iter().zip(seats).map(|(l, s)| l * s).sum::<f64>() / w;
         let (j, a) = if self.nodes.len() == 1 {
@@ -288,7 +300,7 @@ impl<'a> Surrogate<'a> {
             (j, u - j as f64)
         };
         let (Some(n0), Some(n1)) = (&self.nodes[j], &self.nodes[(j + 1).min(self.nodes.len() - 1)]) else {
-            return f64::INFINITY;
+            return None;
         };
         let patch = self.params.material.knee_patch_in;
         let [ft, fc, vc, fk] = self.cap;
@@ -308,7 +320,7 @@ impl<'a> Surrogate<'a> {
                 dc = dc.max(s_t / ft).max(s_c / fc).max(tau / vc).max(kupfer_dc(s_t, s_c, sy, tau, ft, fk));
             }
         }
-        utilization(self.params, dc, (1.0 - a) * n0.fb + a * n1.fb, (1.0 - a) * n0.gm + a * n1.gm)
+        Some((dc, (1.0 - a) * n0.fb + a * n1.fb, (1.0 - a) * n0.gm + a * n1.gm))
     }
 }
 

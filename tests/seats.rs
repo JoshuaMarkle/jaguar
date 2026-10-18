@@ -71,7 +71,13 @@ fn variance_is_never_less_conservative() {
         p.seats.variance_in = 6.0;
         let b = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
         assert!(b.verdict.dc >= a.verdict.dc && b.gm_in <= a.gm_in);
-        assert!(b.verdict.freeboard_in < a.verdict.freeboard_in, "shifting knees must cost freeboard");
+        // Freeboard is gated at the marked seats (gates.freeboard_seat_shift_in = 0): the
+        // strength variance does not move it, but its range shows the cost of shifted knees.
+        assert_eq!(b.verdict.freeboard_in, a.verdict.freeboard_in);
+        assert!(
+            b.freeboard.worst.freeboard_in < a.freeboard.worst.freeboard_in,
+            "shifting knees must cost freeboard"
+        );
         let bend = |v: &jaguar::check::Verdict| v.checks[0].dc;
         assert!(bend(&b.verdict) >= bend(&a.verdict));
     }
@@ -83,7 +89,11 @@ fn variance_is_never_less_conservative() {
     assert!(w6.candidate.hull_weight_lb >= w0.candidate.hull_weight_lb);
     for k in &w6.cases {
         assert_eq!(k.seat_variance_in, 6.0);
-        assert!(k.freeboard_in.unwrap() >= p.gates.freeboard_min_in, "{}: gate covers every case", k.name);
+        assert!(
+            k.freeboard_in.unwrap() >= p.gates.freeboard_required_in(),
+            "{}: gate covers every case",
+            k.name
+        );
     }
 }
 
@@ -96,21 +106,75 @@ fn freeboard_range_spans_the_seat_samples() {
     let x = [80.0, 160.0];
     let env = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
     let f = &env.freeboard;
-    // Expected = the nominal seats, worst = the gated value, best >= expected >= worst.
+    // Gated at the marked seats (shift 0): gate = expected; best >= expected > worst.
     assert_eq!(f.expected.seats_in, x.to_vec());
     assert_eq!(f.expected.freeboard_in, env.nominal.verdict.freeboard_in);
-    assert_eq!(f.worst.freeboard_in, env.verdict.freeboard_in);
+    assert_eq!((f.gate.freeboard_in, f.gate.seats_in.clone()), (f.expected.freeboard_in, x.to_vec()));
+    assert_eq!(env.verdict.freeboard_in, f.gate.freeboard_in);
+    assert_eq!(f.required_in, p.gates.freeboard_required_in());
     assert!(f.best.freeboard_in >= f.expected.freeboard_in && f.expected.freeboard_in > f.worst.freeboard_in);
     for a in [&f.expected, &f.best, &f.worst] {
-        // Freeboard = depth - highest local waterline (d + |trim| / 2 at an end).
-        assert!((a.freeboard_in - (g.depth - a.waterline_max_in)).abs() < 1e-12);
-        assert!((a.waterline_max_in - (a.draft_in + 0.5 * a.trim_in.abs())).abs() < 1e-9);
+        // No lettering: the whole hull; freeboard = depth - highest local waterline (d + |trim| / 2 at an end).
+        assert!((a.freeboard_in - (g.depth - a.waterline_in)).abs() < 1e-12);
+        assert!((a.waterline_in - (a.draft_in + 0.5 * a.trim_in.abs())).abs() < 1e-9);
+        assert_eq!(a.freeboard_in, a.hull_min_in);
         let e = eval_case(&p, &fit, &g, &s, 58.0, case, &a.seats_in).unwrap();
         assert_eq!(e.verdict.freeboard_in, a.freeboard_in, "reproduced at its seats");
     }
     // The worst sample moves every knee the same way (the most trim).
     let d: Vec<f64> = f.worst.seats_in.iter().zip(&x).map(|(a, b)| a - b).collect();
     assert!(d.iter().all(|v| (v.abs() - 6.0).abs() < 1e-9) && d.windows(2).all(|w| w[0] == w[1]), "{d:?}");
+    // Gated over the same shift as the strength variance: the gate is that worst sample.
+    p.gates.freeboard_seat_shift_in = 6.0;
+    let env6 = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
+    assert!((env6.freeboard.gate.freeboard_in - f.worst.freeboard_in).abs() < 1e-12);
+    assert_eq!(env6.verdict.freeboard_in, env6.freeboard.gate.freeboard_in);
+    // A 2 in shift sits in between.
+    p.gates.freeboard_seat_shift_in = 2.0;
+    let env2 = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
+    let g2 = env2.freeboard.gate.freeboard_in;
+    assert!(g2 < f.expected.freeboard_in && g2 > f.worst.freeboard_in, "{g2}");
+    // The margin adds to the rule minimum.
+    p.gates.freeboard_margin_in = 0.25;
+    assert_eq!(p.gates.freeboard_required_in(), p.gates.freeboard_min_in + 0.25);
+}
+
+#[test]
+fn freeboard_is_gated_where_the_lettering_sits() {
+    let (mut p, _, fit, g, s) = setup();
+    let l = g.x[g.nx() - 1];
+    let case = &p.load_cases[1];
+    // Off-centre knees: the canoe trims, one end is the lowest point of the hull.
+    let x = [80.0, 160.0];
+    let hull = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
+    assert!(hull.freeboard.gate.trim_in.abs() > 0.05, "{}", hull.freeboard.gate.trim_in);
+    assert!(hull.freeboard.gate.at_x_in == g.x[0] || hull.freeboard.gate.at_x_in == l);
+    p.lettering = Some(jaguar::params::Lettering {
+        school: "UVA".into(),
+        canoe_name: "JAGUAR".into(),
+        height_in: 5.0,
+        width_ratio: 1.0,
+        below_gunwale_in: 1.0,
+        end_margin_in: 24.0,
+    });
+    let spans = p.freeboard_spans(l).unwrap();
+    assert_eq!((spans[0].x0_in, spans[0].x1_in), (24.0, 39.0));
+    assert_eq!((spans[1].x0_in, spans[1].x1_in), (l - 24.0 - 30.0, l - 24.0));
+    let lett = eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).unwrap();
+    let f = &lett.freeboard.gate;
+    // Same float; gated at the lettering end nearest the low end, which sits higher than the tip.
+    assert_eq!((f.draft_in, f.trim_in), (hull.freeboard.gate.draft_in, hull.freeboard.gate.trim_in));
+    assert_eq!(f.at_x_in, if f.trim_in < 0.0 { 24.0 } else { l - 24.0 });
+    assert!(
+        f.freeboard_in > f.hull_min_in && (f.hull_min_in - hull.freeboard.gate.freeboard_in).abs() < 1e-12
+    );
+    let expect = g.depth - (f.draft_in + f.trim_in * (f.at_x_in - l / 2.0) / l);
+    assert!((f.freeboard_in - expect).abs() < 1e-12);
+    assert_eq!(lett.verdict.freeboard_in, f.freeboard_in);
+    assert_eq!(lett.freeboard.lettering, spans);
+    // Lettering longer than the hull: the case cannot be evaluated (an error, never a pass).
+    p.lettering.as_mut().unwrap().school = "x".repeat(60);
+    assert!(eval_envelope(&p, &fit, &g, &s, 58.0, case, &x, false).is_err());
 }
 
 #[test]
@@ -126,8 +190,8 @@ fn verification_rechecks_freeboard() {
     let r = optimize::run(&q, &h).unwrap();
     if let Some(w2) = r.winner {
         let fb = w2.cases.iter().map(|k| k.freeboard_in.unwrap()).fold(f64::INFINITY, f64::min);
-        assert!(!(w2.verified && fb < q.gates.freeboard_min_in), "verified below the freeboard gate");
-        if fb < q.gates.freeboard_min_in {
+        assert!(!(w2.verified && fb < q.gates.freeboard_required_in()), "verified below the freeboard gate");
+        if fb < q.gates.freeboard_required_in() {
             assert!(w2.verify_failure.unwrap().contains("freeboard"));
         }
     }

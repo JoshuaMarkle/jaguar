@@ -8,8 +8,8 @@
 | sleek.toml | sleek: racing, narrow | 240 x 19 | NO DESIGN | | | | best -1.09 | stability |
 | beamy.toml | beamy: wide, full | 230 x 28 | 0.375 | 58 | 10 | 103.5 | 10.3 | punching 0.90 |
 | barge.toml | barge: bad on purpose | 192 x 40 | 0.375 | 58 | 9 | 125.7 | 55.5 | punching 0.90 |
-| shape_opt.toml | shape search pick (entry 7.7 deg, rocker 4.6/4.2 in) | 216 x 23.6 (18 ft) | 0.375 | 58 | 13 | **84.8** | 1.30 | punching 0.90 |
-| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 430 in, waterline ends fore_wp 1.30 / aft_wp 1.60; 21.9 in at the waterline) | 216 x 24.4 overall (18 ft) | 0.375 | 58 | 12 | 87.9 | 0.76 | punching 0.90 |
+| shape_opt.toml | shape search pick (entry 8.3 deg, rocker 3.8/3.4 in) | 216 x 23.6 (18 ft) | 0.375 | 58 | 12 | **82.5** | 1.74 | punching 0.90 |
+| shape_gunwale.toml | shape search with the line-arc-line gunwale (R 430 in, waterline ends fore_wp 1.47 / aft_wp 1.60; 23.4 in at the waterline) | 228 x 26.0 overall (19 ft) | 0.375 | 58 | 11 | 89.1 | 2.64 | punching 0.90 |
 | shape_race.toml | shape search, race-time objective | 256 x 21.9 (21 ft 4 in) | 0.375 | 58 | 12 | 99.8 | 1.08 | punching 0.90 |
 
 All verified at 321 stations, on the smooth-keel loft (docs/SPEC.md Physics 1; until 2026-10-15
@@ -17,17 +17,21 @@ the table was blended at fixed heights, which put phantom hull under the rockere
 stations: off1 98.3 lb, shape search pick 86.8 lb, 216 x 19.6), with the default 4 in stem radius
 (sharp stems: off1 98.24 lb): 2-person crew 175 + 165 lb, crew CG 12 in, gm_min 0.25 in, two-knee
 punching with a 60/40 split, mesh at mid-wall (2 passes, docs/PUNCHING.md), auto seats checked at
-+/- 3 in (`[seats]` defaults; GM and freeboard are the worst seat corner). canoe.toml also checks
++/- 3 in (`[seats]` defaults; GM is the worst seat corner, freeboard is gated at the marked seats,
+`gates.freeboard_seat_shift_in` = 0, over the whole hull: the examples have no `[lettering]`). canoe.toml also checks
 a placeholder 2F crew (140 + 130 lb, never governs). Its 3M, 3F and 4_coed cases (placeholder
 weights) are commented out: with any of them off1 has no design, GM fails at crew CG 12 in
 (best 3M -0.71, 3F -0.01, 4_coed -1.10 in, with auto seats).
 
 * Seats: auto seats land within a few inches of even spacing on these hulls (the 2M auto order puts
-  the 175 lb paddler aft); punching governs, so they do not move a fixed-hull winner. The +/- 3 in
-  seat variance costs freeboard: the shape search pick is 83.8 lb without it (freeboard binds at
-  6.15 in), 84.8 lb with it (auto seats are scored at their worst forward / aft shift, so seats
-  that pass only at nominal are not picked). Freeboard, GM and drag carry the real crew weight
-  (the dynamic factor is for the stress checks only). At +/- 6 in the off1 winner jumps to 0.5 in, 63 pcf, 13 in deep, 151 lb (GM and freeboard).
+  the 175 lb paddler aft); punching governs, so they do not move a fixed-hull winner. Freeboard is
+  a static check at staging (RFP), so since 2026-10-18 it is gated at the marked seats, not at the
+  worst +/- 3 in seat corner: the shape search pick went from 84.8 lb (13 in deep, freeboard bound
+  at the shifted seats) to 82.5 lb (12 in deep, freeboard 6.01 in). The gunwale search lands on a
+  different shape (89.1 lb vs 87.9 lb before: a sampled search; the earlier 87.9 lb shape still
+  passes, freeboard only rises at the marked seats). Freeboard, GM and drag carry the real crew
+  weight (the dynamic factor is for the stress checks only). At +/- 6 in the off1 winner stays
+  98.2 lb (punching governs; freeboard 6.92 in at the marked seats, 6.41 in at the worst corner).
 
 * Punching needs about a 58 pcf mix (f'c about 1640 psi on the lab fit), so it sets the mix for
   every hull. Hull shape then only changes how much wall there is.

@@ -245,17 +245,19 @@ const font = (px, w = 450) => `${w} ${px}px ${FONT}`;
 
 function parseTomlBits(text) {
   // Just enough to read gates.dc_search and search.depth_in max for drawing.
-  let sec = '';
+  let sec = '', fbMin = null, fbMargin = 0;
   for (const line of text.split('\n')) {
     const l = line.replace(/#.*/, '').trim();
     const m = l.match(/^\[([^\]]+)\]$/); if (m) { sec = m[1]; continue; }
     const kv = l.match(/^(\w+)\s*=\s*(.+)$/); if (!kv) continue;
     if (sec === 'gates' && kv[1] === 'dc_search') dcGate = parseFloat(kv[2]);
-    if (sec === 'gates' && kv[1] === 'freeboard_min_in') fbGate = parseFloat(kv[2]);
+    if (sec === 'gates' && kv[1] === 'freeboard_min_in') fbMin = parseFloat(kv[2]);
+    if (sec === 'gates' && kv[1] === 'freeboard_margin_in') fbMargin = parseFloat(kv[2]) || 0;
     if (sec === 'stability' && kv[1] === 'gm_min_in') gmGate = parseFloat(kv[2]);
     if (sec === 'objective' && kv[1] === 'kind') objKind = kv[2].replace(/"/g, '').trim();
     if (sec === 'search' && kv[1] === 'depth_in') { try { searchDepthMax = JSON.parse(kv[2])[1]; } catch (e) {} }
   }
+  if (fbMin != null) fbGate = fbMin + fbMargin;
 }
 
 // ---------- layout: draggable sidebar and plot pane, sizes kept in localStorage ----------
@@ -322,7 +324,9 @@ const FIELDS = {
   gates: [
     ['dc_search', 'D/C gate (search)', '-', 'Demand/capacity a candidate must stay under on the search grid. Must be <= the verify gate.', 'any', 0],
     ['dc_verify', 'D/C gate (verify)', '-', 'D/C the winner must stay under when re-run at 2n-1 stations. At most 1.0.', 'any', 0],
-    ['freeboard_min_in', 'Min freeboard', 'in', 'Minimum loaded freeboard (gunwale above water) at the worst station.', 'any', 0],
+    ['freeboard_min_in', 'Min freeboard (rule)', 'in', 'Minimum loaded freeboard, gunwale above water, from the RFP: 6 in less its 0.25 in tolerance = 5.75. Checked at the lettering (Lettering section), else at the lowest point of the hull.', 'any', 0],
+    ['freeboard_margin_in', 'Freeboard margin', 'in', 'Added to the rule minimum for how the judges stage the crew. Gate = min freeboard + margin.', 'any', 0],
+    ['freeboard_seat_shift_in', 'Freeboard seat shift', 'in', 'The RFP freeboard check is static, at staging, with the crew at their marked seats (0). A shift checks freeboard with the whole crew moved this far forward and aft too (e.g. 2-3 in). Independent of the seat variance the strength checks use.', 'any', 0],
     ['thickness_min_buildable_in', 'Thinnest buildable wall', 'in', 'Thinnest wall the team can actually cast. Thinner candidates are never generated.', 'any', 0]],
 };
 // Shape search bounds: [key, label, unit, tooltip, default [min, max]]. Meanings from hullgen.rs ShapeParams.
@@ -360,15 +364,45 @@ const SYM_T = 'Doubly symmetric canoe, for manufacturability (one end mold makes
 // objective.displacements presets: [crew_lb, share of race distance].
 const DISP_PRESETS = { regionals: [[350, 0.75], [700, 0.25]], nationals: [[350, 0.60], [525, 0.20], [700, 0.20]], total: [[350, 0.675], [525, 0.10], [700, 0.225]] };
 const DISP_T = 'Drag objective (and the report\u2019s weighted drag). None = drag of the heaviest load case at its loaded draft. Otherwise the drag is the weighted sum over race conditions, each floating level at hull weight + crew. Each condition is a load case (its crew, kept in sync, like the race events) or a custom crew weight. Races = one condition per load case the race events use, at the share of the score its races carry. Regionals 350/700 lb at 75/25%, Nationals 350/525/700 at 60/20/20%, Total 350/525/700 at 67.5/10/22.5%. Shares must sum to 1.';
-const FB_T = 'Gunwale above the water at the lowest point, for the load case that sits lowest. Trim, and so freeboard, depends on where the crew kneels: expected = at the planned seats; best and worst = over every seat sample (each knee moved by the seat variance). The gate uses the worst.';
-// Freeboard of the lowest case: expected / best / worst seat sample (gate = worst).
-function fbCase(win) { return (win.cases || []).filter(k => k.freeboard).reduce((a, k) => !a || k.freeboard.worst.freeboard_in < a.freeboard.worst.freeboard_in ? k : a, null); }
-function fbWorst(win, v) { const k = fbCase(win); return k ? k.freeboard.worst.freeboard_in : v.freeboard_in; }
+const LET_T = 'Freeboard is judged by whether the hull lettering stays visible, so it is checked where the letters sit, not at the lowest point (the bow, when the canoe trims bow down). The school name runs aft from the end margin behind the bow tip, the canoe name ends the end margin ahead of the stern tip; each character (spaces too) is height x width ratio long. Off = check the whole hull.';
+const LETTER_F = [
+  ['height_in', 'Letter height', 'in', 'Height of the letters (RFP: 5 in, 0.25 in tolerance).', 'any', 0, 5],
+  ['width_ratio', 'Letter width / height', '-', 'Length along the hull per character, spaces and gaps included, over the letter height. 1 = as wide as tall.', 'any', 0, 1],
+  ['below_gunwale_in', 'Below gunwale', 'in', 'Gunwale to the top of the letters (RFP: 1 in).', 'any', 0, 1],
+  ['end_margin_in', 'End margin', 'in', 'Bow tip to the start of the school name, and end of the canoe name to the stern tip.', 'any', 0, 24]];
+function setLettering() { $('letbody').style.display = $('lettering.on').checked ? 'grid' : 'none'; letNote(); }
+// Where the names land on the current hull (the winner's, or the picked hull).
+function letNote() {
+  const el = $('letnote'); if (!el) return;
+  const L = (result && result.winner && result.winner.candidate.length_in) || (hull && hull.length);
+  const h = Number($('lettering.height_in').value), wr = Number($('lettering.width_ratio').value), m = Number($('lettering.end_margin_in').value);
+  const len = t => [...t.trim()].length * h * wr;
+  const s = $('lettering.school').value, n = $('lettering.canoe_name').value;
+  const parts = [];
+  if (s.trim()) parts.push(`school ${len(s).toFixed(0)} in long, x ${m.toFixed(0)}-${(m + len(s)).toFixed(0)}`);
+  if (n.trim() && L) parts.push(`canoe name ${len(n).toFixed(0)} in, x ${(L - m - len(n)).toFixed(0)}-${(L - m).toFixed(0)} of ${L.toFixed(0)}`);
+  else if (n.trim()) parts.push(`canoe name ${len(n).toFixed(0)} in`);
+  el.textContent = parts.join('; ');
+}
+const FB_T = 'Gunwale above the water, for the load case that sits lowest, where the gate looks: at the lettering (Lettering section), else the lowest point of the hull; with the crew at the marked seats (or moved by the freeboard seat shift). Gate = rule minimum + margin. Lowest on hull: the bow or stern tip. Crew shifted: the range if every knee moves by the seat variance (shown, not gated).';
+// The gated freeboard of a case (results before 0.4 gated the worst seat sample).
+const fbGated = k => k.freeboard ? (k.freeboard.gate || k.freeboard.worst) : null;
+// Freeboard of the case that sits lowest where the gate looks.
+function fbCase(win) { return (win.cases || []).filter(k => k.freeboard).reduce((a, k) => !a || fbGated(k).freeboard_in < fbGated(a).freeboard_in ? k : a, null); }
+function fbWorst(win, v) { const k = fbCase(win); return k ? fbGated(k).freeboard_in : v.freeboard_in; }
+function fbGateTxt(f) {
+  const G = (result && result.params && result.params.gates) || {};
+  return `gate &ge; ${f(fbGate, 2)}${G.freeboard_margin_in ? ` (${f(G.freeboard_min_in, 2)} + ${f(G.freeboard_margin_in, 2)} margin)` : ''}`;
+}
 function fbTxt(win, v, f) {
-  const k = fbCase(win), gate = `gate &ge; ${f(fbGate, 2)}`;
+  const k = fbCase(win), gate = fbGateTxt(f);
   if (!k) return `${f(v.freeboard_in, 2)} in <span class="muted">${gate}</span>`;
   const F = k.freeboard;
-  return `${f(F.worst.freeboard_in, 2)} in <span class="muted">worst seats, ${gate}; expected ${f(F.expected.freeboard_in, 2)}, best ${f(F.best.freeboard_in, 2)} (${esc(k.name)})</span>`;
+  if (!F.gate) return `${f(F.worst.freeboard_in, 2)} in <span class="muted">worst seats, ${gate}; expected ${f(F.expected.freeboard_in, 2)}, best ${f(F.best.freeboard_in, 2)} (${esc(k.name)})</span>`;
+  const where = F.lettering.length ? 'at the lettering' : 'lowest point';
+  const seats = F.seat_shift_in > 0 ? `crew &plusmn;${f(F.seat_shift_in, 1)} in` : 'marked seats';
+  return `${f(F.gate.freeboard_in, 2)} in <span class="muted">${where}, ${seats}, ${esc(k.name)}; ${gate}`
+    + `${F.lettering.length ? `; lowest on hull ${f(F.gate.hull_min_in, 2)}` : ''}; crew shifted &plusmn;${f(k.seat_variance_in, 0)}: ${f(F.worst.freeboard_in, 2)} to ${f(F.best.freeboard_in, 2)}</span>`;
 }
 let dispMode = 'none';
 const PUNCH = [
@@ -379,7 +413,7 @@ const PUNCH = [
 const PUNCH_INT = ['layers'];
 const MESH_T = 'Pass each mesh is laid after (1 = after the first), less than the number of passes. Several meshes: list them, e.g. "1, 2". Punching uses the mesh farthest from the knee face.';
 // [title, note shown muted next to it]
-const SECTIONS = { punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], stands: ['Stands', 'empty hull on two stands, after the search'], race: ['Race events', 'crew of each race'], turning: ['Turning', 'side-wall stress in a turn'], zones: ['Two-mix zones', 'dense flanges over the middle'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
+const SECTIONS = { lettering: ['Lettering', 'freeboard is judged here'], punching: ['Punching', 'knee through the bottom'], hull: ['Hull', ''], crew: ['Crew', 'load cases, all must pass'], material: ['Material', ''], search: ['Search ranges', 'min, max, step'], gates: ['Gates', ''], stability: ['Stability', ''], flotation: ['Flotation', 'swamped, bow and stern air pockets'], stands: ['Stands', 'empty hull on two stands, after the search'], race: ['Race events', 'crew of each race'], turning: ['Turning', 'side-wall stress in a turn'], zones: ['Two-mix zones', 'dense flanges over the middle'], objective: ['Objective', ''], shape: ['Shape search', 'min, max. Equal = fixed'] };
 const ftin = x => { const t = Math.round(x); return `${Math.floor(t / 12)}' ${t % 12}"`; };
 const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 // One aligned row: label | control | unit. The tooltip lives on the row so hovering anywhere explains it.
@@ -495,6 +529,13 @@ function buildForm() {
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
     + section('search', FIELDS.search.map(f => triRow(f)).join('') + triRow(FLARE_AX))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
+    + section('lettering',
+      row('lettering.on', 'Check freeboard at the lettering', LET_T, '<input type="checkbox" class="switch" id="lettering.on">')
+      + `<div id="letbody" style="display:grid;gap:var(--s1)">`
+      + row('lettering.school', 'School name', 'At the bow. Typed as painted: every character counts.', '<input id="lettering.school" placeholder="e.g. University of Virginia">')
+      + row('lettering.canoe_name', 'Canoe name', 'At the stern. Typed as painted: every character counts.', '<input id="lettering.canoe_name" placeholder="canoe name">')
+      + LETTER_F.map(f => numRow('lettering', f)).join('')
+      + row('', '', '', '<span class="hint" id="letnote"></span>') + '</div>')
     + section('stability', FIELDS.stability.map(f => numRow('stability', f)).join('')
       + row('stability.gm_empty_min_in', 'Min GM, empty canoe', GME_T, '<input type="number" id="stability.gm_empty_min_in" step="any" placeholder="not gated">', 'in'))
     + section('flotation',
@@ -524,6 +565,8 @@ function buildForm() {
   $('hull.file').onchange = () => loadHull($('hull.file').value);
   $('shapemode').onchange = setShapeMode;
   $('flotation.on').onchange = setFlotation;
+  $('lettering.on').onchange = setLettering;
+  for (const k of ['school', 'canoe_name', 'height_in', 'width_ratio', 'end_margin_in']) $('lettering.' + k).addEventListener('input', letNote);
   $('turning.on').onchange = setTurning;
   $('stands.on').onchange = setStands;
   $('zones.on').onchange = setZones;
@@ -551,7 +594,7 @@ const GROUPS = [
   ['hull', 'Hull', ['sec-hull', 'shapefs'], 'The hull: file or shape search, gunwale, stem radius, mold templates, CAD import.'],
   ['crew', 'Crew', ['sec-crew'], 'Load cases (paddler weights and seats) and the seat placement rules.'],
   ['material', 'Material', ['sec-material', 'sec-punching', 'sec-zones'], 'Concrete: strength model and design method, knee punching and casting layers, two-mix walls, lab mix data.'],
-  ['search', 'Search', ['sec-search', 'sec-gates', 'sec-objective', 'sec-race'], 'What is searched (wall, density, depth ranges), the D/C and freeboard gates, and what "best" means.'],
+  ['search', 'Search', ['sec-search', 'sec-gates', 'sec-lettering', 'sec-objective', 'sec-race'], 'What is searched (wall, density, depth ranges), the D/C and freeboard gates, and what "best" means.'],
   ['checks', 'Checks', ['sec-stability', 'sec-flotation', 'sec-turning', 'sec-stands'], 'Stability, swamped flotation, turning-stress and stands checks.'],
 ];
 function setGroup(g) {
@@ -701,6 +744,12 @@ function fillForm(p, hulls) {
   $('hull.stem_radius_in').value = p.hull.stem_radius_in ?? 4;
   $('hull.doubly_symmetric').checked = !!(p.hull.doubly_symmetric || (ss && ss.symmetric));
   $('shapemode').checked = !!ss; setShapeMode(); shapeHints();
+  const lp = p.lettering;
+  $('lettering.on').checked = !!lp;
+  $('lettering.school').value = lp ? lp.school : 'University of Virginia';
+  $('lettering.canoe_name').value = lp ? lp.canoe_name : '';
+  for (const [k, , , , , , d] of LETTER_F) $(`lettering.${k}`).value = lp ? lp[k] : d;
+  setLettering();
   const fp = p.flotation;
   $('flotation.on').checked = !!fp; setFlotation();
   for (const [k] of FIELDS.flotation) $(`flotation.${k}`).value = fp ? fp[k] : { air_pocket_max_in: 36, swamp_factor: 1.1 }[k];
@@ -807,6 +856,11 @@ function formToml() {
       if (rk.some(v => v === '')) throw new Error('end rocker: give both min and max, or leave both empty');
       out.push(`rocker_in = [${rk.map(fl).join(', ')}]`);
     }
+    out.push('');
+  }
+  if ($('lettering.on').checked) {
+    out.push('[lettering]', `school = ${tstr(g('lettering.school'))}`, `canoe_name = ${tstr(g('lettering.canoe_name'))}`);
+    for (const [k] of LETTER_F) out.push(`${k} = ${fl(g('lettering.' + k))}`);
     out.push('');
   }
   if ($('flotation.on').checked) {
@@ -1542,11 +1596,17 @@ function plotFreeboard(ctx, W, H) {
   const ys = series.flatMap(s => s[1]).concat([0]).concat(typeof fbGate === 'number' ? [fbGate] : []);
   const r = { l: 72, t: 12, w: W - 92, h: H - 52 }, xr = [d.x_in[0], d.x_in[d.x_in.length - 1]];
   const a = axes(ctx, r, xr, [0, Math.max(...ys) * 1.1], 'x from bow, in', 'freeboard (gunwale above water), in');
+  // Lettering spans (where the gate looks), shaded under the curves.
+  const lett = ((ks.find(k => k.freeboard && k.freeboard.lettering) || {}).freeboard || {}).lettering || [];
+  ctx.fillStyle = C.grid;
+  for (const s of lett) ctx.fillRect(a.px(s.x0_in), r.t, a.px(s.x1_in) - a.px(s.x0_in), r.h);
+  ctx.fillStyle = C.muted; ctx.font = font(10);
+  for (const s of lett) ctx.fillText(s.text, a.px(s.x0_in) + 3, r.t + r.h - 6);
   if (typeof fbGate === 'number') hline(ctx, r.l, r.l + r.w, a.py(fbGate), C.error, [5, 4]);
   for (const k of ks) line(ctx, a, k.x_in, fb(k.waterline_in), ...caseStyle(k.i));
   if (ok) line(ctx, a, e.x_in, fb(e.waterline_in), C.accent);
   caseKnees(ctx, a, r, ks);
-  const items = ks.map(k => { const [col, dash] = caseStyle(k.i); const F = k.freeboard; return [col, F ? `${k.name}: expected ${F.expected.freeboard_in.toFixed(2)}, best ${F.best.freeboard_in.toFixed(2)}, worst ${F.worst.freeboard_in.toFixed(2)} in` : `${k.name}: min ${k.freeboard_in.toFixed(2)} in (worst seats)`, dash]; });
+  const items = ks.map(k => { const [col, dash] = caseStyle(k.i); const F = k.freeboard; return [col, F && F.gate ? `${k.name}: ${F.gate.freeboard_in.toFixed(2)} in ${F.lettering.length ? 'at lettering' : 'lowest'} (shifted crew ${F.worst.freeboard_in.toFixed(2)}-${F.best.freeboard_in.toFixed(2)})` : F ? `${k.name}: expected ${F.expected.freeboard_in.toFixed(2)}, best ${F.best.freeboard_in.toFixed(2)}, worst ${F.worst.freeboard_in.toFixed(2)} in` : `${k.name}: min ${k.freeboard_in.toFixed(2)} in (worst seats)`, dash]; });
   items.push(ok ? [C.accent, `no crew: min ${e.freeboard_in.toFixed(2)} in`] : [C.error, `no crew: ${e && e.error ? e.error : 'not in this result'}`]);
   if (typeof fbGate === 'number') items.push([C.error, `min freeboard gate ${fbGate} in`, [5, 4]]);
   legend(ctx, r.l + 10, r.t + 16, items);
@@ -2046,7 +2106,7 @@ function reportCharts() {
       add('Shear and bending moment', 'Along the hull, per load case. Triangles mark the knees.', plotHull, 440);
       add('Stress and waterline', 'Bending tension against the allowable (top); loaded waterline against the gunwale (bottom).', plotStress, 440);
       add('D/C along the hull', 'Max of bending tension, compression, shear and biaxial at each station.', plotDcx, 300);
-      add('Freeboard', 'Gunwale above the local waterline per load case at the planned seats and with no crew aboard. Legend: expected (planned seats), best and worst over the seat samples; the gate is the worst. Dashed: freeboard gate.', plotFreeboard, 300);
+      add('Freeboard', 'Gunwale above the local waterline per load case at the marked seats and with no crew aboard. Shaded: the lettering, where the gate looks. Legend: gated freeboard, and its range if every knee moves by the seat variance (not gated). Dashed: freeboard gate (rule minimum + margin).', plotFreeboard, 300);
     }
     if (winCurves() && !winCurves().error) {
       const t0 = tab;
@@ -2123,8 +2183,11 @@ function reportHtml(canoeImg, charts) {
   ].filter(Boolean);
   const checks = Array.isArray(v.checks) ? table(['check', 'demand psi', 'capacity psi', 'D/C', 'at x, in'], v.checks.map(k =>
     `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td><td>${f(k.dc, 3)}</td><td>${f(k.x_in, 1)}</td></tr>`)) : '';
-  const fbCell = k => k.freeboard ? `${f(k.freeboard.expected.freeboard_in, 2)} / ${f(k.freeboard.best.freeboard_in, 2)} / <b>${f(k.freeboard.worst.freeboard_in, 2)}</b>` : f(k.freeboard_in, 2);
-  const cases = table(['case', 'knee in @ lb, bow to stern', 'seats', 'draft in', 'trim in', 'GM in', 'freeboard in, expected / best / worst', 'D/C', 'governs'],
+  const fbCell = k => !k.freeboard ? f(k.freeboard_in, 2) : k.freeboard.gate
+    ? `<b>${f(k.freeboard.gate.freeboard_in, 2)}</b> (${f(k.freeboard.worst.freeboard_in, 2)} to ${f(k.freeboard.best.freeboard_in, 2)})`
+    : `${f(k.freeboard.expected.freeboard_in, 2)} / ${f(k.freeboard.best.freeboard_in, 2)} / <b>${f(k.freeboard.worst.freeboard_in, 2)}</b>`;
+  const fbHead = (win.cases || []).some(k => k.freeboard && k.freeboard.gate) ? 'freeboard in, gated (crew shifted)' : 'freeboard in, expected / best / worst';
+  const cases = table(['case', 'knee in @ lb, bow to stern', 'seats', 'draft in', 'trim in', 'GM in', fbHead, 'D/C', 'governs'],
     (win.cases || []).map(k => k.error ? `<tr><td>${esc(k.name)}</td><td class="l" colspan="8">${esc(k.error)}</td></tr>`
       : `<tr><td>${esc(k.name)}</td><td>${k.seats_in.map((x, j) => [x, k.weights_lb[j]]).sort((a, b) => a[0] - b[0]).map(([x, w]) => `${f(x, 0)}@${f(w, 0)}`).join(', ')}</td><td>${esc(k.seat_source || '')}${k.seat_variance_in ? ' &plusmn;' + f(k.seat_variance_in, 1) : ''}</td>
         <td>${f(k.draft_in, 2)}</td><td>${f(k.trim_in, 2)}</td><td>${f(k.gm_in, 2)}</td><td>${fbCell(k)}</td><td>${f(k.verdict && k.verdict.dc, 3)}</td><td>${esc(k.verdict ? k.verdict.governing_check : '-')}</td></tr>`));
@@ -2217,6 +2280,7 @@ function reportHtml(canoeImg, charts) {
 // worked D/C equals the checks table) and the verification, stands and flotation.
 function calcHtml(win) {
   const P = result.params, G = P.gates, ST = P.stability, pm = P.material, c = win.candidate, e = win.empty;
+  const FBR = G.freeboard_min_in + (G.freeboard_margin_in || 0); // freeboard gate
   const k0 = win.calc;
   const head = '<h2 style="margin-top:0">Design proof.</h2>';
   if (!k0 || k0.error || !k0.service) return head + `<div class="note">Calculation trace not available${k0 && k0.error ? ': ' + esc(k0.error) : ' (re-run with this version of JAGUAR)'}.</div>`;
@@ -2248,7 +2312,11 @@ function calcHtml(win) {
       const ratio = ck.name === 'biaxial'; // Kupfer: principal stress over its reduced capacity, worked in section 4
       row(`${esc(q.name)}: ${CHECK[ck.name] || esc(ck.name)}`, ck.x_in != null ? `x = ${g(ck.x_in, 1)}` : 'knee', ratio ? 'section 4' : `${g(ck.demand, 1)} psi`, ratio ? '' : `${g(ck.capacity, 1)} psi`, g(ck.dc, 3), `&le; ${g(dcv, 2)}`, ck.dc <= dcv);
     }
-    row(`${esc(q.name)}: freeboard`, q.freeboard ? `worst seat sample (expected ${g(q.freeboard.expected.freeboard_in, 2)}, best ${g(q.freeboard.best.freeboard_in, 2)})` : 'min over hull', '-', '-', `${g(q.freeboard_in, 2)} in`, `&ge; ${g(G.freeboard_min_in, 2)} in`, q.freeboard_in >= G.freeboard_min_in);
+    const QF = q.freeboard;
+    row(`${esc(q.name)}: freeboard`, !QF ? 'min over hull' : QF.gate
+      ? `${QF.lettering.length ? 'at the lettering' : 'lowest point'}, ${QF.seat_shift_in > 0 ? `crew &plusmn;${g(QF.seat_shift_in, 1)} in` : 'marked seats'}`
+      : `worst seat sample (expected ${g(QF.expected.freeboard_in, 2)}, best ${g(QF.best.freeboard_in, 2)})`,
+    '-', '-', `${g(q.freeboard_in, 2)} in`, `&ge; ${g(FBR, 2)} in`, q.freeboard_in >= FBR);
     row(`${esc(q.name)}: GM<sub>T</sub>`, 'worst seat sample', '-', '-', `${g(q.gm_in, 2)} in`, `&ge; ${g(ST.gm_min_in, 2)} in`, q.gm_in >= ST.gm_min_in);
   }
   if (e && !e.error) {
@@ -2351,17 +2419,29 @@ function calcHtml(win) {
     sec.push(eq('Draft d and trim &theta; from force and moment balance (local waterline d + &theta;(x &minus; L/2)/L, buoyancy 62.4 A<sub>sub</sub>/1728 per inch):',
       '&int; b(x) dx = W, &nbsp; &int; b(x) (x &minus; L/2) dx = &Sigma; W<sub>i</sub>(x<sub>i</sub> &minus; L/2)',
       `service: d = <b>${g(sv.draft_in, 3)} in</b>, &theta; = ${g(sv.trim_in, 3)} in${asd ? '' : `; factored: d = ${g(st.draft_in, 3)} in, &theta; = ${g(st.trim_in, 3)} in`}`));
-    if (k.freeboard) {
-      // Freeboard moves with where the crew sits (trim): expected at the planned seats, best and
-      // worst over every seat sample; the gate is the worst.
+    if (k.freeboard && k.freeboard.gate) {
+      // The RFP check: static, at staging, where the lettering is. The range over the strength
+      // seat samples is shown, not gated.
+      const F = k.freeboard, Lh = k.length_in, at = s => `f(${g(s.at_x_in, 1)}) = ${g(k.depth_in, 2)} &minus; [${g(s.draft_in, 3)} + (${g(s.trim_in, 3)}) (${g(s.at_x_in, 1)} &minus; ${g(Lh / 2, 1)}) / ${g(Lh, 1)}] = ${g(k.depth_in, 2)} &minus; ${g(s.waterline_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`;
+      const where = F.lettering.length
+        ? `at the lettering: ${F.lettering.map(s => `&ldquo;${esc(s.text)}&rdquo; x = ${g(s.x0_in, 1)} to ${g(s.x1_in, 1)} in`).join(', ')}${P.lettering ? ` (${g(P.lettering.height_in, 2)} in letters, ${g(P.lettering.below_gunwale_in, 2)} in below the gunwale, so their bottom edge is ${g(P.lettering.below_gunwale_in + P.lettering.height_in, 2)} in down)` : ''}`
+        : 'over the whole hull';
+      sec.push(eq(`Freeboard (the RFP check: static, at staging) = mold depth minus the local waterline, ${where}. The waterline is a straight line along the hull, so the lowest point of each span is one of its ends. Crew at ${F.seat_shift_in > 0 ? `the marked seats and moved &plusmn;${g(F.seat_shift_in, 1)} in` : 'the marked seats'}; gate f &ge; ${g(G.freeboard_min_in, 2)}${G.freeboard_margin_in ? ` + ${g(G.freeboard_margin_in, 2)} margin` : ''} = ${g(FBR, 2)} in:`,
+        'f(x) = D &minus; [d + &theta;(x &minus; L/2)/L]',
+        [`knees ${F.gate.seats_in.map(x => g(x, 1)).join(', ')} in; d = ${g(F.gate.draft_in, 3)} in, &theta; = ${g(F.gate.trim_in, 3)} in`,
+          `${at(F.gate)} ${F.gate.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(F.gate.freeboard_in >= FBR)}`,
+          F.lettering.length ? `lowest point of the hull (a tip, not gated): ${g(F.gate.hull_min_in, 3)} in` : '',
+          `information, not gated: every knee moved &plusmn;${g(q.seat_variance_in, 1)} in (the strength samples): ${g(F.worst.freeboard_in, 3)} to ${g(F.best.freeboard_in, 3)} in`].filter(Boolean).join('<br>')));
+    } else if (k.freeboard) {
+      // Results before 0.4: the gate was the worst seat sample over the whole hull.
       const F = k.freeboard, fbl = (lbl, s, gate) => `${lbl}: knees ${s.seats_in.map(x => g(x, 1)).join(', ')} in; d = ${g(s.draft_in, 3)} in, &theta; = ${g(s.trim_in, 3)} in; f = ${g(k.depth_in, 2)} &minus; ${g(s.waterline_max_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`
-        + (gate ? ` ${s.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(s.freeboard_in >= G.freeboard_min_in)}` : '');
+        + (gate ? ` ${s.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(s.freeboard_in >= FBR)}` : '');
       sec.push(eq(`Freeboard = mold depth minus the highest local waterline. Trim, and so freeboard, depends on where the crew sits: expected at the planned seats, best and worst over every seat sample (each knee &plusmn;${g(q.seat_variance_in, 1)} in); the gate is the worst:`,
         'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
         [fbl('expected (planned seats)', F.expected), fbl('best', F.best), fbl('worst', F.worst, true)].join('<br>')));
     } else {
       sec.push(eq('Freeboard = mold depth minus the highest local waterline:', 'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
-        `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= G.freeboard_min_in ? '&ge;' : '&lt;'} ${g(G.freeboard_min_in, 2)} in ${ok(sv.freeboard_in >= G.freeboard_min_in)}`));
+        `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(sv.freeboard_in >= FBR)}`));
     }
     sec.push(eq('Transverse stability:', 'GM = KB + BM &minus; KG, &nbsp; BM = I<sub>wp</sub> / V, &nbsp; KG = (&int; w z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W',
       `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> at this sample; worst sample ${g(q.gm_in, 3)} in ${q.gm_in >= ST.gm_min_in ? '&ge;' : '&lt;'} ${g(ST.gm_min_in, 2)} in ${ok(q.gm_in >= ST.gm_min_in)}`));
@@ -2417,7 +2497,7 @@ function calcHtml(win) {
       `&sigma;<sub>1,2</sub> = (&sigma;<sub>x</sub> + &sigma;<sub>y</sub>)/2 &plusmn; &radic;(((&sigma;<sub>x</sub> &minus; &sigma;<sub>y</sub>)/2)<sup>2</sup> + &tau;<sup>2</sup>) , &nbsp; &sigma;<sub>1</sub> &le; f<sub>t</sub> (1 &minus; 0.8 |min(&sigma;<sub>2</sub>, 0)| / f'<sub>c</sub>), f<sub>t</sub>, f'<sub>c</sub> &times; ${kSym}`,
       `&sigma;<sub>x</sub> = ${neg(bx.sigma_x_psi)}, &sigma;<sub>y</sub> = ${neg(bx.sigma_y_psi)} &rarr; &sigma;<sub>1</sub> = ${g(bx.sigma_1_psi, 2)}, &sigma;<sub>2</sub> = ${g(bx.sigma_2_psi, 2)} psi; capacity = ${g(bx.ft_psi, 1)} &times; (1 &minus; 0.8 &times; ${g(Math.abs(Math.min(bx.sigma_2_psi, 0)), 2)} / ${g(bx.fc_psi, 1)}) = ${g(bx.capacity_psi, 1)} psi; D/C = <b>${g(bx.dc, 3)}</b> ${ok(bx.dc <= dcv)}`));
     const vd = q.verdict;
-    if (vd) sec.push(`<div class="note"><b>${esc(k.case)}:</b> largest D/C ${g(vd.dc, 3)} (${esc(CHECK[vd.governing_check] || vd.governing_check)}) &le; ${g(dcv, 2)}, freeboard ${g(q.freeboard_in, 2)} in, GM ${g(q.gm_in, 2)} in: ${ok(vd.dc <= dcv && q.freeboard_in >= G.freeboard_min_in && q.gm_in >= ST.gm_min_in)}</div>`);
+    if (vd) sec.push(`<div class="note"><b>${esc(k.case)}:</b> largest D/C ${g(vd.dc, 3)} (${esc(CHECK[vd.governing_check] || vd.governing_check)}) &le; ${g(dcv, 2)}, freeboard ${g(q.freeboard_in, 2)} in, GM ${g(q.gm_in, 2)} in: ${ok(vd.dc <= dcv && q.freeboard_in >= FBR && q.gm_in >= ST.gm_min_in)}</div>`);
     out.push(`<div class="page">${sec.join('')}</div>`);
   });
 
@@ -2676,7 +2756,7 @@ async function loadResult() {
   if (result) {
     cands = result.candidates;
     const p = result.params || {};
-    if (p.gates) { dcGate = p.gates.dc_search; fbGate = p.gates.freeboard_min_in; }
+    if (p.gates) { dcGate = p.gates.dc_search; fbGate = p.gates.freeboard_min_in + (p.gates.freeboard_margin_in || 0); }
     if (p.stability) gmGate = p.stability.gm_min_in;
     if (p.objective) objKind = p.objective.kind;
     raceRes = result.race || null; raceErr = ''; raceEv = 0; animReset();

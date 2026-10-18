@@ -86,7 +86,18 @@ depth_in     = [10.0, 16.0, 1.0]
 dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)
 dc_verify = 0.95          # numerical margin, not a safety factor
 freeboard_min_in = 6.0
+# freeboard_margin_in = 0.0       # added to freeboard_min_in for how judges stage the crew
+# freeboard_seat_shift_in = 0.0   # gate freeboard with the crew moved +/- this, in (0 = marked seats)
 thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+
+# Freeboard is gated where the hull lettering sits (absent = lowest point of the whole hull).
+# [lettering]
+# school = "University of Virginia"   # from end_margin_in behind the bow
+# canoe_name = "Jaguar"               # ending end_margin_in ahead of the stern
+# height_in = 5.0                     # letter height
+# width_ratio = 1.0                   # length per character (spaces too) / height
+# below_gunwale_in = 1.0              # gunwale to the top of the letters
+# end_margin_in = 24.0
 
 [punching]                # knee punching through the hull bottom (docs/PUNCHING.md)
 method = "aci_22_6"       # "aci_22_6" (ACI 318-19 Table 22.6.5.2) or "plain_14_5" (Table 14.5.5.1)

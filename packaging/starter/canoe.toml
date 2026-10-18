@@ -51,8 +51,18 @@ depth_in = [10.0, 18.0, 0.5]
 [gates]
 dc_search = 0.97
 dc_verify = 0.99
-freeboard_min_in = 6.2
+freeboard_min_in = 5.75
+freeboard_margin_in = 0.25
+freeboard_seat_shift_in = 0.0
 thickness_min_buildable_in = 0.375
+
+[lettering]
+school = "University of Virginia"
+canoe_name = ""
+height_in = 5.0
+width_ratio = 1.0
+below_gunwale_in = 1.0
+end_margin_in = 24.0
 
 [stability]
 crew_cg_in = 12.0

@@ -259,6 +259,17 @@ pub fn freeboard(grid: &Grid, loads: &Loads) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// Lowest freeboard over `spans` (x ranges from the bow, in; empty = the whole hull) and the x
+/// it is at. The local freeboard depth - (d + trim (x - L/2) / L) is linear in x, so the lowest
+/// is at a span end (the whole hull: equal to [`freeboard`]).
+pub fn freeboard_over(grid: &Grid, loads: &Loads, spans: &[[f64; 2]]) -> (f64, f64) {
+    let l = grid.x[grid.nx() - 1];
+    let f = |x: f64| grid.depth - (loads.draft_in + loads.trim_in * (x - l / 2.0) / l);
+    let ends: Vec<f64> =
+        if spans.is_empty() { vec![grid.x[0], l] } else { spans.iter().flatten().copied().collect() };
+    ends.into_iter().map(|x| (f(x), x)).fold((f64::INFINITY, f64::NAN), |a, b| if b.0 < a.0 { b } else { a })
+}
+
 fn result(name: &'static str, demand: f64, capacity: f64, x_in: Option<f64>) -> CheckResult {
     let dc = if capacity.is_nan() || capacity <= 0.0 || !capacity.is_finite() || !demand.is_finite() {
         f64::INFINITY

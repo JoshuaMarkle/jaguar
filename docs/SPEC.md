@@ -162,10 +162,22 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    paddlers in entered order. Pinned to the same seat, a number outside 0..k, or a length other
    than weights_lb: input error.
    Every case is then checked at the nominal seats and all 2^k corners with each knee moved
-   +/- `variance_in` (default 3 in); the case verdict is the worst sample, freeboard and GM the
-   minimum. Search candidates stop sampling at the first sample that misses a gate. Freeboard is
-   also reported at the nominal seats (expected) and at the best sample (`freeboard` in each case:
-   `expected`, `best`, `worst`, each with its seats, draft, trim, highest waterline).
+   +/- `variance_in` (default 3 in); the case verdict is the worst sample, GM the minimum.
+   Search candidates stop sampling at the first sample that misses a gate.
+   **Freeboard** is a static check at staging (RFP), so it has its own seats: the gate sees the
+   lowest freeboard over the marked seats and the whole crew moved +/- `gates.freeboard_seat_shift_in`
+   (default 0 = marked seats; freeboard depends on the crew only through its centroid, so the
+   all-forward and all-aft shifts are the extremes), where the gate looks: with `[lettering]`, over
+   the lettered spans (the school name from `end_margin_in` behind the bow, the canoe name ending
+   `end_margin_in` ahead of the stern, each character `width_ratio` x `height_in` long; names that
+   run off the hull or overlap: the case errors), else the whole hull. The local freeboard
+   D - (d + trim (x - L/2)/L) is linear in x, so the lowest is at a span end. The gate is
+   >= `freeboard_min_in` + `freeboard_margin_in` (the RFP's 6 in less its 0.25 in tolerance, plus
+   a staging margin). Auto seats score freeboard the same way. Each case reports `freeboard`:
+   `gate`, and `expected` (marked seats), `best`, `worst` over the strength seat samples (how far
+   the crew's position moves it), each with seats, draft, trim, the x and waterline of its lowest
+   point, the gated and the hull-wide (`hull_min_in`) freeboard; plus `required_in`,
+   `seat_shift_in` and the `lettering` spans.
 4. **Material** (`src/mix.rs`, docs/MIX_DATA.md): least-squares line of FINAL split tensile strength
    vs density from the lab CSV. Flexural and f'c use their own least-squares lines when the CSV's
    optional `flexural_psi` / `compressive_psi` columns have data at >= 2 densities (under
@@ -201,7 +213,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
      as factored) is reacted by a uniform lateral pressure p = k W / A_lat on one side's underwater
      profile (h = local waterline - keel), each side a cantilever from the keel:
      sigma_y = 3 p h^2 / t^2 (`check::hoop_psi`). Absent = sigma_y 0
-6. **Gates**: a candidate passes iff D/C <= `dc_search`, freeboard >= `freeboard_min_in` and
+6. **Gates**: a candidate passes iff D/C <= `dc_search`, gated freeboard (step 3) >= `freeboard_min_in` + `freeboard_margin_in` and
    GM_T >= `gm_min_in` for every load case (and seat sample), the empty canoe (no crew) has GM_T >=
    `stability.gm_empty_min_in` when that is given (optional; always computed: candidate `gm_empty_in`,
    per-case `gm_cases_in`, winner `empty.gm_in`), and, with `[flotation]`, the canoe floats swamped
@@ -234,7 +246,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    max(dc_extrapolated, D/C at 4n-3) <= `dc_verify` (never below a computed value). Otherwise
    `dc_extrapolated` is null, `convergence.note` says which series, and VERIFIED iff the 2n-1 D/C
    <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin. The floating gates
-   are re-checked at 2n-1 stations too: VERIFIED also needs freeboard >= `freeboard_min_in` and
+   are re-checked at 2n-1 stations too: VERIFIED also needs freeboard >= `freeboard_min_in` + `freeboard_margin_in` and
    loaded GM >= `gm_min_in` there (a design the search passed by a hair can miss them).
    `verify_failure` says why when not verified.
 8b. **Stands** (optional `[stands]`, `src/stands.rs`; `optimize::verify_stands`, called once by
@@ -335,7 +347,7 @@ not flagged. `diagrams` is the governing case at verification resolution. `cases
 per `[[load_case]]` (input order): name, nominal `seats_in` (`weights_lb` order), `crew_order`
 (paddler indices bow to stern), `seat_source` (given/even/auto), `seat_variance_in`,
 `verdict_seats_in` (the sample the verdict comes from), weights, draft, trim (nominal seats), GM,
-freeboard (worst sample; `freeboard` = expected / best / worst), x, V, M, tension/compression/shear stress, waterline, `zbar_in`,
+freeboard (gated; `freeboard` = gate / expected / best / worst), x, V, M, tension/compression/shear stress, waterline, `zbar_in`,
 `buoyancy_lbpin` and `self_weight_lbpin` (strength combination, lb/in; their difference integrates
 to V, the knee patches added in closed form), and
 per-station D/C for bending tension, bending compression, shear and biaxial (Kupfer-Gerstle; 0 at

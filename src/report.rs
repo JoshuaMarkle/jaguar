@@ -612,7 +612,9 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                         .count();
                     let fb_ok = analysed
                         .iter()
-                        .filter(|c| c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= g.freeboard_min_in))
+                        .filter(|c| {
+                            c.verdict.as_ref().is_some_and(|v| v.freeboard_in >= g.freeboard_required_in())
+                        })
                         .count();
                     let gm_min = p.stability.gm_min_in;
                     let gm_fail = analysed.iter().filter(|c| c.gm_in.is_some_and(|g| g < gm_min)).count();
@@ -638,9 +640,12 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                     } else if dc_ok == 0 {
                         "D/C (no candidate under the limit)".to_string()
                     } else if fb_ok == 0 {
-                        format!("freeboard (none >= {:.2} in)", g.freeboard_min_in)
+                        format!("freeboard (none >= {:.2} in)", g.freeboard_required_in())
                     } else {
-                        format!("freeboard: {dc_ok} pass D/C but none also meet {:.2} in", g.freeboard_min_in)
+                        format!(
+                            "freeboard: {dc_ok} pass D/C but none also meet {:.2} in",
+                            g.freeboard_required_in()
+                        )
                     };
                     out.push(format!("  hint: blocker is {blocker}"));
                     // One pinned wall (an as-drawn analysis, jaguar import-mesh): that design is the

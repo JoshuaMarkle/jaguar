@@ -52,6 +52,112 @@ pub struct Params {
     /// (src/stands.rs). Never a search gate: run once on the winner, it fails verification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands: Option<Stands>,
+    /// Present = the freeboard gate is checked where the lettering sits (school name at the bow,
+    /// canoe name at the stern), not at the lowest point of the whole hull.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lettering: Option<Lettering>,
+}
+
+/// Hull lettering (the RFP's freeboard check: the letters must stay visible). The school name
+/// runs aft from `end_margin_in` behind the bow, the canoe name forward from `end_margin_in`
+/// ahead of the stern, each character `width_ratio x height_in` long; the letters' top edge
+/// is `below_gunwale_in` under the gunwale. An empty name has no span.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Lettering {
+    #[serde(default)]
+    pub school: String,
+    #[serde(default)]
+    pub canoe_name: String,
+    /// Letter height, in.
+    #[serde(default = "letter_height")]
+    pub height_in: f64,
+    /// Length along the hull per character (spaces included) over the letter height.
+    #[serde(default = "one")]
+    pub width_ratio: f64,
+    /// Gunwale to the top of the letters, in.
+    #[serde(default = "one")]
+    pub below_gunwale_in: f64,
+    /// Bow tip to the school name and canoe name to the stern tip, in.
+    pub end_margin_in: f64,
+}
+
+fn letter_height() -> f64 {
+    5.0
+}
+
+/// One lettered stretch of the hull.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LetterSpan {
+    pub text: String,
+    /// From the bow, in.
+    pub x0_in: f64,
+    pub x1_in: f64,
+}
+
+impl Lettering {
+    /// Length one name takes along the hull, in.
+    pub fn length_in(&self, text: &str) -> f64 {
+        text.chars().count() as f64 * self.height_in * self.width_ratio
+    }
+
+    /// Where the names sit on a hull `length_in` long (x from the bow). A name that runs off
+    /// the hull is an error: the lettering does not fit.
+    pub fn spans(&self, length_in: f64) -> Result<Vec<LetterSpan>> {
+        let mut out = Vec::new();
+        let (m, school, name) = (self.end_margin_in, self.school.trim(), self.canoe_name.trim());
+        if !school.is_empty() {
+            out.push(LetterSpan { text: school.into(), x0_in: m, x1_in: m + self.length_in(school) });
+        }
+        if !name.is_empty() {
+            out.push(LetterSpan {
+                text: name.into(),
+                x0_in: length_in - m - self.length_in(name),
+                x1_in: length_in - m,
+            });
+        }
+        for s in &out {
+            if s.x0_in < 0.0 || s.x1_in > length_in {
+                bail!(
+                    "lettering \"{}\" ({:.0} in long, {:.0} in from the end) does not fit on a {:.0} in hull",
+                    s.text,
+                    s.x1_in - s.x0_in,
+                    m,
+                    length_in
+                );
+            }
+        }
+        if let [a, b] = &out[..]
+            && a.x1_in > b.x0_in
+        {
+            bail!(
+                "lettering: \"{}\" and \"{}\" overlap on a {:.0} in hull ({:.0} in of letters, {:.0} in of hull between the margins)",
+                a.text,
+                b.text,
+                length_in,
+                (a.x1_in - a.x0_in) + (b.x1_in - b.x0_in),
+                length_in - 2.0 * m
+            );
+        }
+        Ok(out)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let ok = |v: f64| v.is_finite() && v >= 0.0;
+        if !(self.height_in.is_finite() && self.height_in > 0.0) {
+            bail!("lettering.height_in must be > 0");
+        }
+        if !(self.width_ratio.is_finite() && self.width_ratio > 0.0) {
+            bail!("lettering.width_ratio must be > 0");
+        }
+        if !(ok(self.below_gunwale_in) && ok(self.end_margin_in)) {
+            bail!("lettering: need below_gunwale_in >= 0 and end_margin_in >= 0");
+        }
+        if self.school.trim().is_empty() && self.canoe_name.trim().is_empty() {
+            bail!("lettering: give school and/or canoe_name (or remove [lettering] to gate the whole hull)");
+        }
+        Ok(())
+    }
 }
 
 /// Empty hull on two stands placed symmetrically about midship (src/stands.rs).
@@ -912,15 +1018,40 @@ pub struct Gates {
     pub dc_search: f64,
     /// D/C the winner must stay under when re-run at 2n-1 stations.
     pub dc_verify: f64,
-    /// Minimum loaded freeboard at the worst station, in.
+    /// Minimum loaded freeboard, in (the RFP's, e.g. 6 in less its 0.25 in tolerance): at the
+    /// lettering with `[lettering]`, else at the lowest point of the hull.
     pub freeboard_min_in: f64,
+    /// Added to `freeboard_min_in` for how the crew is staged, in (default 0).
+    #[serde(default)]
+    pub freeboard_margin_in: f64,
+    /// Freeboard is gated with the whole crew moved this far fore and aft of its seats, in
+    /// (default 0 = the marked seats: the RFP check is static, at staging). Independent of
+    /// `seats.variance_in`, which the strength checks use.
+    #[serde(default)]
+    pub freeboard_seat_shift_in: f64,
     /// Thinnest wall the team can actually build, in. Candidates thinner than
     /// this are never generated, and a winner AT this floor is not flagged as
     /// a grid-edge result (it is a real constraint, not a too-narrow range).
     pub thickness_min_buildable_in: f64,
 }
 
+impl Gates {
+    /// The freeboard a design must keep: `freeboard_min_in + freeboard_margin_in`.
+    pub fn freeboard_required_in(&self) -> f64 {
+        self.freeboard_min_in + self.freeboard_margin_in
+    }
+}
+
 impl Params {
+    /// Where the freeboard gate is checked on a hull `length_in` long: the lettering spans, or
+    /// none (= the whole hull) without `[lettering]`.
+    pub fn freeboard_spans(&self, length_in: f64) -> Result<Vec<LetterSpan>> {
+        match &self.lettering {
+            Some(l) => l.spans(length_in),
+            None => Ok(Vec::new()),
+        }
+    }
+
     /// Load and validate. Relative `hull.file` is resolved against the toml's dir.
     pub fn load(path: &Path) -> Result<Self> {
         let text =
@@ -1192,6 +1323,13 @@ impl Params {
         {
             bail!("turning: need speed_mps >= 0 and radius_in > 0");
         }
+        let g = &self.gates;
+        if ![g.freeboard_margin_in, g.freeboard_seat_shift_in].iter().all(|v| v.is_finite() && *v >= 0.0) {
+            bail!("gates: need freeboard_margin_in >= 0 and freeboard_seat_shift_in >= 0");
+        }
+        if let Some(l) = &self.lettering {
+            l.validate()?;
+        }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");
         }
@@ -1315,6 +1453,35 @@ mod tests {
         let mut q = p.clone();
         q.objective.displacements.as_mut().unwrap()[0].crew_lb = 300.0;
         assert!(q.validate().unwrap_err().to_string().contains("crew differs from load case '2M'"));
+    }
+
+    #[test]
+    fn lettering_and_freeboard_gate_inputs() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap();
+        let with = |extra: &str| Params::parse(&format!("{text}\n{extra}"), Path::new("examples"));
+        let p = with(
+            "[lettering]\nschool = \"University of Virginia\"\ncanoe_name = \"Jaguar\"\nend_margin_in = 24",
+        )
+        .unwrap();
+        let l = p.lettering.as_ref().unwrap();
+        assert_eq!((l.height_in, l.width_ratio, l.below_gunwale_in), (5.0, 1.0, 1.0));
+        let s = p.freeboard_spans(216.0).unwrap();
+        // 22 characters (spaces count) x 5 in from 24 in; 6 x 5 in ending 24 in from the stern.
+        assert_eq!((s[0].x0_in, s[0].x1_in, s[1].x0_in, s[1].x1_in), (24.0, 134.0, 162.0, 192.0));
+        assert!(p.freeboard_spans(150.0).unwrap_err().to_string().contains("overlap"));
+        assert!(p.freeboard_spans(120.0).unwrap_err().to_string().contains("does not fit"));
+        assert!(with("[lettering]\nend_margin_in = 24").unwrap_err().to_string().contains("give school"));
+        assert!(with("[lettering]\nschool = \"A\"\nend_margin_in = 24\nheight_in = 0").is_err());
+        assert!(with("[lettering]\nschool = \"A\"").is_err(), "end_margin_in is required");
+        // Round trip, and no lettering = the whole hull.
+        let back = Params::parse(&toml::to_string(&p).unwrap(), Path::new("")).unwrap();
+        assert_eq!(back.lettering, p.lettering);
+        let q = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        assert!(q.freeboard_spans(216.0).unwrap().is_empty());
+        assert_eq!((q.gates.freeboard_margin_in, q.gates.freeboard_seat_shift_in), (0.0, 0.0));
+        let mut r = q.clone();
+        r.gates.freeboard_margin_in = -0.1;
+        assert!(r.validate().is_err());
     }
 
     #[test]
