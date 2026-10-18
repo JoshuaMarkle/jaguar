@@ -65,7 +65,16 @@
 //!   atomically (tmp + rename); 200 with the new StrengthFit plus "csv": the saved text.
 //!   `GET /api/mix` also returns "csv": the raw file text (feeds the editable table).
 //! * `GET  /api/result`    -> the last jaguar-result/1, 404 if none yet.
-//!   Also written to `result.json` next to the canoe.toml when a run finishes.
+//!   Also written to `result.json` next to the canoe.toml when a run finishes. At startup the
+//!   server shows that `result.json` again (when it is a jaguar-result/1), so closing JAGUAR
+//!   loses no result.
+//! * Run history: each finished run is also saved as `runs/<UTC time>_<hull>.json` (compact)
+//!   next to the canoe.toml, with a small `<same>.meta.json` summary for the list.
+//!   `GET /api/runs` -> {"dir", "current": file shown now | null, "runs": [{"file", "bytes",
+//!   "meta": summary | null}] newest first}. `POST /api/runs/open?file=<name>` makes that run
+//!   the current result (export, race and the report use it; result.json is left as is), 409
+//!   while a run is going. `DELETE /api/runs?file=<name>` deletes it and its summary. Names
+//!   with a path separator or `..`, or not a run file: 400; missing: 404.
 //! * `GET  /api/export?format=step|stl` -> the last run's winner as a file download
 //!   (Content-Disposition attachment; STEP AP214 solid or binary STL, inches, see
 //!   `export.rs`). 404 if no result yet, 409 if that result has no winner, 400 bad format.
@@ -108,6 +117,8 @@ struct Shared {
     candidates: Vec<Candidate>,
     /// Last jaguar-result/1, already serialized.
     result: Option<String>,
+    /// File in `runs/` that `result` is (None: not known to be one, e.g. an old result.json).
+    run_file: Option<String>,
     error: Option<String>,
     /// Hull file of the most recently submitted params.
     hull_file: PathBuf,
@@ -169,6 +180,8 @@ struct App {
     /// Params as loaded at startup (absolute paths).
     params: Params,
     result_path: PathBuf,
+    /// Run history folder (`runs/` next to the canoe.toml).
+    runs_dir: PathBuf,
     shared: Arc<Mutex<Shared>>,
     /// Desktop mode (`jaguar` double-clicked): its canoe folder. None for `jaguar serve`.
     desktop: Option<PathBuf>,
@@ -211,6 +224,7 @@ impl App {
             base_dir,
             prefs_path,
             params: startup,
+            runs_dir: result_path.with_file_name(RUNS_DIR),
             result_path,
             shared: Arc::new(Mutex::new(shared)),
             desktop: None,
@@ -221,6 +235,98 @@ impl App {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Shared> {
         self.shared.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Show the last run again: `result.json` when it is a jaguar-result/1 (anything else is
+    /// left alone). It is the newest saved run when that one was written after it.
+    fn restore_last(&self) {
+        let Ok(text) = std::fs::read_to_string(&self.result_path) else { return };
+        if !is_result(&text) {
+            return;
+        }
+        let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let newest = list_runs(&self.runs_dir).into_iter().next();
+        let run_file = newest.filter(
+            |(_, path)| matches!((modified(path), modified(&self.result_path)), (Some(a), Some(r)) if a >= r),
+        );
+        let mut s = self.lock();
+        s.result = Some(text);
+        s.run_file = run_file.map(|(name, _)| name);
+    }
+
+    /// `GET /api/runs`.
+    fn runs(&self) -> Reply {
+        let current = self.lock().run_file.clone();
+        let runs: Vec<serde_json::Value> = list_runs(&self.runs_dir)
+            .into_iter()
+            .map(|(name, path)| {
+                let meta = std::fs::read_to_string(meta_path(&path))
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+                let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                serde_json::json!({ "file": name, "bytes": bytes, "meta": meta })
+            })
+            .collect();
+        json_reply(
+            200,
+            serde_json::json!({ "dir": std::path::absolute(&self.runs_dir).unwrap_or_else(|_| self.runs_dir.clone()).display().to_string(), "current": current, "runs": runs }),
+        )
+    }
+
+    /// The run file a `?file=` names, or the reply refusing it.
+    fn run_path(&self, query: &str) -> Result<(String, PathBuf), Reply> {
+        let raw = query.split('&').find_map(|kv| kv.strip_prefix("file=")).unwrap_or("");
+        let Some(name) = safe_name(raw).filter(|n| is_run_name(n)) else {
+            return Err(err_reply(400, format!("bad run file name: {raw:?}")));
+        };
+        let path = self.runs_dir.join(&name);
+        if !path.is_file() {
+            return Err(err_reply(404, format!("no saved run {name}")));
+        }
+        Ok((name, path))
+    }
+
+    /// `POST /api/runs/open`.
+    fn open_run(&self, query: &str) -> Reply {
+        let (name, path) = match self.run_path(query) {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        if self.lock().state == "running" {
+            return err_reply(409, "a run is going: open a saved run when it is done");
+        }
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => return err_reply(500, format!("reading {}: {e}", path.display())),
+        };
+        if !is_result(&text) {
+            return err_reply(422, format!("{name} is not a JAGUAR result"));
+        }
+        let mut s = self.lock();
+        if s.state == "running" {
+            return err_reply(409, "a run is going: open a saved run when it is done");
+        }
+        s.result = Some(text);
+        s.run_file = Some(name);
+        s.error = None;
+        json_reply(200, serde_json::json!({ "ok": true }))
+    }
+
+    /// `DELETE /api/runs`.
+    fn delete_run(&self, query: &str) -> Reply {
+        let (name, path) = match self.run_path(query) {
+            Ok(v) => v,
+            Err(r) => return r,
+        };
+        if let Err(e) = std::fs::remove_file(&path) {
+            return err_reply(500, format!("removing {}: {e}", path.display()));
+        }
+        let _ = std::fs::remove_file(meta_path(&path));
+        let mut s = self.lock();
+        if s.run_file.as_deref() == Some(name.as_str()) {
+            s.run_file = None;
+        }
+        json_reply(200, serde_json::json!({ "ok": true }))
     }
 
     fn handle(&self, method: &str, url: &str, body: &str) -> Reply {
@@ -272,6 +378,9 @@ impl App {
                 None => err_reply(404, "no result yet"),
             },
             ("POST", "/api/run") => self.start_run(body),
+            ("GET", "/api/runs") => self.runs(),
+            ("DELETE", "/api/runs") => self.delete_run(query),
+            ("POST", "/api/runs/open") => self.open_run(query),
             ("POST", "/api/race") => self.race(body),
             ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/stop") => {
                 let mut s = self.lock();
@@ -330,6 +439,8 @@ impl App {
                 | "/api/mix"
                 | "/api/result"
                 | "/api/run"
+                | "/api/runs"
+                | "/api/runs/open"
                 | "/api/export"
                 | "/api/race"
                 | "/api/pause"
@@ -662,10 +773,12 @@ impl App {
                 return err_reply(409, "a run is already going");
             }
             let result = s.result.take();
+            let run_file = s.run_file.take();
             *s = Shared {
                 state: "running",
                 hull_file: params.hull.file.clone().unwrap_or_default(),
                 result,
+                run_file,
                 params: Some(params.clone()),
                 started: Some(Instant::now()),
                 planned: params.shape_search.as_ref().map(crate::shapeopt::planned_shapes),
@@ -679,6 +792,116 @@ impl App {
         std::thread::spawn(move || run_job(params, shared, out, &ctl));
         json_reply(202, serde_json::json!({ "ok": true }))
     }
+}
+
+/// Run history folder name, next to the canoe.toml and result.json.
+const RUNS_DIR: &str = "runs";
+
+/// A jaguar-result/1 text? (`format` is its first key, pretty or compact.)
+fn is_result(text: &str) -> bool {
+    let head: String = text.chars().take(200).filter(|c| !c.is_whitespace()).collect();
+    head.starts_with(&format!("{{\"format\":\"{}\"", optimize::RESULT_FORMAT))
+}
+
+/// A run file name (not its summary).
+fn is_run_name(name: &str) -> bool {
+    name.ends_with(".json") && !name.ends_with(".meta.json")
+}
+
+fn meta_path(run: &Path) -> PathBuf {
+    run.with_extension("meta.json")
+}
+
+/// Saved runs (name, path), newest first (names start with the UTC time).
+fn list_runs(dir: &Path) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().into_string().ok()?;
+            (is_run_name(&name) && e.path().is_file()).then(|| (name, e.path()))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out
+}
+
+/// "2026-10-18_142233" (UTC) for `t`.
+fn utc_stamp(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days since 1970-01-01 to a civil date (H. Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}_{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
+/// Save `result` to the history `dir` as `<UTC time>_<hull>.json` (compact) plus its
+/// `.meta.json` summary; returns the file name. Written to a temporary name and renamed, so
+/// the list never shows half a file.
+fn save_run(result: &optimize::RunResult, dir: &Path, now: std::time::SystemTime) -> Result<String> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let design = result.winner.as_ref().or(result.closest.as_ref().map(|c| &c.design));
+    let hull = result
+        .winner_hull
+        .as_ref()
+        .map(|h| h.name.clone())
+        .or_else(|| {
+            result.params.hull.file.as_ref().and_then(|f| f.file_stem()).map(|s| s.to_string_lossy().into())
+        })
+        .unwrap_or_else(|| "run".into());
+    let stem: String = hull
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let stamp = utc_stamp(now);
+    let name = (1..)
+        .map(|n| if n == 1 { format!("{stamp}_{stem}.json") } else { format!("{stamp}_{stem}_{n}.json") })
+        .find(|n| !dir.join(n).exists())
+        .expect("an unused name");
+    let c = design.map(|w| &w.candidate);
+    let status = match (&result.winner, &result.closest) {
+        (Some(w), _) if w.verified => "verified",
+        (Some(_), _) => "not verified",
+        (None, Some(_)) => "fails",
+        (None, None) => "no design",
+    };
+    let meta = serde_json::json!({
+        "saved_unix": now.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+        "version": env!("CARGO_PKG_VERSION"),
+        "hull": hull,
+        "objective": result.params.objective.kind,
+        "shape_search": result.params.shape_search.is_some(),
+        "candidates": result.candidates.len(),
+        "status": status,
+        "ended_early": result.ended_early.is_some(),
+        "hull_weight_lb": c.map(|c| c.hull_weight_lb),
+        "thickness_in": c.map(|c| c.thickness_in),
+        "density_pcf": c.map(|c| c.density_pcf),
+        "mix": c.and_then(|c| c.mix.clone()),
+        "depth_in": c.map(|c| c.depth_in),
+        "length_in": c.map(|c| c.length_in),
+        "beam_in": c.map(|c| c.beam_in),
+        "race_s": c.and_then(|c| c.race_s),
+        "drag_n": c.and_then(|c| c.drag_n),
+    });
+    let path = dir.join(&name);
+    let write = |p: &Path, text: &str| -> Result<()> {
+        let tmp = p.with_extension("tmp");
+        std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::rename(&tmp, p).with_context(|| format!("renaming to {}", p.display()))
+    };
+    write(&meta_path(&path), &meta.to_string())?;
+    write(&path, &serde_json::to_string(result)?)?;
+    Ok(name)
 }
 
 /// Saved prefs (text, params) if the file exists and parses, else None.
@@ -761,28 +984,38 @@ fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
 
 fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf, ctl: &optimize::RunControl) {
     let sh = Arc::clone(&shared);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<String> {
-        let on_progress = |p: Progress| {
-            let mut s = lock(&sh);
-            match p {
-                Progress::Started { total } => s.total = total,
-                Progress::Candidate { done, total, candidate } => {
-                    s.done = s.done.max(done);
-                    s.total = total;
-                    s.candidates.push(candidate);
+    let outcome =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(String, Option<String>)> {
+            let on_progress = |p: Progress| {
+                let mut s = lock(&sh);
+                match p {
+                    Progress::Started { total } => s.total = total,
+                    Progress::Candidate { done, total, candidate } => {
+                        s.done = s.done.max(done);
+                        s.total = total;
+                        s.candidates.push(candidate);
+                    }
+                    Progress::Shape { index, shapes, .. } => s.shape = Some((index, shapes)),
+                    Progress::Verifying { .. } => {}
                 }
-                Progress::Shape { index, shapes, .. } => s.shape = Some((index, shapes)),
-                Progress::Verifying { .. } => {}
-            }
-        };
-        let result = crate::run_controlled(&params, &on_progress, ctl)?;
-        report::write_json(&result, &out)?;
-        Ok(serde_json::to_string_pretty(&result)?)
-    }));
+            };
+            let result = crate::run_controlled(&params, &on_progress, ctl)?;
+            report::write_json(&result, &out)?;
+            // The history copy is a convenience: a failure to save it does not fail the run.
+            let saved = match save_run(&result, &out.with_file_name(RUNS_DIR), std::time::SystemTime::now()) {
+                Ok(name) => Some(name),
+                Err(e) => {
+                    eprintln!("JAGUAR: run not saved to the history: {e:#}");
+                    None
+                }
+            };
+            Ok((serde_json::to_string_pretty(&result)?, saved))
+        }));
     let mut s = lock(&shared);
     match outcome {
-        Ok(Ok(json)) => {
+        Ok(Ok((json, saved))) => {
             s.result = Some(json);
+            s.run_file = saved;
             s.state = "done";
         }
         Ok(Err(e)) if e.downcast_ref::<optimize::RunEnded>().is_some() => s.state = "stopped",
@@ -862,6 +1095,7 @@ pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()
         None => default_prefs_path()?,
     };
     let app = App::new(params_path, prefs.clone())?;
+    app.restore_last();
     let server = tiny_http::Server::http(("127.0.0.1", port))
         .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
     println!("JAGUAR serving http://127.0.0.1:{port}/  (prefs {}, Ctrl-C to stop)", prefs.display());
@@ -879,6 +1113,7 @@ pub fn serve_desktop(
     idle: Duration,
 ) -> Result<()> {
     let mut app = App::new(params_path, prefs)?;
+    app.restore_last();
     app.desktop = Some(folder);
     let server = Arc::new(server);
     let (srv, seen, shared) = (Arc::clone(&server), Arc::clone(&app.seen), Arc::clone(&app.shared));
@@ -1269,6 +1504,87 @@ mod tests {
         let path = dir.join("canoe.toml");
         std::fs::write(&path, toml::to_string(&p).unwrap()).unwrap();
         (App::new(&path, dir.join("prefs.toml")).unwrap(), p)
+    }
+
+    #[test]
+    fn utc_stamp_and_result_sniffing() {
+        let at = |s: u64| utc_stamp(std::time::UNIX_EPOCH + Duration::from_secs(s));
+        assert_eq!(at(0), "1970-01-01_000000");
+        assert_eq!(at(951_782_400), "2000-02-29_000000");
+        assert_eq!(at(1_700_000_000), "2023-11-14_221320");
+        assert!(is_result("{\n  \"format\": \"jaguar-result/1\",\n  \"params\": {}"));
+        assert!(is_result(r#"{"format":"jaguar-result/1","params":{}}"#));
+        assert!(!is_result(r#"{"format":"jaguar-race/1"}"#) && !is_result("previous"));
+        assert!(is_run_name("a.json") && !is_run_name("a.meta.json") && !is_run_name("a.tmp"));
+    }
+
+    #[test]
+    fn finished_runs_are_saved_listed_reopened_and_deleted() {
+        let (a, p) = app_on(|_| {});
+        let runs = |a: &App| -> serde_json::Value {
+            serde_json::from_str(&a.handle("GET", "/api/runs", "").2).unwrap()
+        };
+        assert_eq!(runs(&a)["runs"].as_array().unwrap().len(), 0);
+        a.lock().state = "running";
+        run_job(p.clone(), Arc::clone(&a.shared), a.result_path.clone(), &optimize::RunControl::default());
+        assert_eq!(a.lock().state, "done");
+        let v = runs(&a);
+        let list = v["runs"].as_array().unwrap();
+        assert_eq!(list.len(), 1);
+        let name = list[0]["file"].as_str().unwrap().to_string();
+        assert_eq!(v["current"].as_str(), Some(name.as_str()));
+        assert!(name.ends_with(".json") && list[0]["bytes"].as_u64().unwrap() > 1000);
+        let meta = &list[0]["meta"];
+        assert_eq!(meta["status"], "verified");
+        assert!(meta["hull_weight_lb"].as_f64().unwrap() > 0.0 && meta["candidates"].as_u64().unwrap() > 0);
+        // The saved run is the same result as result.json, compact.
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(a.runs_dir.join(&name)).unwrap()).unwrap();
+        let last: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&a.result_path).unwrap()).unwrap();
+        assert_eq!(saved, last);
+
+        // Reopening JAGUAR shows the last run again, known as that saved run.
+        let b = App::new(&a.params_path, a.prefs_path.clone()).unwrap();
+        assert_eq!(b.handle("GET", "/api/result", "").0, 404, "App::new alone restores nothing");
+        b.restore_last();
+        assert_eq!(b.handle("GET", "/api/result", "").0, 200);
+        assert_eq!(runs(&b)["current"].as_str(), Some(name.as_str()));
+
+        // Open: another result is shown until a saved run is opened; not while running.
+        b.lock().result = Some("other".into());
+        b.lock().run_file = None;
+        let q = format!("file={name}");
+        b.lock().state = "running";
+        assert_eq!(b.handle("POST", &format!("/api/runs/open?{q}"), "").0, 409);
+        b.lock().state = "idle";
+        assert_eq!(b.handle("POST", &format!("/api/runs/open?{q}"), "").0, 200);
+        assert!(is_result(&b.handle("GET", "/api/result", "").2));
+        assert_eq!(runs(&b)["current"].as_str(), Some(name.as_str()));
+        for bad in ["file=../canoe.toml", "file=x.meta.json", "file=", "file=canoe.toml"] {
+            assert_eq!(b.handle("POST", &format!("/api/runs/open?{bad}"), "").0, 400, "{bad}");
+        }
+        assert_eq!(b.handle("POST", "/api/runs/open?file=nope.json", "").0, 404);
+        std::fs::write(b.runs_dir.join("junk.json"), "{}").unwrap();
+        assert_eq!(b.handle("POST", "/api/runs/open?file=junk.json", "").0, 422);
+
+        // Delete removes the run and its summary; the shown result stays.
+        assert_eq!(b.handle("DELETE", &format!("/api/runs?{q}"), "").0, 200);
+        assert!(!b.runs_dir.join(&name).exists() && !meta_path(&b.runs_dir.join(&name)).exists());
+        assert!(runs(&b)["current"].is_null());
+        assert_eq!(b.handle("GET", "/api/result", "").0, 200);
+        assert_eq!(b.handle("DELETE", &format!("/api/runs?{q}"), "").0, 404);
+        assert_eq!(b.handle("PUT", "/api/runs", "").0, 405);
+    }
+
+    #[test]
+    fn restore_ignores_a_missing_or_foreign_result_json() {
+        let (a, _) = app_on(|_| {});
+        a.restore_last();
+        assert_eq!(a.handle("GET", "/api/result", "").0, 404);
+        std::fs::write(&a.result_path, "not a result").unwrap();
+        a.restore_last();
+        assert_eq!(a.handle("GET", "/api/result", "").0, 404);
     }
 
     #[test]

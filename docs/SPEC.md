@@ -21,7 +21,10 @@ jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit pa
 `serve`: the form is the only editor. Each edit is autosaved (validated, absolute paths) to
 `--prefs`, default `$XDG_CONFIG_HOME/jaguar/prefs.toml` else `~/.config/jaguar/prefs.toml`, and
 restored on reopen; "Reset to canoe.toml" deletes it. The mix panel charts and edits the lab CSV
-(saved over `material.mix_data` after it parses and fits, previous kept as `.bak`). HTTP API: `src/serve.rs`.
+(saved over `material.mix_data` after it parses and fits, previous kept as `.bak`). The last
+result (`result.json` next to the canoe.toml) is shown again on reopen. Every run that finishes is
+also kept in `runs/` next to it (`<UTC time>_<hull>.json` + a `.meta.json` summary); History lists
+them, opens one as the current result (charts, export, PDF, race) or deletes it. HTTP API: `src/serve.rs`.
 3D view: left-drag orbits, right-, middle- or Shift-drag pans, the wheel zooms; a view cube in the
 top right turns with the camera (faces BOW, STERN, PORT, STBD, TOP, BOTTOM) and a click on a face,
 edge or corner turns the view there; Home returns to the starting view.
