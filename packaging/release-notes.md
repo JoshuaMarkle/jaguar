@@ -2,6 +2,16 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.3
+* **Sort and filter saved runs (History):** type to filter by hull, mix or file name, show only
+  verified (or failing) runs, fixed hull or shape searches, and sort by date, hull weight, race
+  time, drag, wall thickness or file size.
+* **Time left is always readable:** the run status in the top bar keeps the time left in full,
+  however narrow the window.
+* **Nothing hidden on smaller screens:** the Result panel no longer runs off the right edge,
+  long input labels wrap instead of being cut off, and a widened side panel shrinks back when
+  the window gets smaller.
+
 ## New in 0.5.2
 * **Half canoe (Manufacture tab):** for a canoe that is the same at the bow and stern, tick
   **half canoe** to cut tracing templates for the bow half only. Each template also traces the

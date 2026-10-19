@@ -66,7 +66,7 @@ make hooks     # once per clone: enables the pre-commit hook (runs make check)
 make check     # fmt + clippy -D warnings + tests. MUST pass before every commit.
 make run       # cargo run --release -- run examples/canoe.toml
 make serve     # web UI at http://127.0.0.1:8000
-git tag v0.5.2 && git push origin v0.5.2   # release: builds and publishes the Windows + Mac zips
+git tag v0.5.3 && git push origin v0.5.3   # release: builds and publishes the Windows + Mac zips
 ```
 
 ## Rules
