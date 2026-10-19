@@ -15,7 +15,7 @@ jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
 jaguar import-mesh canoe.step|canoe.stp|canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
 jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets] [--filled]
-jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical] [--packing blocks|continuous|tight|fewest-shapes] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--kerf in] [--dxf-marks]
+jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical] [--packing blocks|continuous|tight|fewest-shapes] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--kerf in] [--dxf-marks] [--half-canoe]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
@@ -528,6 +528,10 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   the length, first sheet with room; three piece orders, each with quarter turns and with every
   5 deg (lowest-spot-first can tilt a piece into a spot that blocks others, so both are kept and
   the fewer sheets win). Err if a piece fits no sheet. Deterministic.
+* **Half canoe** (`--half-canoe`, off; flat tracing templates only): for a canoe the same fore and
+  aft, a piece wholly aft of midships (of the hollow run) reuses the template of its mirror image
+  at the bow (within 0.02 in), turned end for end, so only the bow half is cut; Err naming the
+  piece if it has none. A piece across midships is cut whole.
 * **Alignment holes** (on; `--no-holes`, `--hole` size, default 1/4 in): cut in every template at
   the 12 in stations from the bow end of the hull, on the centreline (half templates 1 in off it;
   upright slabs on the centreline 1 and 4 in above the floor), where at least the hole radius plus

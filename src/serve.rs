@@ -87,7 +87,7 @@
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //! * `POST /api/manufacture` body = JSON `manufacture::MoldSpec` (fields left out take their
 //!   defaults: tracing templates, flat layers, blocks packing, `foam_in` [2] (one number or
-//!   a list), `foam_sheets` [[96, 48]], `sheets` [[96, 48]], 1/4 in gap, `nest_inside` false, `ring_in` 1, `holes` true, `hole_in` 0.25, `kerf_in` 0, `dxf_marks` false). Lays out the hardboard for the last result's
+//!   a list), `foam_sheets` [[96, 48]], `sheets` [[96, 48]], 1/4 in gap, `nest_inside` false, `ring_in` 1, `holes` true, `hole_in` 0.25, `kerf_in` 0, `dxf_marks` false, `half_canoe` false). Lays out the hardboard for the last result's
 //!   winner's foam mold (`manufacture.rs`) and returns the
 //!   jaguar-mold/1 layout plus "dxf": [{"name", "text"}], one R12 DXF per sheet. Synchronous
 //!   (about a second). 400 bad spec, 404 no result yet, 409 a run is going or no winner, 422 if

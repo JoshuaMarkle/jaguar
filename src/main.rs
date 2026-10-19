@@ -179,6 +179,10 @@ enum Cmd {
         /// DXF; off: cut lines only (OMAX and the like cut every line they import)
         #[arg(long)]
         dxf_marks: bool,
+        /// Double-symmetric canoe: cut templates for the bow half only, each also traces the
+        /// matching stern piece turned end for end (flat tracing templates)
+        #[arg(long)]
+        half_canoe: bool,
     },
     /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
     /// and recommended drag-objective weightings (src/race.rs).
@@ -530,6 +534,7 @@ fn main() -> Result<()> {
             hole,
             kerf,
             dxf_marks,
+            half_canoe,
         } => {
             use jaguar::manufacture::{self, Boards, MoldSpec, Orientation, Packing};
             let spec = MoldSpec {
@@ -555,6 +560,7 @@ fn main() -> Result<()> {
                 hole_in: hole,
                 kerf_in: kerf,
                 dxf_marks,
+                half_canoe,
             };
             let l = manufacture::from_result(&std::fs::read_to_string(&result)?, &spec)?;
             std::fs::create_dir_all(&out)?;

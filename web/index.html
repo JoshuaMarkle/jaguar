@@ -1845,7 +1845,7 @@ async function raceGo() {
 // Hardboard tracing templates for the foam layers (or boards between them), packed onto sheets, one DXF per sheet.
 // Settings are a per-browser convenience (localStorage); a layout belongs to the result it was made from.
 const MFG_DEF = { boards: 'templates', orientation: 'flat', packing: 'blocks', foam_in: [2], foam_sheets: [[96, 48]],
-  board_in: 0.125, sheets: [[96, 48]], gap_in: 0.25, nest_inside: false, ring_in: 1, holes: true, hole_in: 0.25, kerf_in: 0, dxf_marks: false };
+  board_in: 0.125, sheets: [[96, 48]], gap_in: 0.25, nest_inside: false, ring_in: 1, holes: true, hole_in: 0.25, kerf_in: 0, dxf_marks: false, half_canoe: false };
 // Saved settings, with those of the first version (one foam thickness and one size each) carried over.
 let mfgSpec = (() => {
   let v = {}; try { v = JSON.parse(store.get('mfg') || '{}') || {}; } catch (e) { v = {}; }
@@ -1892,7 +1892,8 @@ function mfgCtl() {
     <button type="button" class="btn" id="mfgpacket" title="Printable shop packet: steps, stack order with a drawing of each layer, what every template traces, every sheet in cutting order, boxes to tick. Opens the print dialog: choose Save as PDF.">Shop packet</button>` : '';
   const nest = `<span class="muted" title="Cut smaller pieces out of the middle of bigger ones: a tracing template only needs its outer edge, so it becomes a ring around them. Saves hardboard when some layers are much narrower than others; not with blocks (every block piece is as long as the others).">nest inside</span><input type="checkbox" class="switch" id="mfg.nest_inside" ${mfgSpec.nest_inside ? 'checked' : ''}>`
     + `<span class="muted" title="Alignment holes in every template at the 12 in stations">holes</span><input type="checkbox" class="switch" id="mfg.holes" ${mfgSpec.holes ? 'checked' : ''}>`
-    + `<span class="muted" title="Also put the reference lines (names, centreline, ticks, sanding line, sheet edge) in the DXF on layers LABEL and SHEET. Off: cut lines only, since OMAX Layout cuts every line it imports unless told not to.">DXF marks</span><input type="checkbox" class="switch" id="mfg.dxf_marks" ${mfgSpec.dxf_marks ? 'checked' : ''}>`;
+    + `<span class="muted" title="Also put the reference lines (names, centreline, ticks, sanding line, sheet edge) in the DXF on layers LABEL and SHEET. Off: cut lines only, since OMAX Layout cuts every line it imports unless told not to.">DXF marks</span><input type="checkbox" class="switch" id="mfg.dxf_marks" ${mfgSpec.dxf_marks ? 'checked' : ''}>`
+    + (tpl && mfgSpec.orientation === 'flat' ? `<span class="muted" title="For a canoe that is the same at the bow and stern: cut templates for the bow half only; each also traces the matching stern piece, turned end for end. Lay out fails if the canoe is not the same fore and aft.">half canoe</span><input type="checkbox" class="switch" id="mfg.half_canoe" ${mfgSpec.half_canoe ? 'checked' : ''}>` : '');
   return `${sels}${nums}${nest}<button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out'}</button>${views}`;
 }
 function mfgWire() {
@@ -1905,6 +1906,7 @@ function mfgWire() {
   $('mfg.nest_inside').onchange = e => { mfgSpec.nest_inside = e.target.checked; save(); buildTabs(); };
   $('mfg.holes').onchange = e => { mfgSpec.holes = e.target.checked; save(); buildTabs(); };
   $('mfg.dxf_marks').onchange = e => { mfgSpec.dxf_marks = e.target.checked; save(); };
+  const hc = $('mfg.half_canoe'); if (hc) hc.onchange = e => { mfgSpec.half_canoe = e.target.checked; save(); };
   $('mfggo').onclick = mfgGo;
   const v = $('mfgview'); if (v) v.onchange = e => { mfgView = Number(e.target.value); buildTabs(); drawPlot(); };
   const d = $('mfgdxf'); if (d) d.onclick = () => mfgSave(mfgView - 1);
@@ -1942,7 +1944,8 @@ function mfgPacketHtml(m) {
     `Cut the hardboard: ${m.sheets.length} sheet${m.sheets.length > 1 ? 's' : ''} (${sizes([...new Set(m.sheets.map(x => `${x.length_in}x${x.width_in}`))].map(t => t.split('x').map(Number)))} in), one DXF each. ${sp.dxf_marks ? `Cut layer <b>CUT</b> only (outlines${sp.holes ? ' and alignment holes' : ''}); set layers <b>LABEL</b> (reference lines, do not etch) and <b>SHEET</b> (sheet edge) to not cut` : `The files hold only cut lines (outlines${sp.holes ? ' and alignment holes' : ''}): import and cut; OMAX adds the lead-ins and cut-width compensation`}. Pieces are in cutting order${sp.nest_inside ? ', pieces cut out of others first' : ''}.`,
     'Write each template\'s name on it with a marker, with the arrow to the bow (the sheet drawings below show where each is).',
     tpl ? `For each layer, bottom up: take foam ${s.foam_order_in.length > 1 ? 'of the thickness listed' : `${s.foam_order_in[0]} in thick`}, lay each template on a foam sheet (${sizes(sp.foam_sheets)} in), trace it${sp.holes ? ', mark the holes through it' : ''} and cut just outside the line.` +
-      (sp.packing === 'fewest_shapes' ? ' Half templates: draw a straight centreline on the foam first, trace one side, flip the template over for the other side.' : '')
+      (sp.packing === 'fewest_shapes' ? ' Half templates: draw a straight centreline on the foam first, trace one side, flip the template over for the other side.' : '') +
+      (sp.half_canoe ? ' Templates are cut for the bow half only: turn each end for end to trace the matching stern piece (listed under Templates).' : '')
       : `Lay a board, then a foam layer, and so on (thicknesses below); sand the foam to the board edges.`,
     flat ? `Stack the layers from the floor (gunwale, L1) up to the keel${sp.holes ? ', lining up the holes (a dowel through them keeps the stack straight)' : ''}${sp.packing === 'blocks' ? '; joints line up through every layer, so each block can come out whole when demolding' : ''}.`
       : `Stand the slabs in order from the bow (R1)${sp.holes ? ', lining up the holes' : ''}.`,
@@ -1972,7 +1975,7 @@ function mfgPacketHtml(m) {
     <h1>Mold shop packet: ${esc(m.hull)}</h1><div class="muted">${new Date().toLocaleString()} · Generated by JAGUAR</div>
     <h2>Settings</h2><div class="kv">
       <span class="muted">Hardboard for</span><span>${tpl ? 'tracing templates (foam-only mold)' : 'boards between the foam layers'}</span>
-      <span class="muted">Layers</span><span>${flat ? 'flat, gunwale on the floor' : 'upright across the canoe'}; packing ${packing}${sp.nest_inside ? `; pieces cut out of others (ring ${sp.ring_in} in)` : ''}</span>
+      <span class="muted">Layers</span><span>${flat ? 'flat, gunwale on the floor' : 'upright across the canoe'}; packing ${packing}${sp.half_canoe ? '; bow half cut, stern traced from it' : ''}${sp.nest_inside ? `; pieces cut out of others (ring ${sp.ring_in} in)` : ''}</span>
       <span class="muted">Foam</span><span>${s.foam_layers} layers, ${s.foam_order_in.join(' + ')} in (${f(s.over_in)} in over); ${s.foam_pieces} pieces; sheets ${sizes(sp.foam_sheets)} in</span>
       <span class="muted">Mold</span><span>${f(s.height_in)} in ${flat ? 'high' : 'long'}, inner beam ${f(s.beam_in, 1)} in; hull less the ${s.wall_in} in wall</span>
       <span class="muted">Hardboard</span><span>${m.pieces.length} pieces on ${m.sheets.length} sheets (${(100 * m.utilization).toFixed(0)}% used); gap ${sp.gap_in} in${sp.holes ? `; ${sp.hole_in} in alignment holes` : ''}${sp.kerf_in ? `; cut width ${sp.kerf_in} in allowed for` : ''}</span>

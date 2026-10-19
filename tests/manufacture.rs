@@ -320,6 +320,38 @@ fn template_tips_taper_to_a_point() {
 }
 
 #[test]
+fn half_canoe_traces_every_foam_piece_from_bow_half_templates() {
+    let ex = example();
+    for packing in [Packing::Blocks, Packing::Continuous] {
+        let base = MoldSpec { packing, ..MoldSpec::default() };
+        let full = from_result(&ex, &base).unwrap();
+        let half = from_result(&ex, &MoldSpec { half_canoe: true, ..base.clone() }).unwrap();
+        assert!(half.pieces.len() < full.pieces.len() && half.sheets.len() <= full.sheets.len());
+        // Every foam piece is traced exactly once, and no template lies wholly aft of midships.
+        let mut traced: Vec<String> = half
+            .pieces
+            .iter()
+            .flat_map(|p| &p.traces)
+            .map(|t| t.split(' ').next().unwrap().to_string())
+            .collect();
+        traced.sort();
+        let mut foam: Vec<String> = half.layers.iter().flat_map(|l| l.foam_labels.clone()).collect();
+        foam.sort();
+        assert_eq!(traced, foam, "{packing:?}");
+        let mid = 0.5 * (bbox(&half.layers[0].foam[0]).0[0] + bbox(half.layers[0].foam.last().unwrap()).1[0]);
+        for p in &half.pieces {
+            assert!(bbox(&p.outline).0[0] < mid - 0.01, "{} is aft of midships", p.label);
+        }
+        check_sheets(&half);
+    }
+    // Only for flat tracing templates.
+    let bad = MoldSpec { half_canoe: true, boards: Boards::Mold, ..MoldSpec::default() };
+    assert!(from_result(&ex, &bad).is_err());
+    let bad = MoldSpec { half_canoe: true, ..ribs_spec() };
+    assert!(from_result(&ex, &bad).is_err());
+}
+
+#[test]
 fn boards_in_the_mold_sit_between_the_foam_layers() {
     let spec = MoldSpec { boards: Boards::Mold, ..MoldSpec::default() };
     let l = from_result(&example(), &spec).unwrap();

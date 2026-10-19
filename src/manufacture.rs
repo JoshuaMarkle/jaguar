@@ -144,6 +144,9 @@ pub struct MoldSpec {
     /// line; layer SHEET: the sheet edge). Off: cut lines only, since water-jet software such as
     /// OMAX Layout imports every line and would cut these unless each is set not to.
     pub dxf_marks: bool,
+    /// Double-symmetric canoe (the same fore and aft): cut templates for the bow half only; each
+    /// also traces the matching stern piece, turned end for end. Flat tracing templates only.
+    pub half_canoe: bool,
 }
 
 impl Default for MoldSpec {
@@ -163,6 +166,7 @@ impl Default for MoldSpec {
             hole_in: 0.25,
             kerf_in: 0.0,
             dxf_marks: false,
+            half_canoe: false,
         }
     }
 }
@@ -187,6 +191,14 @@ impl MoldSpec {
         ensure!(self.gap_in.is_finite() && self.gap_in >= 0.0, "gap must be >= 0, got {}", self.gap_in);
         pos(self.ring_in, "ring width")?;
         pos(self.hole_in, "hole size")?;
+        ensure!(
+            !self.half_canoe || self.templates(),
+            "half canoe needs tracing templates: boards in the mold are each part of the mold"
+        );
+        ensure!(
+            !self.half_canoe || self.orientation == Orientation::Flat,
+            "half canoe is for flat layers (upright slabs do not mirror fore and aft)"
+        );
         ensure!(
             self.kerf_in.is_finite()
                 && self.kerf_in >= 0.0
@@ -519,6 +531,8 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     let shortened = |s: &Shape| {
         spec.packing == Packing::Tight || (nests && width(s) < widest - 2.0 * (spec.ring_in + spec.gap_in))
     };
+    // Half canoe: pieces wholly aft of midships reuse the bow pieces' templates.
+    let mid = spec.half_canoe.then_some(0.5 * (xa + xb));
     let build = |max_len: Option<f64>| -> Result<(Vec<Layer>, Vec<Piece>)> {
         let (mut ls, mut ps) = (vec![], vec![]);
         for (li, (label, pos, ft, shape)) in shapes.iter().enumerate() {
@@ -534,6 +548,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
             };
             match shape {
                 Shape::Flat { runs, guide } => {
+                    let mut layer_cuts: Vec<Cut> = vec![];
                     for (ri, run) in runs.iter().enumerate() {
                         let tag = if runs.len() > 1 {
                             format!("{label}{}", (b'a' + ri as u8) as char)
@@ -546,8 +561,9 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
                         };
                         layer.foam.extend(cuts.iter().map(|c| mirrored(&c.chain)));
                         layer.foam_labels.extend(cuts.iter().map(|c| c.label.clone()));
-                        flat_pieces(&cuts, li, spec, &mut layer.pieces, &mut ps);
+                        layer_cuts.extend(cuts);
                     }
+                    flat_pieces(&layer_cuts, li, spec, mid, &mut layer.pieces, &mut ps)?;
                 }
                 Shape::Upright { half, guide, x } => {
                     let full = close_section(half);
@@ -1119,17 +1135,39 @@ fn mirror_shape(a: &Cut, b: &Cut) -> bool {
 
 /// The run's cuts as hardboard pieces: one full-width piece each, or (FewestShapes) a half
 /// template each, shared with the mirror-image cut at the other end when there is one.
-fn flat_pieces(cuts: &[Cut], layer: usize, spec: &MoldSpec, used: &mut Vec<usize>, ps: &mut Vec<Piece>) {
+/// With `mid` (half canoe) every cut wholly aft of it must share the template of its mirror
+/// image at the bow, or Err: the canoe is not the same fore and aft there.
+fn flat_pieces(
+    cuts: &[Cut],
+    layer: usize,
+    spec: &MoldSpec,
+    mid: Option<f64>,
+    used: &mut Vec<usize>,
+    ps: &mut Vec<Piece>,
+) -> Result<()> {
     let half = spec.packing == Packing::FewestShapes;
     let mut made: Vec<(usize, usize)> = vec![]; // (cut, piece)
     for (k, c) in cuts.iter().enumerate() {
-        if half && let Some(&(_, pi)) = made.iter().find(|&&(j, _)| mirror_shape(&cuts[j], c)) {
-            // Turned end for end: the template traces this cut's port side as it is and its
-            // starboard side flipped over.
-            ps[pi].traces.extend([format!("{} P", c.label), format!("{} S (flip)", c.label)]);
-            let n = ps[pi].traces.len();
-            ps[pi].text = format!("{} <BOW x{n}", ps[pi].label);
-            continue;
+        let aft = mid.is_some_and(|m| c.c0 >= m - 0.01);
+        if half || aft {
+            if let Some(&(_, pi)) = made.iter().find(|&&(j, _)| mirror_shape(&cuts[j], c)) {
+                // Turned end for end: a half template traces this cut's port side as it is and
+                // its starboard side flipped over; a full one traces it whole.
+                if half {
+                    ps[pi].traces.extend([format!("{} P", c.label), format!("{} S (flip)", c.label)]);
+                } else {
+                    ps[pi].traces.push(format!("{} (turned end for end)", c.label));
+                }
+                let n = ps[pi].traces.len();
+                ps[pi].text = format!("{} <BOW x{n}", ps[pi].label);
+                continue;
+            }
+            ensure!(
+                !aft,
+                "half canoe: {} has no matching piece at the bow (the canoe is not the same fore and aft \
+                 within {SAME_SHAPE_IN} in); turn half canoe off",
+                c.label
+            );
         }
         let traces = if half {
             vec![format!("{} S", c.label), format!("{} P (flip)", c.label)]
@@ -1140,6 +1178,7 @@ fn flat_pieces(cuts: &[Cut], layer: usize, spec: &MoldSpec, used: &mut Vec<usize
         used.push(ps.len());
         ps.push(flat_piece(c, layer, half, traces, spec));
     }
+    Ok(())
 }
 
 fn flat_piece(c: &Cut, layer: usize, half: bool, traces: Vec<String>, spec: &MoldSpec) -> Piece {
@@ -2197,7 +2236,7 @@ mod tests {
         assert_eq!(cuts.len(), 3);
         assert_eq!(cuts[1].label, "L1-2");
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        flat_pieces(&cuts, 0, &spec, None, &mut used, &mut ps).unwrap();
         assert_eq!(ps.len(), 3);
         let total: f64 = ps.iter().map(|p| p.area_in2).sum();
         let exact = 2.0 * 12.0 * 200.0 * 2.0 / 3.0;
@@ -2216,7 +2255,7 @@ mod tests {
         let spec = MoldSpec { packing: Packing::FewestShapes, ..MoldSpec::default() };
         let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        flat_pieces(&cuts, 0, &spec, None, &mut used, &mut ps).unwrap();
         // Bow and stern thirds are one template (four traces), the middle its own (two).
         assert_eq!(ps.len(), 2);
         assert_eq!(ps[0].traces, ["L1-1 S", "L1-1 P (flip)", "L1-3 P", "L1-3 S (flip)"]);
@@ -2231,7 +2270,7 @@ mod tests {
         let skew: Vec<Pt> = lens().iter().map(|p| [p[0], p[1] * (1.0 + p[0] / 400.0)]).collect();
         let cuts = split_run(&skew, &[], "L2", None, &spec).unwrap();
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        flat_pieces(&cuts, 0, &spec, None, &mut used, &mut ps).unwrap();
         assert_eq!(ps.len(), 3);
     }
 
@@ -2407,7 +2446,7 @@ mod tests {
         let spec = MoldSpec::default();
         let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        flat_pieces(&cuts, 0, &spec, None, &mut used, &mut ps).unwrap();
         for p in &ps {
             assert!(!p.holes.is_empty());
             for h in &p.holes {
@@ -2418,11 +2457,13 @@ mod tests {
         // Half templates: 1 in off the centreline; none at all without holes.
         let half = MoldSpec { packing: Packing::FewestShapes, ..MoldSpec::default() };
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&split_run(&lens(), &[], "L1", None, &half).unwrap(), 0, &half, &mut used, &mut ps);
+        flat_pieces(&split_run(&lens(), &[], "L1", None, &half).unwrap(), 0, &half, None, &mut used, &mut ps)
+            .unwrap();
         assert!(ps.iter().flat_map(|p| &p.holes).all(|h| h[1] == 1.0));
         let off = MoldSpec { holes: false, ..MoldSpec::default() };
         let (mut used, mut ps) = (vec![], vec![]);
-        flat_pieces(&split_run(&lens(), &[], "L1", None, &off).unwrap(), 0, &off, &mut used, &mut ps);
+        flat_pieces(&split_run(&lens(), &[], "L1", None, &off).unwrap(), 0, &off, None, &mut used, &mut ps)
+            .unwrap();
         assert!(ps.iter().all(|p| p.holes.is_empty()));
     }
 
@@ -2482,5 +2523,25 @@ mod tests {
         // A square end is left alone.
         let sq: Vec<Pt> = vec![[0.0, 0.0], [0.0, 3.0], [5.0, 4.0], [10.0, 0.0]];
         assert_eq!(taper_tips(&sq)[..2], sq[..2]);
+    }
+
+    #[test]
+    fn half_canoe_cuts_the_bow_half_and_refuses_a_lopsided_canoe() {
+        // The 200 in lens in three 66.7 in pieces: the stern piece reuses the bow template turned
+        // end for end, the middle one (across midships) is cut whole.
+        let spec = MoldSpec { half_canoe: true, packing: Packing::Continuous, ..MoldSpec::default() };
+        let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&cuts, 0, &spec, Some(100.0), &mut used, &mut ps).unwrap();
+        assert_eq!(ps.len(), 2);
+        assert_eq!(ps[0].traces, ["L1-1", "L1-3 (turned end for end)"]);
+        assert!(ps[0].text.ends_with("x2"));
+        assert_eq!(ps[1].traces, ["L1-2"]);
+        // Fuller at the stern than the bow: no bow piece matches the stern one.
+        let skew: Vec<Pt> = lens().iter().map(|p| [p[0], p[1] * (1.0 + p[0] / 400.0)]).collect();
+        let cuts = split_run(&skew, &[], "L1", None, &spec).unwrap();
+        let (mut used, mut ps) = (vec![], vec![]);
+        let e = flat_pieces(&cuts, 0, &spec, Some(100.0), &mut used, &mut ps).unwrap_err().to_string();
+        assert!(e.contains("L1-3") && e.contains("not the same fore and aft"), "{e}");
     }
 }
