@@ -188,12 +188,13 @@
   #viewcube button:hover { background: var(--soft); }
   #viewlabel { position: absolute; left: var(--s3); top: var(--s3); background: var(--canvas); border-radius: var(--r-sm); padding: 3px 8px; color: var(--ink-soft); }
   #plotwrap { grid-column: 2; grid-row: 3; position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
-  #plotctl { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
+  #plotctl { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3) 0; min-height: 34px; }
   #plotctl select { width: auto; height: 24px; }
   #plotctl button.pill { height: 24px; padding: 0 var(--s3); border-radius: 999px; border: 1px solid var(--hair); background: none; color: var(--faint); cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
   #plotctl button.pill.on { color: var(--ink); border-color: var(--ink); }
   #plotctl .muted { margin-left: var(--s1); }
-  #plotctl input.mfgn { width: 52px; height: 24px; }
+  #plotctl input.mfgn { width: 60px; height: 24px; }
+  #plotctl input.mfgn.wide { width: 110px; }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
   /* Chart tabs, grouped: one segmented track per group (search, structure, hull, race). */
   /* Desktop mode (double-clicked JAGUAR): shown once the server has stopped. */
@@ -1840,32 +1841,178 @@ async function raceGo() {
   } catch (e) { raceErr = 'race failed: ' + e.message; }
   raceBusy = false; buildTabs(); drawPlot();
 }
-// ---------- manufacture tab: POST /api/manufacture lays out the winner's male mold (src/manufacture.rs) ----------
-// Foam layers with hardboard between; the hardboard outlines packed onto sheets, one DXF per sheet.
+// ---------- manufacture tab: POST /api/manufacture lays out the winner's male foam mold (src/manufacture.rs) ----------
+// Hardboard tracing templates for the foam layers (or boards between them), packed onto sheets, one DXF per sheet.
 // Settings are a per-browser convenience (localStorage); a layout belongs to the result it was made from.
-const MFG_DEF = { orientation: 'flat', foam_in: 2, board_in: 0.125, sheet_length_in: 96, sheet_width_in: 48, gap_in: 0.25 };
-let mfgSpec = (() => { try { return { ...MFG_DEF, ...JSON.parse(store.get('mfg') || '{}') }; } catch (e) { return { ...MFG_DEF }; } })();
+const MFG_DEF = { boards: 'templates', orientation: 'flat', packing: 'blocks', foam_in: [2], foam_sheets: [[96, 48]],
+  board_in: 0.125, sheets: [[96, 48]], gap_in: 0.25, nest_inside: false, ring_in: 1, holes: true, hole_in: 0.25, kerf_in: 0, dxf_marks: false };
+// Saved settings, with those of the first version (one foam thickness and one size each) carried over.
+let mfgSpec = (() => {
+  let v = {}; try { v = JSON.parse(store.get('mfg') || '{}') || {}; } catch (e) { v = {}; }
+  if (typeof v.foam_in === 'number') v.foam_in = [v.foam_in];
+  if (v.foam_length_in) v.foam_sheets = [[v.foam_length_in, v.foam_width_in || 48]];
+  if (v.sheet_length_in) v.sheets = [[v.sheet_length_in, v.sheet_width_in || 48]];
+  const out = { ...MFG_DEF }; for (const k of Object.keys(MFG_DEF)) if (v[k] !== undefined) out[k] = v[k];
+  return out;
+})();
 let mfgRes = null, mfgFor = null, mfgView = 0, mfgBusy = false, mfgErr = '';
-const MFG_NUM = [['foam_in', 'foam', 'Foam sheet thickness, in (hand-shaped, not water-jet cut).'], ['board_in', 'board', 'Hardboard thickness, in.'],
-  ['sheet_length_in', 'sheet', 'Hardboard sheet length, in.'], ['sheet_width_in', '×', 'Hardboard sheet width, in.'], ['gap_in', 'gap', 'Least space between pieces and from the sheet edge, in (water-jet kerf and lead-ins).']];
+const MFG_SEL = [
+  ['boards', 'What the hardboard is for', [['templates', 'tracing templates', 'Templates to trace and cut each foam layer; the mold is foam only.'], ['mold', 'boards in the mold', 'A hardboard sheet between each pair of foam layers, cut to the outline; the foam is sanded to the board edges.']]],
+  ['orientation', 'How the foam layers lie', [['flat', 'layers flat', 'Foam layers stacked flat, gunwale on the floor.'], ['vertical', 'layers upright', 'Foam slabs standing upright across the canoe like ribs.']]],
+  ['packing', 'How the outlines are cut and packed', [['blocks', 'blocks (joints line up)', 'Every layer is cut at the same places along the canoe, so the joints line up from floor to keel and the mold comes apart in whole blocks for demolding.'],
+    ['continuous', 'continuous', 'Fewest pieces per layer (each template is one whole foam piece), then the fewest sheets.'],
+    ['tight', 'tight (min hardboard)', 'Fewest hardboard sheets; layers may be cut into more, shorter pieces.'],
+    ['fewest_shapes', 'fewest shapes', 'Half-layer templates (centreline to side), flipped over to trace the other side; the bow template also traces the mirror-image stern piece when the hull is the same at both ends.']]]];
+// Settings typed as text: [key, label, tooltip, kind] with kind 'list' (thicknesses), 'sizes' (LxW list) or 'num'.
+const MFG_NUM = [['foam_in', 'foam', 'Foam thicknesses on hand, in, comma separated (e.g. 1.5, 2): the layers mix them so the stack fits the mold with the least left over.', 'list'],
+  ['foam_sheets', 'foam sheets', 'Foam sheet sizes on hand, length x width in, comma separated (e.g. 96x48, 72x36): every foam piece fits one of them; a longer layer is several pieces, one template each.', 'sizes'],
+  ['board_in', 'board', 'Hardboard thickness, in (between the layers, boards in the mold only).', 'num'],
+  ['sheets', 'hardboard', 'Hardboard sheet sizes on hand, length x width in, comma separated (e.g. 96x48, 48x48): a new sheet is the largest that holds the piece, then each sheet moves to the smallest size that holds its pieces.', 'sizes'],
+  ['gap_in', 'gap', 'Least space between pieces and from the sheet edge, in (water-jet kerf and lead-ins).', 'num'],
+  ['ring_in', 'ring', 'Nest inside: least width of hardboard left around pieces cut out of a template, in.', 'num'],
+  ['hole_in', 'holes', 'Alignment hole size, in: holes at the 12 in stations, the same places in every layer, to mark the foam or dowel the stack.', 'num'],
+  ['kerf_in', 'cut width', 'Water-jet cut width to allow for, in: outlines moved out and holes in by half of it. Leave 0 unless a test cut comes out undersize (most water-jet software compensates itself).', 'num']];
+const mfgShow = (v, kind) => kind === 'sizes' ? v.map(([a, b]) => `${a}x${b}`).join(', ') : kind === 'list' ? v.join(', ') : String(v);
+// Text -> value, or null when it does not parse.
+function mfgParse(t, kind) {
+  if (kind === 'num') { const v = Number(t); return t.trim() !== '' && isFinite(v) && v >= 0 ? v : null; }
+  const parts = t.split(',').map(x => x.trim()).filter(Boolean); if (!parts.length) return null;
+  if (kind === 'list') { const v = parts.map(Number); return v.every(x => isFinite(x) && x > 0) ? v : null; }
+  const v = parts.map(p => p.split(/[x×*]/i).map(Number)); return v.every(q => q.length === 2 && q.every(x => isFinite(x) && x > 0)) ? v : null;
+}
 const mfgLive = () => mfgRes && mfgFor === result ? mfgRes : null;
 function mfgCtl() {
-  const m = mfgLive(), win = !!(result && result.winner);
-  const nums = MFG_NUM.map(([k, l, t]) => `<span class="muted" title="${t}">${l}</span><input type="number" class="mfgn" id="mfg.${k}" step="any" min="0" value="${mfgSpec[k]}" title="${t}">`).join('');
-  const views = m ? `<span class="muted">view</span><select id="mfgview">${['Stack', ...m.sheets.map((s, i) => `Sheet ${i + 1} (${s.parts.length})`)].map((t, i) => `<option value="${i}" ${i === mfgView ? 'selected' : ''}>${t}</option>`).join('')}</select>
-    <button type="button" class="btn" id="mfgdxf" ${mfgView ? '' : 'disabled'} title="This sheet as DXF (inches; layer CUT = outlines, LABEL = names and marks, SHEET = sheet edge)">DXF</button>
-    <button type="button" class="btn" id="mfgall" title="Every sheet, one DXF each">All DXF</button>` : '';
-  return `<select id="mfg.orientation" title="Hardboard laid flat between foam layers, or standing upright across the canoe like ribs"><option value="flat" ${mfgSpec.orientation === 'flat' ? 'selected' : ''}>layers flat</option><option value="vertical" ${mfgSpec.orientation === 'vertical' ? 'selected' : ''}>layers upright</option></select>${nums}
-    <button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out boards'}</button>${views}`;
+  const m = mfgLive(), win = !!(result && result.winner), tpl = mfgSpec.boards === 'templates';
+  const sels = MFG_SEL.map(([k, t, opts]) => `<select id="mfg.${k}" title="${t}">${opts.map(([v, l, d]) => `<option value="${v}" title="${d}" ${mfgSpec[k] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`).join('');
+  const nums = MFG_NUM.filter(([k]) => (tpl ? k !== 'board_in' : k !== 'foam_sheets') && (k !== 'ring_in' || mfgSpec.nest_inside) && (k !== 'hole_in' || mfgSpec.holes))
+    .map(([k, l, t, kind]) => `<span class="muted" title="${t}">${l}</span><input type="text" class="mfgn${kind === 'sizes' ? ' wide' : ''}" id="mfg.${k}" value="${esc(mfgShow(mfgSpec[k], kind))}" title="${t}">`).join('');
+  const views = m ? `<span class="muted">view</span><select id="mfgview">${['Stack', ...m.sheets.map((s, i) => `Sheet ${i + 1}: ${s.length_in}×${s.width_in} (${s.parts.length})`)].map((t, i) => `<option value="${i}" ${i === mfgView ? 'selected' : ''}>${t}</option>`).join('')}</select>
+    <button type="button" class="btn" id="mfgdxf" ${mfgView ? '' : 'disabled'} title="This sheet as DXF (R12, inches; layer CUT = outlines and holes in cutting order; with DXF marks also LABEL and SHEET)">DXF</button>
+    <button type="button" class="btn" id="mfgall" title="Every sheet, one DXF each">All DXF</button>
+    <button type="button" class="btn" id="mfgpacket" title="Printable shop packet: steps, stack order with a drawing of each layer, what every template traces, every sheet in cutting order, boxes to tick. Opens the print dialog: choose Save as PDF.">Shop packet</button>` : '';
+  const nest = `<span class="muted" title="Cut smaller pieces out of the middle of bigger ones: a tracing template only needs its outer edge, so it becomes a ring around them. Saves hardboard when some layers are much narrower than others; not with blocks (every block piece is as long as the others).">nest inside</span><input type="checkbox" class="switch" id="mfg.nest_inside" ${mfgSpec.nest_inside ? 'checked' : ''}>`
+    + `<span class="muted" title="Alignment holes in every template at the 12 in stations">holes</span><input type="checkbox" class="switch" id="mfg.holes" ${mfgSpec.holes ? 'checked' : ''}>`
+    + `<span class="muted" title="Also put the reference lines (names, centreline, ticks, sanding line, sheet edge) in the DXF on layers LABEL and SHEET. Off: cut lines only, since OMAX Layout cuts every line it imports unless told not to.">DXF marks</span><input type="checkbox" class="switch" id="mfg.dxf_marks" ${mfgSpec.dxf_marks ? 'checked' : ''}>`;
+  return `${sels}${nums}${nest}<button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out'}</button>${views}`;
 }
 function mfgWire() {
   const save = () => store.set('mfg', JSON.stringify(mfgSpec));
-  $('mfg.orientation').onchange = e => { mfgSpec.orientation = e.target.value; save(); };
-  for (const [k] of MFG_NUM) $('mfg.' + k).onchange = e => { const v = Number(e.target.value); if (isFinite(v) && v >= 0) { mfgSpec[k] = v; save(); } };
+  for (const [k] of MFG_SEL) $('mfg.' + k).onchange = e => { mfgSpec[k] = e.target.value; save(); if (k === 'boards') buildTabs(); };
+  for (const [k, , , kind] of MFG_NUM) {
+    const el = $('mfg.' + k); if (!el) continue;
+    el.onchange = e => { const v = mfgParse(e.target.value, kind); el.style.outline = v === null ? `1px solid ${C.error}` : ''; if (v !== null) { mfgSpec[k] = v; save(); } };
+  }
+  $('mfg.nest_inside').onchange = e => { mfgSpec.nest_inside = e.target.checked; save(); buildTabs(); };
+  $('mfg.holes').onchange = e => { mfgSpec.holes = e.target.checked; save(); buildTabs(); };
+  $('mfg.dxf_marks').onchange = e => { mfgSpec.dxf_marks = e.target.checked; save(); };
   $('mfggo').onclick = mfgGo;
   const v = $('mfgview'); if (v) v.onchange = e => { mfgView = Number(e.target.value); buildTabs(); drawPlot(); };
   const d = $('mfgdxf'); if (d) d.onclick = () => mfgSave(mfgView - 1);
+  const pk = $('mfgpacket'); if (pk) pk.onclick = mfgPacket;
   const a = $('mfgall'); if (a) a.onclick = async () => { for (let k = 0; k < mfgRes.dxf.length; k++) { mfgSave(k); await new Promise(r => setTimeout(r, 300)); } };
+}
+// Shop packet: a printable page for the mold shop from the current layout (print dialog: Save as PDF).
+// Settings, the steps, the stack (one drawing per layer with its foam pieces and holes), every template
+// with what it traces, and every sheet in cutting order, with boxes to tick.
+function mfgPacketHtml(m) {
+  const sp = m.spec, s = m.stack, tpl = sp.boards === 'templates', flat = sp.orientation === 'flat';
+  const f = (x, n = 2) => typeof x === 'number' && isFinite(x) ? x.toFixed(n) : '-';
+  const box = '<span class="box"></span>';
+  const sizes = v => v.map(([a, b]) => `${a} × ${b}`).join(', ');
+  const packing = { blocks: 'blocks (joints line up)', continuous: 'continuous', tight: 'tight (min hardboard)', fewest_shapes: 'fewest shapes' }[sp.packing] || sp.packing;
+  const sheetOf = {}; m.sheets.forEach((sh, k) => sh.parts.forEach(p => { sheetOf[p.piece] = k + 1; }));
+  // One layer drawn in plan (flat) or as a section (upright), 680 px wide, with piece names and holes.
+  const draw = ly => {
+    const pts = ly.foam.flat(), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+    const W = 680, sc = Math.min(W / (x1 - x0 || 1), 160 / (y1 - y0 || 1)), H = (y1 - y0) * sc + 8;
+    const X = x => 4 + (x - x0) * sc, Y = y => 4 + (y1 - y) * sc;
+    const polys = ly.foam.map((poly, k) => {
+      const d = poly.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('') + 'Z';
+      const bx = poly.map(p => p[0]), by = poly.map(p => p[1]);
+      const cx = X((Math.min(...bx) + Math.max(...bx)) / 2), cy = Y((Math.min(...by) + Math.max(...by)) / 2);
+      return `<path d="${d}" fill="#f3f3f3" stroke="#141414" stroke-width="1"/><text x="${cx.toFixed(1)}" y="${(cy - 6).toFixed(1)}" text-anchor="middle">${esc(ly.foam_labels[k] || '')}</text>`;
+    }).join('');
+    const joints = flat ? (s.joints_in || []).map(j => `<line x1="${X(j)}" y1="0" x2="${X(j)}" y2="${H}" stroke="#707070" stroke-dasharray="4 3"/>`).join('') : '';
+    const holes = ly.pieces.flatMap(pi => m.pieces[pi].holes).filter(() => tpl && sp.packing !== 'fewest_shapes')
+      .map(h => `<circle cx="${X(h[0]).toFixed(1)}" cy="${Y(h[1]).toFixed(1)}" r="2" fill="#141414"/>`).join('');
+    return `<svg width="${W + 8}" height="${H.toFixed(0)}" viewBox="0 0 ${W + 8} ${H.toFixed(0)}">${polys}${joints}${holes}</svg>`;
+  };
+  const steps = [
+    `Cut the hardboard: ${m.sheets.length} sheet${m.sheets.length > 1 ? 's' : ''} (${sizes([...new Set(m.sheets.map(x => `${x.length_in}x${x.width_in}`))].map(t => t.split('x').map(Number)))} in), one DXF each. ${sp.dxf_marks ? `Cut layer <b>CUT</b> only (outlines${sp.holes ? ' and alignment holes' : ''}); set layers <b>LABEL</b> (reference lines, do not etch) and <b>SHEET</b> (sheet edge) to not cut` : `The files hold only cut lines (outlines${sp.holes ? ' and alignment holes' : ''}): import and cut; OMAX adds the lead-ins and cut-width compensation`}. Pieces are in cutting order${sp.nest_inside ? ', pieces cut out of others first' : ''}.`,
+    'Write each template\'s name on it with a marker, with the arrow to the bow (the sheet drawings below show where each is).',
+    tpl ? `For each layer, bottom up: take foam ${s.foam_order_in.length > 1 ? 'of the thickness listed' : `${s.foam_order_in[0]} in thick`}, lay each template on a foam sheet (${sizes(sp.foam_sheets)} in), trace it${sp.holes ? ', mark the holes through it' : ''} and cut just outside the line.` +
+      (sp.packing === 'fewest_shapes' ? ' Half templates: draw a straight centreline on the foam first, trace one side, flip the template over for the other side.' : '')
+      : `Lay a board, then a foam layer, and so on (thicknesses below); sand the foam to the board edges.`,
+    flat ? `Stack the layers from the floor (gunwale, L1) up to the keel${sp.holes ? ', lining up the holes (a dowel through them keeps the stack straight)' : ''}${sp.packing === 'blocks' ? '; joints line up through every layer, so each block can come out whole when demolding' : ''}.`
+      : `Stand the slabs in order from the bow (R1)${sp.holes ? ', lining up the holes' : ''}.`,
+    tpl ? 'Sand each layer from its outline (bottom face) to the next layer up, so the steps blend into a smooth hull.' : 'Sand the foam to meet the board edges.',
+  ];
+  const layerRows = m.layers.map(ly => `<tr><td>${box}</td><td><b>${esc(ly.label)}</b></td><td>${f(ly.pos_in)}</td><td>${f(ly.foam_in, 3)}</td><td>${ly.foam_labels.map(esc).join(', ')}</td><td>${ly.pieces.map(i => esc(m.pieces[i].label)).join(', ')}</td></tr>`).join('');
+  const tplRows = m.pieces.map((p, i) => `<tr><td>${box}</td><td>${box}</td><td><b>${esc(p.label)}</b></td><td>${sheetOf[i] || '-'}</td><td>${p.traces.map(esc).join(', ')}</td><td>${p.holes.length}</td></tr>`).join('');
+  const sheetBlocks = m.sheets.map((sh, k) => {
+    const L = sh.length_in, Wd = sh.width_in, sc = 680 / L, H = Wd * sc;
+    const X = x => 4 + x * sc, Y = y => 4 + (Wd - y) * sc;
+    const order = mfgCutOrder(sh);
+    const parts = sh.parts.map((p, i) => {
+      const d = p.outline.map((q, j) => `${j ? 'L' : 'M'}${X(q[0]).toFixed(1)},${Y(q[1]).toFixed(1)}`).join('') + 'Z';
+      const bx = p.outline.map(q => q[0]), by = p.outline.map(q => q[1]);
+      const pc = m.pieces[p.piece], n = order.indexOf(i) + 1;
+      return `<path d="${d}" fill="#f3f3f3" stroke="#141414"/>${p.holes.map(h => `<circle cx="${X(h[0]).toFixed(1)}" cy="${Y(h[1]).toFixed(1)}" r="1.5" fill="#141414"/>`).join('')}<text x="${X(p.text_at[0]).toFixed(1)}" y="${(Y(p.text_at[1]) + 4).toFixed(1)}" text-anchor="middle">${n}. ${esc(pc.label)}</text>`;
+    }).join('');
+    return `<div class="sheet"><h3>${box} Sheet ${k + 1} of ${m.sheets.length}: ${L} × ${Wd} in, ${sh.parts.length} pieces ${m.dxf && m.dxf[k] ? `<span class="muted">(${esc(m.dxf[k].name)})</span>` : ''}</h3>
+      <svg width="688" height="${(H + 8).toFixed(0)}"><rect x="4" y="4" width="${L * sc}" height="${H}" fill="none" stroke="#adadad"/>${parts}</svg>
+      <p class="muted">Cutting order: ${order.map(i => esc(m.pieces[sh.parts[i].piece].label)).join(' → ')}</p></div>`;
+  }).join('');
+  const css = `body{font:10pt -apple-system,"Helvetica Neue",Arial,sans-serif;color:#141414;margin:16mm}h1{font-size:16pt;margin:0 0 2pt}h2{font-size:12pt;margin:14pt 0 4pt;border-bottom:1px solid #e0e0e0}h3{font-size:10pt;margin:10pt 0 4pt}
+    .muted{color:#707070}table{border-collapse:collapse;width:100%;font-size:9pt}td,th{border-bottom:1px solid #e0e0e0;padding:3pt 4pt;text-align:left;vertical-align:top}
+    .box{display:inline-block;width:9pt;height:9pt;border:1px solid #141414;vertical-align:-1pt}ol li{margin:3pt 0}.layer,.sheet{break-inside:avoid}svg text{font:9px sans-serif}
+    .kv{display:grid;grid-template-columns:160px 1fr;gap:2pt 8pt}`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(m.hull)} shop packet</title><style>${css}</style></head><body>
+    <h1>Mold shop packet: ${esc(m.hull)}</h1><div class="muted">${new Date().toLocaleString()} · Generated by JAGUAR</div>
+    <h2>Settings</h2><div class="kv">
+      <span class="muted">Hardboard for</span><span>${tpl ? 'tracing templates (foam-only mold)' : 'boards between the foam layers'}</span>
+      <span class="muted">Layers</span><span>${flat ? 'flat, gunwale on the floor' : 'upright across the canoe'}; packing ${packing}${sp.nest_inside ? `; pieces cut out of others (ring ${sp.ring_in} in)` : ''}</span>
+      <span class="muted">Foam</span><span>${s.foam_layers} layers, ${s.foam_order_in.join(' + ')} in (${f(s.over_in)} in over); ${s.foam_pieces} pieces; sheets ${sizes(sp.foam_sheets)} in</span>
+      <span class="muted">Mold</span><span>${f(s.height_in)} in ${flat ? 'high' : 'long'}, inner beam ${f(s.beam_in, 1)} in; hull less the ${s.wall_in} in wall</span>
+      <span class="muted">Hardboard</span><span>${m.pieces.length} pieces on ${m.sheets.length} sheets (${(100 * m.utilization).toFixed(0)}% used); gap ${sp.gap_in} in${sp.holes ? `; ${sp.hole_in} in alignment holes` : ''}${sp.kerf_in ? `; cut width ${sp.kerf_in} in allowed for` : ''}</span>
+      ${flat && s.joints_in.length ? `<span class="muted">Block joints</span><span>${s.joints_in.map(j => f(j, 2)).join(', ')} in from the bow end of the mold</span>` : ''}
+    </div>
+    <h2>Steps</h2><ol>${steps.map(t => `<li>${box} ${t}</li>`).join('')}</ol>
+    <h2>Stack</h2><table><tr><th></th><th>layer</th><th>${flat ? 'underside above floor, in' : 'bow face x, in'}</th><th>foam, in</th><th>foam pieces</th><th>templates</th></tr>${layerRows}</table>
+    ${m.layers.map(ly => `<div class="layer"><h3>${esc(ly.label)} <span class="muted">${f(ly.foam_in, 3)} in foam, ${flat ? 'from ' + f(ly.pos_in) + ' in above the floor' : 'at x = ' + f(ly.pos_in) + ' in'}</span></h3>${draw(ly)}</div>`).join('')}
+    <h2>Templates</h2><table><tr><th>cut</th><th>traced</th><th>template</th><th>sheet</th><th>traces</th><th>holes</th></tr>${tplRows}</table>
+    <p class="muted">S / P = starboard / port side of the foam piece; (flip) = turn the template over.</p>
+    <h2>Hardboard sheets</h2>${sheetBlocks}
+    </body></html>`;
+}
+// Same order as the DXF (manufacture::cut_order): deepest nested first, then nearest first from the sheet corner,
+// each from the sharpest corner of the last.
+function mfgCutOrder(sh) {
+  const parts = sh.parts, depth = i => { let d = 0; while (parts[i].inside != null) { d++; i = parts[i].inside; } return d; };
+  const corner = o => { let best = 0, bt = -1; const n = o.length;
+    for (let i = 0; i < n; i++) { const a = o[(i + n - 1) % n], b = o[i], c = o[(i + 1) % n];
+      const u = [b[0] - a[0], b[1] - a[1]], v = [c[0] - b[0], c[1] - b[1]], lu = Math.hypot(...u), lv = Math.hypot(...v);
+      const t = lu < 1e-12 || lv < 1e-12 ? 0 : Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1]) / (lu * lv))));
+      if (t > bt) { bt = t; best = i; } }
+    return o[best]; };
+  const left = parts.map((_, i) => i), out = []; let at = [0, 0];
+  while (left.length) {
+    const deep = Math.max(...left.map(depth));
+    let k = -1, kd = Infinity;
+    left.forEach((i, j) => { if (depth(i) !== deep) return; const c = corner(parts[i].outline), d = Math.hypot(c[0] - at[0], c[1] - at[1]); if (d < kd) { kd = d; k = j; } });
+    const i = left.splice(k, 1)[0]; at = corner(parts[i].outline); out.push(i);
+  }
+  return out;
+}
+function mfgPacket() {
+  const m = mfgLive(); if (!m) return;
+  const old = $('pdfframe'); if (old) old.remove();
+  const fr = document.createElement('iframe');
+  fr.id = 'pdfframe'; fr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  const title = document.title; document.title = `${exportStem()}_shop_packet`;
+  fr.onload = () => { fr.contentWindow.onafterprint = () => { document.title = title; }; fr.contentWindow.focus(); fr.contentWindow.print(); };
+  fr.srcdoc = mfgPacketHtml(m); document.body.appendChild(fr);
 }
 function mfgSave(k) {
   const f = mfgRes && mfgRes.dxf[k]; if (!f) return;
@@ -1884,46 +2031,62 @@ async function mfgGo() {
 }
 function plotMfg(ctx, W, H) {
   const m = mfgLive();
-  if (!m) return msg(ctx, W, H, mfgBusy ? 'Laying out the mold boards...' : mfgErr
-    || (result && result.winner ? 'Set the foam, hardboard and sheet sizes, then press "Lay out boards".' : 'Run an optimization first, then lay out its mold.'));
-  const s = m.stack, sp = m.spec, flat = sp.orientation === 'flat', used = (100 * m.utilization).toFixed(0);
+  if (!m) return msg(ctx, W, H, mfgBusy ? 'Laying out the hardboard...' : mfgErr
+    || (result && result.winner ? 'Set the foam and hardboard sizes and the packing, then press "Lay out".' : 'Run an optimization first, then lay out its mold.'));
+  const s = m.stack, sp = m.spec, flat = sp.orientation === 'flat', tpl = sp.boards === 'templates', used = (100 * m.utilization).toFixed(0);
+  const what = tpl ? `${m.pieces.length} hardboard templates` : `${m.pieces.length} hardboard pieces (${s.layers} boards between the foam)`;
   ctx.fillStyle = C.muted; ctx.font = font(11);
-  ctx.fillText(`Male mold, upside down on the gunwale: ${s.boards} hardboard ${flat ? 'layers' : 'ribs'} (${m.pieces.length} pieces) between ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}, ${s.height_in.toFixed(2)} in ${flat ? 'high' : 'long'}. Inner surface = hull less the ${s.wall_in} in wall. ${m.sheets.length} sheets of ${sp.sheet_length_in} × ${sp.sheet_width_in} in, ${used}% used.`, 12, 16);
+  ctx.fillText(`Male foam mold, upside down on the gunwale: ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}${tpl ? ` (${s.foam_pieces} foam pieces)` : ''}, ${s.height_in.toFixed(2)} in ${flat ? 'high' : 'long'}; inner surface = hull less the ${s.wall_in} in wall. ${what} on ${m.sheets.length} hardboard sheets, ${used}% used. Foam layers ${s.foam_order_in.join(' + ')} in (${s.over_in.toFixed(2)} in over).`, 12, 16);
   const poly = (pts, X, Y) => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.closePath(); };
   if (mfgView > 0) {
-    const sh = m.sheets[mfgView - 1], L = sp.sheet_length_in, Wd = sp.sheet_width_in;
-    const sc = Math.min((W - 40) / L, (H - 60) / Wd), ox = (W - L * sc) / 2, oy = 34 + (H - 50 - Wd * sc) / 2 + Wd * sc;
+    const sh = m.sheets[mfgView - 1], L = sh.length_in, Wd = sh.width_in;
+    // Under the sheet: what each template on it traces (shared templates only), one line each.
+    const shared = sh.parts.map(p => m.pieces[p.piece]).filter(pc => pc.traces.length > 1);
+    const listH = 16 + 14 * shared.length;
+    const sc = Math.min((W - 40) / L, (H - 50 - listH) / Wd), ox = (W - L * sc) / 2, oy = 30 + Wd * sc;
     const X = x => ox + x * sc, Y = y => oy - y * sc;
     ctx.strokeStyle = C.muted; ctx.strokeRect(X(0), Y(Wd), L * sc, Wd * sc);
     for (const p of sh.parts) {
       const pc = m.pieces[p.piece];
       poly(p.outline, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.lineWidth = 1; ctx.stroke();
-      ctx.strokeStyle = C.faint; for (const [a, b] of p.marks) { ctx.beginPath(); ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); ctx.stroke(); }
+      ctx.strokeStyle = C.faint; ctx.beginPath(); for (const [a, b] of p.marks) { ctx.moveTo(X(a[0]), Y(a[1])); ctx.lineTo(X(b[0]), Y(b[1])); } ctx.stroke();
       ctx.save(); ctx.translate(X(p.text_at[0]), Y(p.text_at[1])); ctx.rotate(-p.text_deg * Math.PI / 180);
       ctx.fillStyle = C.ink; ctx.font = font(Math.max(8, Math.min(11, pc.text_h * sc * 1.2))); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(pc.label, 0, 0); ctx.restore();
+      ctx.fillText(pc.traces.length > 1 ? `${pc.label} ×${pc.traces.length}` : pc.label, 0, 0); ctx.restore();
     }
     ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left'; ctx.fillStyle = C.muted;
-    ctx.fillText(`Sheet ${mfgView} of ${m.sheets.length}: ${sh.parts.length} pieces, ${(100 * sh.used_in2 / (L * Wd)).toFixed(0)}% used. Grey lines: centreline and 12 in station ticks (LABEL layer: etch or skip).`, 12, H - 8);
+    let y = oy + 18;
+    ctx.fillText(`Sheet ${mfgView} of ${m.sheets.length} (${L} × ${Wd} in): ${sh.parts.length} pieces, ${(100 * sh.used_in2 / (L * Wd)).toFixed(0)}% used. Grey lines (in the DXF only with DXF marks on): centreline, 12 in station ticks${tpl ? ', sanding line (the other face of the layer)' : ''}.`, 12, y);
+    ctx.fillStyle = C.soft;
+    for (const pc of shared) { y += 14; ctx.fillText(`${pc.label} traces ${pc.traces.join(', ')}. S/P = starboard/port; flip = turn the template over.`, 12, y); }
     return;
   }
-  // Stack view. Flat: each board in plan, floor (gunwale, L1) at the bottom, the joints between pieces
-  // visible. Upright: the ribs in side view, each from the floor to the inner keel.
+  // Stack view. Flat: each layer's foam pieces in plan, floor (gunwale, L1) at the bottom, the joints visible.
+  // Upright: the slabs in side view, each from the floor to the inner keel.
   if (flat) {
-    const xs = m.pieces.flatMap(p => p.outline.map(q => q[0])), x0 = Math.min(...xs), x1 = Math.max(...xs);
-    const n = m.layers.length, rowH = (H - 50) / n, yMax = Math.max(...m.pieces.flatMap(p => p.outline.map(q => Math.abs(q[1])))) || 1;
+    const pts = m.layers.flatMap(l => l.foam.flat()), xs = pts.map(q => q[0]), x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const n = m.layers.length, rowH = (H - 50) / n, yMax = Math.max(...pts.map(q => Math.abs(q[1]))) || 1;
     const sc = Math.min((W - 110) / (x1 - x0), (rowH - 6) / (2 * yMax));
     m.layers.forEach((ly, i) => {
       const cy = H - 22 - rowH * (i + 0.5), X = x => 90 + (x - x0) * sc, Y = y => cy - y * sc;
       ctx.fillStyle = C.soft; ctx.textAlign = 'left'; ctx.fillText(`${ly.label}  ${ly.pos_in.toFixed(2)} in`, 8, cy + 4);
-      for (const pi of ly.pieces) { poly(m.pieces[pi].outline, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.stroke(); }
+      for (const f of ly.foam) { poly(f, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.stroke(); }
     });
-    ctx.fillStyle = C.muted; ctx.fillText('Boards from the floor (gunwale, L1) up toward the keel; height = underside of the board above the floor. Bow at left.', 12, H - 6);
+    // Blocks: the joints, the same in every layer, numbered between.
+    const J = s.joints_in || [], X = x => 90 + (x - x0) * sc;
+    if (J.length) {
+      ctx.strokeStyle = C.muted; ctx.setLineDash([4, 3]);
+      for (const j of J) { ctx.beginPath(); ctx.moveTo(X(j), 26); ctx.lineTo(X(j), H - 20); ctx.stroke(); }
+      ctx.setLineDash([]); ctx.fillStyle = C.muted; ctx.textAlign = 'center';
+      [x0, ...J, x1].forEach((a, k, e) => { if (k < e.length - 1) ctx.fillText(`block ${k + 1}`, X((a + e[k + 1]) / 2), 34); });
+      ctx.textAlign = 'left';
+    }
+    ctx.fillStyle = C.muted; ctx.fillText(`${tpl ? 'Foam layers' : 'Boards'} from the floor (gunwale, L1) up toward the keel, ${tpl ? 'each foam piece one template' : 'joints between the boards'}; height = underside above the floor. Bow at left.`, 12, H - 6);
   } else {
-    const xs = m.layers.map(l => l.cut_in), hs = m.pieces.map(p => Math.max(...p.outline.map(q => q[1])));
+    const xs = m.layers.map(l => l.pos_in), hs = m.layers.map(l => Math.max(...l.foam[0].map(q => q[1])));
     const r = { l: 64, t: 34, w: W - 84, h: H - 80 };
-    const a = axes(ctx, r, [Math.min(...xs), Math.max(...xs)], [0, Math.max(...hs) * 1.1], 'x from bow, in', 'rib height above floor, in');
-    ctx.strokeStyle = C.ink; m.layers.forEach((l, i) => { ctx.beginPath(); ctx.moveTo(a.px(l.cut_in), a.py(0)); ctx.lineTo(a.px(l.cut_in), a.py(hs[i])); ctx.stroke(); });
+    const a = axes(ctx, r, [Math.min(...xs), Math.max(...xs)], [0, Math.max(...hs) * 1.1], 'x from bow, in', 'slab height above floor, in');
+    ctx.strokeStyle = C.ink; m.layers.forEach((l, i) => { ctx.beginPath(); ctx.moveTo(a.px(l.pos_in), a.py(0)); ctx.lineTo(a.px(l.pos_in), a.py(hs[i])); ctx.stroke(); });
   }
 }
 // Interpolate a column of rows sorted by column `k` at value v: returns [row index, fraction].

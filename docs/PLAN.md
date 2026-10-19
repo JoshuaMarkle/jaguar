@@ -66,9 +66,12 @@ arc may run above the design waterline into the topsides, default 4 in; then rew
 keel-line arc with the sections stretched onto it (the per-waterline shift folded sections near a
 flat forefoot). Same day: the smooth-keel loft between stations and the B-spline STEP. The mold is
 stacked traced foam sheets (2026-10-13): smooth outlines cost nothing to cut, so `templates` is not
-needed for this shop. Done 2026-10-18: `jaguar mold` / Manufacture tab (male mold, foam with
-hardboard between, hardboard outlines nested on sheets as DXF). Open: stagger the layer joints,
-registration holes or dowels between layers, foam tracing patterns.
+needed for this shop. Done 2026-10-18: `jaguar mold` / Manufacture tab: hardboard tracing
+templates for the foam layers (this year: hardboard is not part of the mold) or boards between
+them, packing presets, nested on sheets as DXF. Open: stagger the foam joints between layers,
+the foam sheet width is a guess (48 in) until the team measures it. Next year (rules
+permitting): water-jet the foam itself, and a foam cutting plan (traced pieces packed on the foam
+sheets). Etched labels were declined (etching damages the hardboard).
 T67 (`hull.templates`): the recommended simplification (for hot-wire / frame molds). The hull is N cross-section templates with
 straight lofts between (hot-wire foam / frames and battens); the shape search tunes that loft.
 9-11 templates cost about 1% race time (docs/HULLS.md). Topsides keep the constant flare, so the

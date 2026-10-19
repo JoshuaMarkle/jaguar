@@ -86,8 +86,9 @@
 //!   the jaguar-race/1 JSON. Synchronous (a few seconds). 404 if no
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //! * `POST /api/manufacture` body = JSON `manufacture::MoldSpec` (fields left out take their
-//!   defaults: flat layers, 2 in foam, 1/8 in hardboard, 96 x 48 in sheets, 1/4 in gap). Lays out
-//!   the last result's winner as hardboard mold boards (`manufacture.rs`) and returns the
+//!   defaults: tracing templates, flat layers, blocks packing, `foam_in` [2] (one number or
+//!   a list), `foam_sheets` [[96, 48]], `sheets` [[96, 48]], 1/4 in gap, `nest_inside` false, `ring_in` 1, `holes` true, `hole_in` 0.25, `kerf_in` 0, `dxf_marks` false). Lays out the hardboard for the last result's
+//!   winner's foam mold (`manufacture.rs`) and returns the
 //!   jaguar-mold/1 layout plus "dxf": [{"name", "text"}], one R12 DXF per sheet. Synchronous
 //!   (about a second). 400 bad spec, 404 no result yet, 409 a run is going or no winner, 422 if
 //!   the layout fails (a piece fits no sheet).
@@ -1308,20 +1309,22 @@ mod tests {
     fn manufacture_lays_out_the_winner() {
         let a = app();
         assert_eq!(a.handle("POST", "/api/manufacture", "").0, 404, "no result yet");
-        a.lock().result = Some(std::fs::read_to_string("examples/result.json").unwrap());
+        let p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        a.lock().result = Some(serde_json::to_string(&crate::run(&p, &|_| {}).unwrap()).unwrap());
         assert_eq!(a.handle("POST", "/api/manufacture", r#"{"bogus": 1}"#).0, 400);
-        let (st, ct, out) = a.handle("POST", "/api/manufacture", r#"{"orientation": "vertical"}"#);
+        let (st, ct, out) =
+            a.handle("POST", "/api/manufacture", r#"{"orientation": "vertical", "foam_in": 12}"#);
         assert_eq!((st, ct), (200, "application/json"), "{out}");
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["format"], crate::manufacture::MOLD_FORMAT);
-        assert_eq!(v["spec"]["foam_in"], 2.0, "defaults fill what the body leaves out");
+        assert_eq!(v["spec"]["board_in"], 0.125, "defaults fill what the body leaves out");
         let dxf = v["dxf"].as_array().unwrap();
         assert_eq!(dxf.len(), v["sheets"].as_array().unwrap().len());
         assert!(dxf[0]["text"].as_str().unwrap().ends_with(
             "EOF
 "
         ));
-        let tiny = r#"{"sheet_length_in": 10, "sheet_width_in": 10}"#;
+        let tiny = r#"{"sheets": [[10, 10]]}"#;
         assert_eq!(a.handle("POST", "/api/manufacture", tiny).0, 422, "pieces fit no sheet");
         a.lock().state = "running";
         assert_eq!(a.handle("POST", "/api/manufacture", "{}").0, 409);

@@ -33,7 +33,7 @@ src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt
 src/report.rs       terminal summary, result.json, race summary + result.json reader for race
 src/export.rs       STEP / STL of the winner (CAD, mold shop)
-src/manufacture.rs  male mold: hardboard board outlines, packed on sheets, DXF for the water jet
+src/manufacture.rs  male foam mold: hardboard tracing templates (or boards), packed on sheets, DXF
 src/launch.rs       desktop app (`jaguar`, no command): Documents/JAGUAR starter folder, browser, dialogs
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step;
                     web/vendor/three.min.js r128 embedded, so it works offline)

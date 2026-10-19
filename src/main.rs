@@ -126,32 +126,59 @@ enum Cmd {
         #[arg(long)]
         filled: bool,
     },
-    /// Hardboard mold boards of the winner (male mold: foam layers with hardboard between), packed
-    /// onto sheets, one DXF per sheet for the water jet (src/manufacture.rs).
+    /// Hardboard for the winner's male foam mold, packed onto sheets, one DXF per sheet for the
+    /// water jet: tracing templates for the foam layers, or boards between them (src/manufacture.rs).
     Mold {
         #[arg(default_value = "result.json")]
         result: PathBuf,
         /// Folder for the DXF files and mold.json (created if missing)
         #[arg(short, long, default_value = "mold")]
         out: PathBuf,
-        /// Boards standing upright across the canoe (ribs) instead of laid flat
+        /// Hardboard between the foam layers, part of the mold (default: tracing templates)
+        #[arg(long)]
+        in_mold: bool,
+        /// Layers standing upright across the canoe (ribs) instead of laid flat
         #[arg(long)]
         vertical: bool,
-        /// Foam sheet thickness, in
-        #[arg(long, default_value_t = 2.0)]
-        foam: f64,
+        /// blocks (joints line up in every layer: the mold comes apart in blocks) | continuous
+        /// (fewest pieces per layer) | tight (fewest sheets) | fewest-shapes (half templates,
+        /// flipped and shared)
+        #[arg(long, default_value = "blocks")]
+        packing: String,
+        /// Foam sheet thicknesses on hand, in, comma separated (e.g. 1.5,2): layers mix them
+        #[arg(long, value_delimiter = ',', default_value = "2")]
+        foam: Vec<f64>,
+        /// Foam sheet sizes on hand, LxW in, comma separated (e.g. 96x48,72x36)
+        #[arg(long, value_delimiter = ',', default_value = "96x48")]
+        foam_sheet: Vec<String>,
         /// Hardboard thickness, in
         #[arg(long, default_value_t = 0.125)]
         board: f64,
-        /// Hardboard sheet length, in
-        #[arg(long, default_value_t = 96.0)]
-        sheet_length: f64,
-        /// Hardboard sheet width, in
-        #[arg(long, default_value_t = 48.0)]
-        sheet_width: f64,
+        /// Hardboard sheet sizes on hand, LxW in, comma separated (e.g. 96x48,48x48)
+        #[arg(long, value_delimiter = ',', default_value = "96x48")]
+        sheet: Vec<String>,
         /// Least space between pieces and from the sheet edge, in
         #[arg(long, default_value_t = 0.25)]
         gap: f64,
+        /// Cut smaller pieces out of the middle of bigger ones (templates become rings)
+        #[arg(long)]
+        nest_inside: bool,
+        /// Least ring width left around pieces cut out of a template, in (with --nest-inside)
+        #[arg(long, default_value_t = 1.0)]
+        ring: f64,
+        /// Leave out the alignment holes
+        #[arg(long)]
+        no_holes: bool,
+        /// Alignment hole size, in
+        #[arg(long, default_value_t = 0.25)]
+        hole: f64,
+        /// Water-jet cut width to allow for, in (0: the water-jet software compensates)
+        #[arg(long, default_value_t = 0.0)]
+        kerf: f64,
+        /// Also write reference lines (names, centreline, ticks, sanding line, sheet edge) in the
+        /// DXF; off: cut lines only (OMAX and the like cut every line they import)
+        #[arg(long)]
+        dxf_marks: bool,
     },
     /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
     /// and recommended drag-objective weightings (src/race.rs).
@@ -486,15 +513,48 @@ fn main() -> Result<()> {
                 );
             }
         }
-        Cmd::Mold { result, out, vertical, foam, board, sheet_length, sheet_width, gap } => {
-            use jaguar::manufacture::{self, MoldSpec, Orientation};
+        Cmd::Mold {
+            result,
+            out,
+            in_mold,
+            vertical,
+            packing,
+            foam,
+            foam_sheet,
+            board,
+            sheet,
+            gap,
+            nest_inside,
+            ring,
+            no_holes,
+            hole,
+            kerf,
+            dxf_marks,
+        } => {
+            use jaguar::manufacture::{self, Boards, MoldSpec, Orientation, Packing};
             let spec = MoldSpec {
+                boards: if in_mold { Boards::Mold } else { Boards::Templates },
                 orientation: if vertical { Orientation::Vertical } else { Orientation::Flat },
+                packing: match packing.as_str() {
+                    "blocks" => Packing::Blocks,
+                    "continuous" => Packing::Continuous,
+                    "tight" => Packing::Tight,
+                    "fewest-shapes" | "fewest_shapes" => Packing::FewestShapes,
+                    p => {
+                        anyhow::bail!("unknown --packing '{p}' (blocks | continuous | tight | fewest-shapes)")
+                    }
+                },
                 foam_in: foam,
+                foam_sheets: foam_sheet.iter().map(|s| size_arg(s)).collect::<Result<_>>()?,
                 board_in: board,
-                sheet_length_in: sheet_length,
-                sheet_width_in: sheet_width,
+                sheets: sheet.iter().map(|s| size_arg(s)).collect::<Result<_>>()?,
                 gap_in: gap,
+                nest_inside,
+                ring_in: ring,
+                holes: !no_holes,
+                hole_in: hole,
+                kerf_in: kerf,
+                dxf_marks,
             };
             let l = manufacture::from_result(&std::fs::read_to_string(&result)?, &spec)?;
             std::fs::create_dir_all(&out)?;
@@ -504,18 +564,36 @@ fn main() -> Result<()> {
             std::fs::write(out.join("mold.json"), serde_json::to_string_pretty(&l)?)?;
             let s = &l.stack;
             println!(
-                "{}: {} hardboard boards ({}), {} foam layers, {:.2} in {}",
+                "{}: {} foam layers {} ({:.2} in {}), {} foam pieces{}",
                 l.hull,
-                s.boards,
-                if vertical { "upright ribs" } else { "laid flat" },
                 s.foam_layers,
+                if vertical { "standing upright" } else { "laid flat" },
                 s.height_in,
-                if vertical { "long" } else { "high" }
+                if vertical { "long" } else { "high" },
+                s.foam_pieces,
+                if in_mold { format!(", {} hardboard layers between them", s.layers) } else { String::new() }
             );
             println!(
-                "{} pieces on {} sheets of {sheet_length} x {sheet_width} in ({:.0}% used); wrote {}",
+                "foam layers {} in ({:.2} in over the mold)",
+                s.foam_order_in.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" + "),
+                s.over_in
+            );
+            println!(
+                "{} hardboard {} on {} sheets ({}) ({:.0}% used); wrote {}",
                 l.pieces.len(),
+                if in_mold { "boards" } else { "templates" },
                 l.sheets.len(),
+                {
+                    // "11 x (96 x 48), 1 x (48 x 48)", sizes in first-used order.
+                    let mut seen: Vec<([f64; 2], usize)> = vec![];
+                    for sh in &l.sheets {
+                        match seen.iter_mut().find(|(z, _)| *z == [sh.length_in, sh.width_in]) {
+                            Some((_, n)) => *n += 1,
+                            None => seen.push(([sh.length_in, sh.width_in], 1)),
+                        }
+                    }
+                    seen.iter().map(|([a, b], n)| format!("{n} x ({a} x {b})")).collect::<Vec<_>>().join(", ")
+                },
                 100.0 * l.utilization,
                 out.display()
             );
@@ -551,4 +629,13 @@ fn main() -> Result<()> {
         Cmd::Serve { params, port, prefs } => serve::serve(&params, port, prefs)?,
     }
     Ok(())
+}
+
+/// "96x48" -> [96, 48].
+fn size_arg(s: &str) -> Result<[f64; 2]> {
+    let (l, w) = s
+        .trim()
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow::anyhow!("sheet size '{s}' should be LxW, e.g. 96x48"))?;
+    Ok([l.trim().parse()?, w.trim().parse()?])
 }

@@ -3,25 +3,51 @@
 //!
 //! The mold is a MALE mold: its surface is the canoe's inner wall ([`export::Mesh::inner_rows`]:
 //! the outer hull offset inward by the wall, the solid concrete ends left out, no air pocket
-//! bulkheads), built upside down with the gunwale on the shop floor. It is a stack of foam
-//! sheets (hand-shaped, never water-jet cut) with a hardboard sheet between each pair; the
-//! hardboard is cut to the exact outline and the foam is sanded down to meet its edges.
+//! bulkheads), built upside down with the gunwale on the shop floor from foam sheets
+//! (hand-cut and sanded, never water-jet cut). Only hardboard is water-jet cut, for one of two
+//! uses ([`Boards`]):
 //!
-//! * [`Orientation::Flat`]: layers lie flat. Board k (k = 0 on the floor) sits at
-//!   h = k (foam + board) above the floor and is the inner hull cut at its mid-plane, a
-//!   waterline at z = depth - h - board / 2, symmetric about the centreline. The stack ends with
-//!   the last board whose mid-plane still cuts the hull; foam on top covers the keel. A layer
-//!   longer than the sheet is cut into the fewest equal lengths that fit (square joints).
-//! * [`Orientation::Vertical`]: boards stand upright across the canoe like ribs, board k at
-//!   x = xa + board / 2 + k (foam + board) from the bow end xa of the hollow run, each the inner
-//!   cross-section there, closed by the gunwale line on the floor.
+//! * [`Boards::Templates`] (default): the mold is foam only, layer on layer. Each foam layer gets
+//!   a hardboard tracing template: laid on a foam sheet, traced, the foam cut and sanded to
+//!   shape. The template is everything the layer covers in plan (the envelope of its waterlines
+//!   from underside to top face, every 1/4 in), its tips tapered to a point ([`taper_tips`]), so
+//!   the foam is cut oversize, never short; the top face's
+//!   outline is etched on it as the sanding line. A layer longer than a foam sheet is several
+//!   foam pieces, and each template piece is one foam piece: its ends are the foam joints.
+//! * [`Boards::Mold`]: a hardboard sheet between each pair of foam layers, cut to the exact
+//!   outline at its mid-plane; the foam is sanded to meet the board edges.
+//!
+//! Foam layers mix the thicknesses on hand ([`foam_order`]); foam pieces fit one of the foam sheet
+//! sizes, hardboard pieces one of the hardboard sizes ([`nest`]).
+//!
+//! [`Orientation::Flat`]: layers lie flat, layer k (k = 0 on the floor) starting at the sum of
+//! the layers (and boards, in the mold) below it, outlines are waterlines of the inner surface,
+//! symmetric about the centreline, until the layer no longer reaches the keel; a layer is cut
+//! across into equal lengths. [`Orientation::Vertical`]: layers stand upright across the canoe
+//! like ribs, from the bow end xa of the hollow run, each a cross-section closed by the gunwale
+//! line on the floor.
+//!
+//! [`Packing`]: `Blocks` (default) cuts every flat layer at the same joints (the fewest equal
+//! lengths for which every layer's piece in every block fits), so the joints line up from floor to
+//! keel and the mold comes apart in whole blocks; `Continuous` cuts each layer into the fewest pieces that fit (foam sheet and
+//! hardboard sheet), then packs them; `Tight` also tries shorter pieces and keeps the fewest
+//! hardboard sheets; `FewestShapes` makes each template half a layer (centreline to side), traced
+//! on both sides by flipping it, and reuses a template for the mirror-image piece at the other
+//! end when the hull is the same fore and aft (within 0.02 in).
+//!
+//! With `nest_inside`, pieces may be cut out of the middle of bigger ones (a tracing template only
+//! needs its outer edge, so it becomes a ring at least `ring_in` wide), and layers narrow enough
+//! to fit inside a wide layer's ring are also tried cut shorter (not with `Blocks`); the DXF cuts
+//! the inner pieces first.
 //!
 //! Pieces are packed onto sheets ([`nest`]): every piece is rasterised to 1/4 in cells grown by
 //! half the gap (so two pieces never come closer than `gap_in`, nor closer to a sheet edge), and
-//! placed largest first at the lowest free spot along the sheet length (then width), trying 0,
-//! 90, 180 and 270 deg, on the first sheet with room. The DXF ([`to_dxf`]) is R12, inches, one
-//! file per sheet: layer CUT the piece outlines (closed polylines), layer LABEL the piece names,
-//! a centreline and 12 in station ticks (to etch or ignore), layer SHEET the sheet edge.
+//! placed largest first at the lowest free spot along the sheet length (then width), on the
+//! first sheet with room, turned in quarter turns or to any multiple of 5 deg (both packed,
+//! the fewer sheets kept). The DXF ([`to_dxf`]) is R12, inches, one file per sheet: layer CUT
+//! the piece outlines (closed polylines) and alignment holes, in cutting order; with `dxf_marks`
+//! also layer LABEL (piece names, centreline, 12 in station ticks, sanding line) and SHEET (the
+//! sheet edge). Off by default: OMAX Layout and the like cut every imported line.
 //! Deterministic: same input, same files.
 
 use crate::export::{self, ExportSpec, NetRow};
@@ -37,8 +63,14 @@ const CELL: f64 = 0.25;
 /// Export resolution the mold is cut from: about 0.5 in between stations on a 20 ft canoe.
 const STATIONS: usize = 481;
 const GIRTH: usize = 61;
+/// Pieces are packed turned to any multiple of this angle, deg.
+const FINE_STEP_DEG: u32 = 5;
 /// Station ticks on the LABEL layer every this many inches from the bow.
 const TICK_IN: f64 = 12.0;
+/// A template's tip is bridged over inward dips within this distance of its point, in.
+const TIP_ZONE_IN: f64 = 12.0;
+/// Two template pieces closer than this everywhere are one shape (FewestShapes), in.
+const SAME_SHAPE_IN: f64 = 0.02;
 
 pub type Pt = [f64; 2];
 
@@ -48,66 +80,227 @@ type Built = (Vec<Layer>, Vec<Piece>, Vec<Sheet>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Orientation {
-    /// Layers laid flat (horizontal boards, waterline outlines).
+    /// Layers laid flat (waterline outlines).
     Flat,
-    /// Boards standing upright across the canoe (cross-section outlines).
+    /// Layers standing upright across the canoe (cross-section outlines).
     Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Boards {
+    /// Hardboard tracing templates for an all-foam mold.
+    Templates,
+    /// Hardboard sheets between the foam layers, part of the mold.
+    Mold,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Packing {
+    /// Every layer cut at the same places along the canoe: the joints line up from floor to
+    /// keel, so the mold comes apart in whole blocks for demolding.
+    Blocks,
+    /// Fewest pieces per layer, then the fewest sheets.
+    Continuous,
+    /// Fewest hardboard sheets (pieces may be shorter).
+    Tight,
+    /// Half-layer templates, flipped for the other side, shared by mirror-image pieces.
+    FewestShapes,
 }
 
 /// What to build the mold from. Inches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct MoldSpec {
+    pub boards: Boards,
     pub orientation: Orientation,
-    /// Foam sheet thickness.
-    pub foam_in: f64,
-    /// Hardboard sheet thickness.
+    pub packing: Packing,
+    /// Foam sheet thicknesses on hand (one number or a list): the layers mix them so the stack
+    /// covers the mold with the least left over ([`foam_order`]).
+    #[serde(deserialize_with = "one_or_many")]
+    pub foam_in: Vec<f64>,
+    /// Foam sheet sizes on hand, [length, width]: every foam piece fits one of them.
+    pub foam_sheets: Vec<[f64; 2]>,
+    /// Hardboard thickness (between the layers with [`Boards::Mold`]).
     pub board_in: f64,
-    /// Hardboard stock sheet length and width.
-    pub sheet_length_in: f64,
-    pub sheet_width_in: f64,
+    /// Hardboard sheet sizes on hand, [length, width] ([`nest`]).
+    pub sheets: Vec<[f64; 2]>,
     /// Least space between two pieces, and between a piece and the sheet edge.
     pub gap_in: f64,
+    /// Pieces may be cut out of the middle of bigger ones: a tracing template only needs its
+    /// outer edge, so it can be a ring at least `ring_in` wide around the pieces inside it.
+    pub nest_inside: bool,
+    pub ring_in: f64,
+    /// Alignment holes `hole_in` across in every template at the 12 in stations (on the
+    /// centreline; half templates 1 in off it; upright slabs on the centreline near the floor):
+    /// the same places in every layer, to mark the foam or dowel the stack.
+    pub holes: bool,
+    pub hole_in: f64,
+    /// Water-jet cut width to allow for in the DXF (outlines moved out, holes in, by half of it).
+    /// 0: none (most water-jet software compensates itself).
+    pub kerf_in: f64,
+    /// Also write the reference lines in the DXF (layer LABEL: names, centreline, ticks, sanding
+    /// line; layer SHEET: the sheet edge). Off: cut lines only, since water-jet software such as
+    /// OMAX Layout imports every line and would cut these unless each is set not to.
+    pub dxf_marks: bool,
 }
 
 impl Default for MoldSpec {
     fn default() -> Self {
         MoldSpec {
+            boards: Boards::Templates,
             orientation: Orientation::Flat,
-            foam_in: 2.0,
+            packing: Packing::Blocks,
+            foam_in: vec![2.0],
+            foam_sheets: vec![[96.0, 48.0]],
             board_in: 0.125,
-            sheet_length_in: 96.0,
-            sheet_width_in: 48.0,
+            sheets: vec![[96.0, 48.0]],
             gap_in: 0.25,
+            nest_inside: false,
+            ring_in: 1.0,
+            holes: true,
+            hole_in: 0.25,
+            kerf_in: 0.0,
+            dxf_marks: false,
         }
     }
 }
 
 impl MoldSpec {
     fn validate(&self) -> Result<()> {
-        for (v, what) in [
-            (self.foam_in, "foam thickness"),
-            (self.board_in, "hardboard thickness"),
-            (self.sheet_length_in, "sheet length"),
-            (self.sheet_width_in, "sheet width"),
-        ] {
+        ensure!(!self.foam_in.is_empty(), "give at least one foam thickness");
+        ensure!(self.foam_in.len() <= 4, "at most 4 foam thicknesses, got {}", self.foam_in.len());
+        ensure!(!self.foam_sheets.is_empty(), "give at least one foam sheet size");
+        ensure!(!self.sheets.is_empty(), "give at least one hardboard sheet size");
+        let pos = |v: f64, what: &str| -> Result<()> {
             ensure!(v.is_finite() && v > 0.0, "{what} must be > 0, got {v}");
+            Ok(())
+        };
+        for &t in &self.foam_in {
+            pos(t, "foam thickness")?;
+        }
+        pos(self.board_in, "hardboard thickness")?;
+        for &[l, w] in &self.foam_sheets {
+            pos(l.min(w), "foam sheet size")?;
         }
         ensure!(self.gap_in.is_finite() && self.gap_in >= 0.0, "gap must be >= 0, got {}", self.gap_in);
+        pos(self.ring_in, "ring width")?;
+        pos(self.hole_in, "hole size")?;
         ensure!(
-            2.0 * self.gap_in + 1.0 < self.sheet_length_in.min(self.sheet_width_in),
-            "a {} in gap leaves no room on a {} x {} in sheet",
+            self.kerf_in.is_finite()
+                && self.kerf_in >= 0.0
+                && (self.kerf_in == 0.0 || self.kerf_in < self.gap_in),
+            "cut width must be >= 0 and less than the gap ({} in), got {}",
             self.gap_in,
-            self.sheet_length_in,
-            self.sheet_width_in
+            self.kerf_in
         );
+        for &[l, w] in &self.sheets {
+            pos(l.min(w), "hardboard sheet size")?;
+            ensure!(
+                2.0 * self.gap_in + 1.0 < l.min(w),
+                "a {} in gap leaves no room on a {l} x {w} in sheet",
+                self.gap_in
+            );
+        }
         Ok(())
+    }
+
+    /// The hardboard sizes, largest area first (a new sheet is the largest that holds the piece).
+    fn sheets_by_size(&self) -> Vec<[f64; 2]> {
+        let mut v = self.sheets.clone();
+        v.sort_by(|a, b| (b[0] * b[1]).total_cmp(&(a[0] * a[1])));
+        v
+    }
+
+    fn sizes(v: &[[f64; 2]]) -> String {
+        v.iter().map(|[l, w]| format!("{l} x {w}")).collect::<Vec<_>>().join(", ")
+    }
+
+    fn templates(&self) -> bool {
+        self.boards == Boards::Templates
     }
 }
 
+/// A number or a list of numbers.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<f64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(f64),
+        Many(Vec<f64>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::One(v) => vec![v],
+        OneOrMany::Many(v) => v,
+    })
+}
+
+/// Foam layer thicknesses, in stack order, to cover `total` (flat: floor to the inner keel;
+/// upright: bow to stern) from the thicknesses on hand (`board` added to each with boards in
+/// the mold): the count of each that leaves the least over the top, then the fewest layers.
+/// Flat stacks go thickest on the floor, thinnest at the keel where the hull curves most;
+/// upright stacks put the thin slabs at the two ends. Returns foam thicknesses.
+fn foam_order(thick: &[f64], board: f64, total: f64, flat: bool) -> Vec<f64> {
+    let mut t: Vec<f64> = thick.to_vec();
+    t.sort_by(|a, b| b.total_cmp(a));
+    t.dedup();
+    let pitch: Vec<f64> = t.iter().map(|v| v + board).collect();
+    let max_n = (total / pitch.iter().cloned().fold(f64::INFINITY, f64::min)).ceil() as usize + 1;
+    // (overshoot, layers, counts)
+    let mut best: Option<(f64, usize, Vec<usize>)> = None;
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        i: usize,
+        sum: f64,
+        n: usize,
+        counts: &mut Vec<usize>,
+        pitch: &[f64],
+        total: f64,
+        max_n: usize,
+        best: &mut Option<(f64, usize, Vec<usize>)>,
+    ) {
+        if i == pitch.len() {
+            if sum >= total - 1e-9 {
+                let over = sum - total;
+                let better =
+                    best.as_ref().is_none_or(|b| over < b.0 - 1e-9 || (over < b.0 + 1e-9 && n < b.1));
+                if better {
+                    *best = Some((over, n, counts.clone()));
+                }
+            }
+            return;
+        }
+        let mut c = 0;
+        loop {
+            counts.push(c);
+            walk(i + 1, sum + c as f64 * pitch[i], n + c, counts, pitch, total, max_n, best);
+            counts.pop();
+            c += 1;
+            if n + c > max_n || sum + c as f64 * pitch[i] > total + pitch[i] + 1e-9 {
+                break;
+            }
+        }
+    }
+    walk(0, 0.0, 0, &mut vec![], &pitch, total, max_n, &mut best);
+    let counts = best.map(|b| b.2).unwrap_or_else(|| vec![max_n]);
+    let thick_first: Vec<f64> =
+        t.iter().zip(&counts).flat_map(|(&v, &c)| std::iter::repeat_n(v, c)).collect();
+    if flat {
+        return thick_first;
+    }
+    // Upright: thinnest first, alternately to the bow end and the stern end.
+    let (mut front, mut back) = (vec![], vec![]);
+    for (k, v) in thick_first.iter().rev().enumerate() {
+        if k % 2 == 0 { front.push(*v) } else { back.push(*v) }
+    }
+    front.extend(back.iter().rev());
+    front
+}
+
 /// One hardboard piece, in its own frame: flat layers in hull plan coordinates (x from the bow,
-/// y across, centreline y = 0); vertical ribs in section coordinates (y across, height above the
-/// floor).
+/// y across, centreline y = 0); upright layers in section coordinates (y across, height above
+/// the floor).
 #[derive(Debug, Clone, Serialize)]
 pub struct Piece {
     pub label: String,
@@ -115,24 +308,35 @@ pub struct Piece {
     pub layer: usize,
     /// Closed outline (last point not repeated), counter-clockwise.
     pub outline: Vec<Pt>,
-    /// Marks to etch: centreline and station ticks.
+    /// Marks to etch: centreline, station ticks, sanding line.
     pub marks: Vec<[Pt; 2]>,
+    /// Alignment hole centres (cut, `hole_in` across).
+    pub holes: Vec<Pt>,
     pub text: String,
     pub text_at: Pt,
     pub text_deg: f64,
     pub text_h: f64,
     pub area_in2: f64,
+    /// The foam pieces this template traces ("L3-1 S", "L3-1 P (flip)", ...); with
+    /// [`Boards::Mold`], the board itself.
+    pub traces: Vec<String>,
 }
 
-/// One board of the stack.
+/// One layer of the stack.
 #[derive(Debug, Clone, Serialize)]
 pub struct Layer {
     pub label: String,
-    /// Flat: height of the board's underside above the floor. Vertical: x of its bow face.
+    /// Flat: height of the layer's underside above the floor. Upright: x of its bow face.
     pub pos_in: f64,
-    /// Where the outline is cut: flat, the canoe height z of the mid-plane (keel = 0);
-    /// vertical, the x of the mid-plane.
-    pub cut_in: f64,
+    /// Templates: the layer's foam thickness; mold: the board's.
+    pub thick_in: f64,
+    /// Thickness of the foam layer it belongs to (templates) or that sits on it (mold).
+    pub foam_in: f64,
+    /// Foam pieces (templates) or boards (mold) of the layer, bow to stern, in the layer frame.
+    pub foam: Vec<Vec<Pt>>,
+    /// Names of those pieces (`L3-2`, `R7`).
+    pub foam_labels: Vec<String>,
+    /// Hardboard pieces the layer uses (a FewestShapes template may serve several).
     pub pieces: Vec<usize>,
 }
 
@@ -141,16 +345,22 @@ pub struct Layer {
 #[derive(Debug, Clone, Serialize)]
 pub struct Placed {
     pub piece: usize,
+    /// Nested: the part (index in this sheet) it is cut out of.
+    pub inside: Option<usize>,
     pub rot_deg: u32,
     pub shift: Pt,
     pub outline: Vec<Pt>,
     pub marks: Vec<[Pt; 2]>,
+    pub holes: Vec<Pt>,
     pub text_at: Pt,
     pub text_deg: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Sheet {
+    /// This sheet's size (one of [`MoldSpec::sheets`]).
+    pub length_in: f64,
+    pub width_in: f64,
     pub parts: Vec<Placed>,
     /// Area of the pieces on it, in^2.
     pub used_in2: f64,
@@ -158,9 +368,19 @@ pub struct Sheet {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Stack {
-    pub boards: usize,
+    /// Foam layers with an outline (templates), or hardboard layers (mold).
+    pub layers: usize,
+    /// Foam layers in all (the mold: between and above the boards).
     pub foam_layers: usize,
-    /// Flat: floor to the top of the inner keel. Vertical: bow to stern of the hollow run.
+    /// Foam pieces to cut (templates); boards (mold).
+    pub foam_pieces: usize,
+    /// Blocks packing: x of the joints between blocks (the same in every layer), bow to stern.
+    pub joints_in: Vec<f64>,
+    /// Foam thickness of each foam layer in stack order (floor up, or bow to stern), and how
+    /// far the stack runs past the mold.
+    pub foam_order_in: Vec<f64>,
+    pub over_in: f64,
+    /// Flat: floor to the top of the inner keel. Upright: bow to stern of the hollow run.
     pub height_in: f64,
     /// Hollow run length and inner beam at the gunwale.
     pub length_in: f64,
@@ -190,6 +410,13 @@ pub fn from_result(text: &str, spec: &MoldSpec) -> Result<Layout> {
     layout(&hull, &es, spec)
 }
 
+/// A layer before it is cut into pieces: flat, its waterline runs (starboard chains) and the
+/// sanding line; upright, its half section (y, height) and the sanding half section.
+enum Shape {
+    Flat { runs: Vec<Vec<Pt>>, guide: Vec<Vec<Pt>> },
+    Upright { half: Vec<Pt>, guide: Option<Vec<Pt>>, x: f64 },
+}
+
 /// Mold boards for `hull` with the wall and depth of `es` (`es.thickness_in` required).
 pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     spec.validate()?;
@@ -201,118 +428,230 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     let (xa, xb) = (rows[0].0, rows[rows.len() - 1].0);
     let keel_min = rows.iter().map(|r| r.1.last().unwrap().1).fold(f64::INFINITY, f64::min);
     let beam = 2.0 * rows.iter().map(|r| r.1[0].0).fold(0.0, f64::max);
-    let pitch = spec.foam_in + spec.board_in;
-    let (mut layers, mut pieces, mut nested): (Vec<Layer>, Vec<Piece>, Option<Vec<Sheet>>) =
-        (vec![], vec![], None);
-    let stack = match spec.orientation {
-        Orientation::Flat => {
-            let height = z_top - keel_min;
-            let mut cuts: Vec<(Layer, Vec<Vec<Pt>>)> = vec![];
-            loop {
-                let pos = cuts.len() as f64 * pitch;
+    let tpl = spec.templates();
+    let flat = spec.orientation == Orientation::Flat;
+    let total = if flat { z_top - keel_min } else { xb - xa };
+    let board = if tpl { 0.0 } else { spec.board_in };
+    let order = foam_order(&spec.foam_in, board, total, flat);
+    // Layer k starts at the sum of the layers (and boards) below / ahead of it.
+    let start = |k: usize| order[..k.min(order.len())].iter().map(|t| t + board).sum::<f64>();
+    let wl =
+        |z: f64| -> Vec<Vec<Pt>> { waterline(&rows, z).iter().map(|r| smooth_run(r, &hull.x)).collect() };
+    // Each layer: (label, pos, shape).
+    let mut shapes: Vec<(String, f64, f64, Shape)> = vec![];
+    if flat {
+        while shapes.len() < order.len() {
+            let (pos, ft) = (start(shapes.len()), order[shapes.len()]);
+            let label = format!("L{}", shapes.len() + 1);
+            let shape = if tpl {
+                // Underside (nearer the gunwale) and top face; the template is their envelope.
+                let (z0, z1) = (z_top - pos - 1e-9, z_top - pos - ft);
+                if z0 <= keel_min + 1e-6 {
+                    break;
+                }
+                // In plan the layer covers every cut of the hull between its two faces, not just
+                // the faces: near a tip the widest-of-two-faces outline has a notch where the
+                // longer, narrow underside meets the top face's round nose. Slices every 1/4 in
+                // fill it.
+                let n = ((ft / 0.25).ceil() as usize).max(2);
+                let slices: Vec<Vec<Pt>> = (0..=n)
+                    .map(|j| z0 - (z0 - z1) * j as f64 / n as f64)
+                    .filter(|&z| z > keel_min + 1e-6)
+                    .flat_map(&wl)
+                    .collect();
+                let w1 = if z1 > keel_min + 1e-6 { wl(z1) } else { vec![] };
+                let runs = envelope(&slices, &[]).iter().map(|r| taper_tips(r)).collect();
+                Shape::Flat { runs, guide: w1 }
+            } else {
                 let z = z_top - pos - 0.5 * spec.board_in;
                 if z <= keel_min + 1e-6 {
                     break;
                 }
-                let label = format!("L{}", cuts.len() + 1);
-                cuts.push((Layer { label, pos_in: pos, cut_in: z, pieces: vec![] }, waterline(&rows, z)));
-            }
-            // Fewest pieces that fit is not always fewest sheets (a 70 in piece on a 96 in sheet
-            // wastes the rest of its length): try shorter pieces too, keep the fewest sheets
-            // (then fewest pieces, then the longest pieces).
-            let usable = spec.sheet_length_in.max(spec.sheet_width_in) - 2.0 * spec.gap_in;
-            let limits: Vec<Option<f64>> =
-                std::iter::once(None).chain((5..20).rev().map(|k| Some(usable * k as f64 / 20.0))).collect();
-            let tries: Vec<Result<Built>> = limits
-                .par_iter()
-                .map(|&max_len| {
-                    let (mut ls, mut ps) = (vec![], vec![]);
-                    for (li, (layer, runs)) in cuts.iter().enumerate() {
-                        let mut layer = layer.clone();
-                        for (ri, run) in runs.iter().enumerate() {
-                            let tag = if runs.len() > 1 {
-                                format!("{}{}", layer.label, (b'a' + ri as u8) as char)
-                            } else {
-                                layer.label.clone()
-                            };
-                            for p in split_run(run, &tag, li, max_len, spec)? {
-                                layer.pieces.push(ps.len());
-                                ps.push(p);
-                            }
-                        }
-                        ls.push(layer);
-                    }
-                    let sh = nest(&ps, spec)?;
-                    Ok((ls, ps, sh))
-                })
-                .collect();
-            let mut best: Option<Built> = None;
-            let mut first_err = None;
-            for t in tries {
-                match t {
-                    Ok(t) => {
-                        if best.as_ref().is_none_or(|b| (t.2.len(), t.1.len()) < (b.2.len(), b.1.len())) {
-                            best = Some(t);
-                        }
-                    }
-                    Err(e) => {
-                        first_err.get_or_insert(e);
-                    }
-                }
-            }
-            let Some((ls, ps, sh)) = best else {
-                return Err(first_err
-                    .unwrap_or_else(|| anyhow::anyhow!("the mold is thinner than one hardboard sheet")));
+                Shape::Flat { runs: wl(z), guide: vec![] }
             };
-            (layers, pieces, nested) = (ls, ps, Some(sh));
-            ensure!(!layers.is_empty(), "the mold is thinner than one hardboard sheet");
-            let top = (layers.len() - 1) as f64 * pitch + spec.board_in;
-            let above = ((height - top) / spec.foam_in - 1e-9).ceil().max(0.0) as usize;
-            Stack {
-                boards: layers.len(),
-                foam_layers: layers.len() - 1 + above,
-                height_in: height,
-                length_in: xb - xa,
-                beam_in: beam,
-                depth_in: es.depth_in,
-                wall_in: wall,
-            }
+            shapes.push((label, pos, ft, shape));
         }
-        Orientation::Vertical => {
-            let mut k = 0;
-            loop {
-                let pos = xa + k as f64 * pitch;
+    } else {
+        while shapes.len() < order.len() {
+            let (pos, ft) = (xa + start(shapes.len()), order[shapes.len()]);
+            let label = format!("R{}", shapes.len() + 1);
+            let shape = if tpl {
+                if pos >= xb - 1e-6 {
+                    break;
+                }
+                // Both faces of the slab; the template is the bigger section, the other etched.
+                let (s0, s1) = (section(&rows, pos, z_top), section(&rows, (pos + ft).min(xb), z_top));
+                let (big, small) = if half_area(&s0) >= half_area(&s1) { (s0, s1) } else { (s1, s0) };
+                Shape::Upright { half: big, guide: Some(small), x: pos }
+            } else {
                 if pos + spec.board_in > xb + 1e-9 {
                     break;
                 }
                 let x = pos + 0.5 * spec.board_in;
-                let label = format!("R{}", k + 1);
-                let p = rib(&rows, x, z_top, &label, layers.len());
-                layers.push(Layer { label, pos_in: pos, cut_in: x, pieces: vec![pieces.len()] });
-                pieces.push(p);
-                k += 1;
+                Shape::Upright { half: section(&rows, x, z_top), guide: None, x }
+            };
+            shapes.push((label, pos, ft, shape));
+        }
+    }
+    ensure!(!shapes.is_empty(), "the mold is thinner than one layer");
+    // Blocks: one set of joints for every flat layer.
+    let edges: Option<Vec<f64>> = if spec.packing == Packing::Blocks && flat {
+        let runs: Vec<&Vec<Pt>> = shapes
+            .iter()
+            .flat_map(|(_, _, _, s)| match s {
+                Shape::Flat { runs, .. } => runs.iter().collect::<Vec<_>>(),
+                Shape::Upright { .. } => vec![],
+            })
+            .collect();
+        Some(block_edges(&runs, spec)?)
+    } else {
+        None
+    };
+    // Nested (not Blocks, whose joints are shared): layers narrow enough to sit inside a wide
+    // layer's ring may be cut shorter so their pieces fit in the rings; wide layers keep their
+    // fewest pieces (Tight shortens every layer).
+    let width = |s: &Shape| match s {
+        Shape::Flat { runs, .. } => 2.0 * runs.iter().flatten().map(|p| p[1]).fold(0.0, f64::max),
+        Shape::Upright { .. } => 0.0,
+    };
+    let widest = shapes.iter().map(|(_, _, _, s)| width(s)).fold(0.0, f64::max);
+    let nests = spec.nest_inside && spec.packing != Packing::Blocks;
+    let shortened = |s: &Shape| {
+        spec.packing == Packing::Tight || (nests && width(s) < widest - 2.0 * (spec.ring_in + spec.gap_in))
+    };
+    let build = |max_len: Option<f64>| -> Result<(Vec<Layer>, Vec<Piece>)> {
+        let (mut ls, mut ps) = (vec![], vec![]);
+        for (li, (label, pos, ft, shape)) in shapes.iter().enumerate() {
+            let thick_in = if tpl { *ft } else { spec.board_in };
+            let mut layer = Layer {
+                label: label.clone(),
+                pos_in: *pos,
+                thick_in,
+                foam_in: *ft,
+                foam: vec![],
+                foam_labels: vec![],
+                pieces: vec![],
+            };
+            match shape {
+                Shape::Flat { runs, guide } => {
+                    for (ri, run) in runs.iter().enumerate() {
+                        let tag = if runs.len() > 1 {
+                            format!("{label}{}", (b'a' + ri as u8) as char)
+                        } else {
+                            label.clone()
+                        };
+                        let cuts = match &edges {
+                            Some(e) => cuts_at(run, guide, &tag, e),
+                            None => split_run(run, guide, &tag, max_len.filter(|_| shortened(shape)), spec)?,
+                        };
+                        layer.foam.extend(cuts.iter().map(|c| mirrored(&c.chain)));
+                        layer.foam_labels.extend(cuts.iter().map(|c| c.label.clone()));
+                        flat_pieces(&cuts, li, spec, &mut layer.pieces, &mut ps);
+                    }
+                }
+                Shape::Upright { half, guide, x } => {
+                    let full = close_section(half);
+                    ensure!(
+                        !tpl || fits_foam(&full, spec),
+                        "{label} ({:.1} x {:.1} in) does not fit a foam sheet ({} in)",
+                        2.0 * half[0][0],
+                        half.last().map_or(0.0, |p| p[1]),
+                        MoldSpec::sizes(&spec.foam_sheets)
+                    );
+                    layer.foam.push(full);
+                    layer.foam_labels.push(label.clone());
+                    rib_pieces(half, guide.as_deref(), *x, label, li, spec, &mut layer.pieces, &mut ps)?;
+                }
             }
-            ensure!(!layers.is_empty(), "the mold is shorter than one hardboard sheet");
-            let end = (layers.len() - 1) as f64 * pitch + spec.board_in;
-            let rest = xb - xa - end;
-            let above = (rest / spec.foam_in - 1e-9).ceil().max(0.0) as usize;
-            Stack {
-                boards: layers.len(),
-                foam_layers: layers.len() - 1 + above,
-                height_in: xb - xa,
-                length_in: xb - xa,
-                beam_in: beam,
-                depth_in: es.depth_in,
-                wall_in: wall,
+            ls.push(layer);
+        }
+        Ok((ls, ps))
+    };
+    let (layers, pieces, sheets) = if (spec.packing == Packing::Tight || nests) && flat {
+        // Fewest pieces that fit is not always fewest sheets (a 70 in piece on a 96 in sheet
+        // wastes the rest of its length): try shorter pieces too, packed in quarter turns, then
+        // the three best again turned to any angle; fewest sheets, then fewest pieces.
+        let usable = spec.sheets.iter().map(|s| s[0].max(s[1])).fold(0.0, f64::max) - 2.0 * spec.gap_in;
+        let limits: Vec<Option<f64>> =
+            std::iter::once(None).chain((5..20).rev().map(|k| Some(usable * k as f64 / 20.0))).collect();
+        let tries: Vec<Result<Built>> = limits
+            .par_iter()
+            .map(|&max_len| {
+                let (ls, ps) = build(max_len)?;
+                let sh = nest(&ps, spec, 90)?;
+                Ok((ls, ps, sh))
+            })
+            .collect();
+        let mut ok: Vec<(usize, Built)> = vec![];
+        let mut first_err = None;
+        for (i, t) in tries.into_iter().enumerate() {
+            match t {
+                Ok(t) => ok.push((i, t)),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
             }
         }
+        if ok.is_empty() {
+            return Err(first_err.unwrap_or_else(|| anyhow::anyhow!("the mold is thinner than one layer")));
+        }
+        ok.sort_by_key(|(i, t)| (t.2.len(), t.1.len(), *i));
+        ok.truncate(3);
+        let fine: Vec<Result<Built>> = ok
+            .into_par_iter()
+            .map(|(_, (ls, ps, coarse))| {
+                let sh = nest(&ps, spec, FINE_STEP_DEG)?;
+                Ok((ls, ps, if sh.len() < coarse.len() { sh } else { coarse }))
+            })
+            .collect();
+        let mut best: Option<Built> = None;
+        for t in fine {
+            let t = t?;
+            if best.as_ref().is_none_or(|b| (t.2.len(), t.1.len()) < (b.2.len(), b.1.len())) {
+                best = Some(t);
+            }
+        }
+        best.expect("at least one split")
+    } else {
+        let (ls, ps) = build(None)?;
+        let sh = nest(&ps, spec, FINE_STEP_DEG)?;
+        (ls, ps, sh)
     };
-    let sheets = match nested {
-        Some(s) => s,
-        None => nest(&pieces, spec)?,
+    let foam_pieces = layers.iter().map(|l| l.foam.len()).sum();
+    let joints: Vec<f64> = edges.as_ref().map_or(vec![], |e| e[1..e.len() - 1].to_vec());
+    let n = layers.len();
+    let over = order.iter().map(|t| t + board).sum::<f64>() - total;
+    let stack = if flat {
+        Stack {
+            layers: n,
+            foam_layers: order.len(),
+            foam_pieces,
+            joints_in: joints.clone(),
+            foam_order_in: order.clone(),
+            over_in: over,
+            height_in: total,
+            length_in: xb - xa,
+            beam_in: beam,
+            depth_in: es.depth_in,
+            wall_in: wall,
+        }
+    } else {
+        Stack {
+            layers: n,
+            foam_layers: order.len(),
+            foam_pieces,
+            joints_in: joints.clone(),
+            foam_order_in: order.clone(),
+            over_in: over,
+            height_in: xb - xa,
+            length_in: xb - xa,
+            beam_in: beam,
+            depth_in: es.depth_in,
+            wall_in: wall,
+        }
     };
     let used: f64 = sheets.iter().map(|s| s.used_in2).sum();
-    let utilization = used / (sheets.len() as f64 * spec.sheet_length_in * spec.sheet_width_in);
+    let utilization = used / sheets.iter().map(|s| s.length_in * s.width_in).sum::<f64>();
     Ok(Layout {
         format: MOLD_FORMAT.into(),
         hull: hull.name.clone(),
@@ -384,6 +723,179 @@ fn waterline(rows: &[NetRow], z: f64) -> Vec<Vec<Pt>> {
     runs
 }
 
+/// A template chain's tips (an end on the centreline) bridged over any inward dip within
+/// TIP_ZONE_IN of the point, by the tightest outward curve over it (the upper hull of the chain
+/// there): the outline tapers to its point without a neck or a spike. It only adds material, so
+/// the foam is still never cut short.
+fn taper_tips(chain: &[Pt]) -> Vec<Pt> {
+    if chain.len() < 4 {
+        return chain.to_vec();
+    }
+    let is_tip = |c: &[Pt]| c[0][1] <= 1e-9 && c[1][0] > c[0][0] + 1e-9;
+    let mut out = chain.to_vec();
+    if is_tip(&out) {
+        out = taper_start(&out);
+    }
+    // The stern end: the same, on the chain mirrored end for end.
+    let mut rev: Vec<Pt> = out.iter().rev().map(|p| [-p[0], p[1]]).collect();
+    if is_tip(&rev) {
+        rev = taper_start(&rev);
+    }
+    rev.iter().rev().map(|p| [-p[0], p[1]]).collect()
+}
+
+/// [`taper_tips`] at the start of a chain: the upper hull of its points from the tip to
+/// TIP_ZONE_IN on (not past its widest point), then the rest of the chain.
+fn taper_start(c: &[Pt]) -> Vec<Pt> {
+    let imax = (0..c.len()).max_by(|&a, &b| c[a][1].total_cmp(&c[b][1]).then(b.cmp(&a))).unwrap();
+    let j = (0..=imax).take_while(|&i| c[i][0] <= c[0][0] + TIP_ZONE_IN).last().unwrap_or(0);
+    if j < 2 {
+        return c.to_vec();
+    }
+    let mut h: Vec<Pt> = vec![];
+    for &p in &c[..=j] {
+        while h.len() >= 2 {
+            let (o, a) = (h[h.len() - 2], h[h.len() - 1]);
+            if (a[0] - o[0]) * (p[1] - o[1]) - (a[1] - o[1]) * (p[0] - o[0]) >= 0.0 {
+                h.pop();
+            } else {
+                break;
+            }
+        }
+        h.push(p);
+    }
+    h.extend_from_slice(&c[j + 1..]);
+    h
+}
+
+/// The outline enclosing sets of waterline runs (the widest of any at every x): one
+/// chain per stretch of x covered by any run, from the centreline back to it.
+fn envelope(a: &[Vec<Pt>], b: &[Vec<Pt>]) -> Vec<Vec<Pt>> {
+    let all: Vec<&Vec<Pt>> = a.iter().chain(b).collect();
+    let mut spans: Vec<(f64, f64)> = all.iter().map(|r| (r[0][0], r[r.len() - 1][0])).collect();
+    spans.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let mut merged: Vec<(f64, f64)> = vec![];
+    for (s, e) in spans {
+        match merged.last_mut() {
+            Some(m) if s <= m.1 + 1e-9 => m.1 = m.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+    let y_at = |x: f64| {
+        all.iter()
+            .filter(|r| x >= r[0][0] - 1e-9 && x <= r[r.len() - 1][0] + 1e-9)
+            .map(|r| chain_y(r, x))
+            .fold(0.0, f64::max)
+    };
+    merged
+        .into_iter()
+        .map(|(s, e)| {
+            let mut xs: Vec<f64> = all
+                .iter()
+                .flat_map(|r| r.iter().map(|p| p[0]))
+                .filter(|&x| x >= s - 1e-9 && x <= e + 1e-9)
+                .collect();
+            xs.sort_by(f64::total_cmp);
+            xs.dedup_by(|p, q| (*p - *q).abs() < 1e-9);
+            let mut c: Vec<Pt> = vec![[s, 0.0]];
+            c.extend(xs.iter().map(|&x| [x, y_at(x)]));
+            c.push([e, 0.0]);
+            c.dedup_by(|p, q| (p[0] - q[0]).abs() < 1e-9 && (p[1] - q[1]).abs() < 1e-9);
+            c
+        })
+        .filter(|c| c.len() >= 3)
+        .collect()
+}
+
+/// A waterline run through a smooth curve. The analysis loft blends offsets linearly between
+/// table stations, which near the keel at the ends kinks the waterline at every station; the
+/// board follows a centripetal Catmull-Rom spline (C1, no cusps or loops) through the run's
+/// values at the table stations instead, sampled every 0.2 in or so. A tip on the centreline is
+/// a knot (the loft rows between it and the first station are left out) and the curve tapers
+/// smoothly into it, to a point; a square bulkhead end keeps its corner. Runs spanning fewer
+/// than two table stations are kept as is.
+fn smooth_run(run: &[Pt], table_x: &[f64]) -> Vec<Pt> {
+    let n = run.len();
+    if n < 4 {
+        return run.to_vec();
+    }
+    // Data points: the run less its centreline end points (tips or bulkhead feet).
+    let (a, b) = (usize::from(run[0][1] <= 1e-9), n - usize::from(run[n - 1][1] <= 1e-9));
+    if b < a + 2 {
+        return run.to_vec();
+    }
+    let data = &run[a..b];
+    let (xa, xb) = (data[0][0], data[data.len() - 1][0]);
+    let stations: Vec<Pt> =
+        table_x.iter().filter(|&&x| x > xa + 1e-6 && x < xb - 1e-6).map(|&x| [x, chain_y(data, x)]).collect();
+    if stations.len() < 2 {
+        return run.to_vec();
+    }
+    let tip0 = a == 1 && run[0][0] < xa - 1e-9;
+    let tip1 = b == n - 1 && run[n - 1][0] > xb + 1e-9;
+    let mut k: Vec<Pt> = vec![];
+    // At a tip the loft's rows between the tip and the first table station are blending
+    // artifacts too: the curve runs from the station straight into the tip.
+    k.push(if tip0 { run[0] } else { data[0] });
+    k.extend(stations);
+    k.push(if tip1 { run[n - 1] } else { data[data.len() - 1] });
+    let m = k.len();
+    let reflect = |p: Pt, q: Pt| [2.0 * p[0] - q[0], 2.0 * p[1] - q[1]];
+    // Ends extend straight on (a tip then tapers to its point along the curve's own direction;
+    // forcing it square to the centreline rounded the nose into a bulb with a neck behind it).
+    let (first, last) = (reflect(k[0], k[1]), reflect(k[m - 1], k[m - 2]));
+    let at = |j: isize| -> Pt {
+        if j < 0 {
+            first
+        } else if j as usize >= m {
+            last
+        } else {
+            k[j as usize]
+        }
+    };
+    let mut out: Vec<Pt> = vec![];
+    if !tip0 && a == 1 {
+        out.push(run[0]);
+    }
+    out.push(k[0]);
+    for j in 0..m - 1 {
+        let ps = [at(j as isize - 1), k[j], k[j + 1], at(j as isize + 2)];
+        let len = (k[j + 1][0] - k[j][0]).hypot(k[j + 1][1] - k[j][1]);
+        let steps = ((len / 0.2).ceil() as usize).max(2);
+        for s in 1..=steps {
+            out.push(if s == steps { k[j + 1] } else { catmull_rom(&ps, s as f64 / steps as f64) });
+        }
+    }
+    if !tip1 && b == n - 1 {
+        out.push(run[n - 1]);
+    }
+    // Keep the chain a function of x (clipping and cutting rely on it) and on the starboard side.
+    for i in 1..out.len() {
+        out[i][0] = out[i][0].max(out[i - 1][0]);
+        out[i][1] = out[i][1].max(0.0);
+    }
+    out
+}
+
+/// Centripetal (alpha = 1/2) Catmull-Rom between p[1] and p[2] at u in [0, 1] (Barry-Goldman).
+fn catmull_rom(p: &[Pt; 4], u: f64) -> Pt {
+    let knot = |a: Pt, b: Pt| (a[0] - b[0]).hypot(a[1] - b[1]).sqrt().max(1e-9);
+    let t1 = knot(p[0], p[1]);
+    let t2 = t1 + knot(p[1], p[2]);
+    let t3 = t2 + knot(p[2], p[3]);
+    let t = t1 + u * (t2 - t1);
+    let lerp = |a: Pt, b: Pt, ta: f64, tb: f64| {
+        let w = (t - ta) / (tb - ta);
+        [a[0] + w * (b[0] - a[0]), a[1] + w * (b[1] - a[1])]
+    };
+    let a1 = lerp(p[0], p[1], 0.0, t1);
+    let a2 = lerp(p[1], p[2], t1, t2);
+    let a3 = lerp(p[2], p[3], t2, t3);
+    let b1 = lerp(a1, a2, 0.0, t2);
+    let b2 = lerp(a2, a3, t1, t3);
+    lerp(b1, b2, t1, t2)
+}
+
 /// y of a chain (x non-decreasing) at x, inside it.
 fn chain_y(chain: &[Pt], x: f64) -> f64 {
     let k = chain.partition_point(|p| p[0] < x).clamp(1, chain.len() - 1);
@@ -417,125 +929,400 @@ fn bbox(p: &[Pt]) -> (Pt, Pt) {
     })
 }
 
-/// Does a w x h box fit the sheet's usable area in some quarter turn?
-fn fits(w: f64, h: f64, spec: &MoldSpec) -> bool {
-    let r = raster_pad(spec);
-    let cells = |v: f64| ((v + 2.0 * r) / CELL).ceil() as usize + 1;
-    let (nx, ny) = sheet_cells(spec);
-    let (cw, ch) = (cells(w), cells(h));
-    (cw <= nx && ch <= ny) || (ch <= nx && cw <= ny)
+/// Does the polygon fit one of the foam sheets (quarter turns, no margin)?
+fn fits_foam(poly: &[Pt], spec: &MoldSpec) -> bool {
+    let (lo, hi) = bbox(poly);
+    let (w, h) = (hi[0] - lo[0], hi[1] - lo[1]);
+    spec.foam_sheets.iter().any(|&[l, b]| {
+        let (l, b) = (l + 1e-9, b + 1e-9);
+        (w <= l && h <= b) || (h <= l && w <= b)
+    })
 }
 
-/// A flat layer's run cut into the fewest equal lengths that each fit a sheet (and are no longer
-/// than `max_len`): pieces bow to stern, labelled `<tag>-1`, `<tag>-2`, ...
-fn split_run(
-    run: &[Pt],
-    tag: &str,
-    layer: usize,
-    max_len: Option<f64>,
-    spec: &MoldSpec,
-) -> Result<Vec<Piece>> {
-    let (x0, x1) = (run[0][0], run[run.len() - 1][0]);
-    let span = x1 - x0;
-    let n_min = max_len.map_or(1, |m| ((span / m).ceil() as usize).max(1));
-    let n = (n_min..=200)
-        .find(|&n| {
-            (0..n).all(|k| {
-                let (c0, c1) = (x0 + span * k as f64 / n as f64, x0 + span * (k + 1) as f64 / n as f64);
-                let w = run
-                    .iter()
-                    .filter(|p| p[0] >= c0 && p[0] <= c1)
-                    .map(|p| p[1])
-                    .fold(chain_y(run, c0).max(chain_y(run, c1)), f64::max);
-                fits(c1 - c0, 2.0 * w, spec)
-            })
+/// Does the polygon fit one hardboard sheet's usable raster, turned to some whole degree?
+fn fits_board(poly: &[Pt], spec: &MoldSpec) -> bool {
+    let r = raster_pad(spec);
+    let cells = |v: f64| ((v + 2.0 * r) / CELL).ceil() as usize + 1;
+    (0..180).any(|d| {
+        let q: Vec<Pt> = poly.iter().map(|&p| rot(p, d)).collect();
+        let (lo, hi) = bbox(&q);
+        let (cw, ch) = (cells(hi[0] - lo[0]), cells(hi[1] - lo[1]));
+        spec.sheets.iter().any(|&sz| {
+            let (nx, ny) = sheet_cells(sz, spec.gap_in);
+            cw <= nx && ch <= ny
+        })
+    })
+}
+
+/// One length of a flat layer's run: its starboard chain over [c0, c1] and the sanding line
+/// over it.
+struct Cut {
+    label: String,
+    chain: Vec<Pt>,
+    c0: f64,
+    c1: f64,
+    guide: Vec<Vec<Pt>>,
+}
+
+/// The part of a chain over [c0, c1], ends interpolated (or the chain's own ends, square or tip,
+/// when they fall inside).
+fn clip(chain: &[Pt], c0: f64, c1: f64) -> Option<Vec<Pt>> {
+    let (s, e) = (chain[0][0], chain[chain.len() - 1][0]);
+    if e <= c0 + 1e-9 || s >= c1 - 1e-9 {
+        return None;
+    }
+    let mut out: Vec<Pt> = vec![];
+    if c0 <= s + 1e-12 {
+        out.extend(chain.iter().take_while(|p| p[0] <= s + 1e-12));
+    } else {
+        out.push([c0, chain_y(chain, c0)]);
+    }
+    out.extend(chain.iter().filter(|p| p[0] > c0.max(s) + 1e-12 && p[0] < c1.min(e) - 1e-12));
+    if c1 >= e - 1e-12 {
+        out.extend(chain.iter().skip_while(|p| p[0] < e - 1e-12));
+    } else {
+        out.push([c1, chain_y(chain, c1)]);
+    }
+    out.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+    (out.len() >= 2).then_some(out)
+}
+
+/// Half-layer template: a starboard chain closed along the centreline, counter-clockwise.
+fn half_poly(chain: &[Pt]) -> Vec<Pt> {
+    let (c0, c1) = (chain[0][0], chain[chain.len() - 1][0]);
+    let mut p: Vec<Pt> = vec![[c0, 0.0]];
+    p.extend_from_slice(chain);
+    p.push([c1, 0.0]);
+    p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+    if p.len() > 2 && (p[0][0] - p[p.len() - 1][0]).abs() < 1e-9 && (p[0][1] - p[p.len() - 1][1]).abs() < 1e-9
+    {
+        p.pop();
+    }
+    if area(&p) < 0.0 {
+        p.reverse();
+    }
+    p
+}
+
+/// A flat layer's run cut into the fewest equal lengths whose foam pieces fit a foam sheet
+/// (templates) and whose hardboard pieces fit a hardboard sheet (and no longer than `max_len`):
+/// bow to stern, labelled `<tag>-1`, `<tag>-2`, ...
+/// The sheets pieces must fit, for errors.
+fn fit_what(spec: &MoldSpec) -> String {
+    if spec.templates() {
+        format!(
+            "the foam sheets ({} in) and hardboard ({} in)",
+            MoldSpec::sizes(&spec.foam_sheets),
+            MoldSpec::sizes(&spec.sheets)
+        )
+    } else {
+        format!("the hardboard ({} in)", MoldSpec::sizes(&spec.sheets))
+    }
+}
+
+/// Do a cut's foam piece (templates) and hardboard piece fit their sheets?
+fn piece_fits(chain: &[Pt], spec: &MoldSpec) -> bool {
+    let full = mirrored(chain);
+    (!spec.templates() || fits_foam(&full, spec))
+        && fits_board(&if spec.packing == Packing::FewestShapes { half_poly(chain) } else { full }, spec)
+}
+
+/// Block joints (Blocks packing): the fewest equal lengths over all the layers' runs for which
+/// every layer's piece in every block fits.
+fn block_edges(runs: &[&Vec<Pt>], spec: &MoldSpec) -> Result<Vec<f64>> {
+    let x0 = runs.iter().map(|r| r[0][0]).fold(f64::INFINITY, f64::min);
+    let x1 = runs.iter().map(|r| r[r.len() - 1][0]).fold(f64::NEG_INFINITY, f64::max);
+    let edges = |n: usize| -> Vec<f64> {
+        (0..=n).map(|k| if k == n { x1 } else { x0 + (x1 - x0) * k as f64 / n as f64 }).collect()
+    };
+    (1..=200)
+        .map(edges)
+        .find(|e| {
+            runs.iter()
+                .all(|r| e.windows(2).all(|w| clip(r, w[0], w[1]).is_none_or(|c| piece_fits(&c, spec))))
         })
         .with_context(|| {
             format!(
-                "layer {tag} ({:.1} in wide) does not fit a {} x {} in sheet in any number of pieces",
-                2.0 * run.iter().map(|p| p[1]).fold(0.0, f64::max),
-                spec.sheet_length_in,
-                spec.sheet_width_in
+                "the mold ({:.1} in long) does not split into blocks that fit {}",
+                x1 - x0,
+                fit_what(spec)
             )
-        })?;
-    let mut out = vec![];
-    for k in 0..n {
-        let c0 = x0 + span * k as f64 / n as f64;
-        let c1 = if k + 1 == n { x1 } else { x0 + span * (k + 1) as f64 / n as f64 };
-        let mut chain: Vec<Pt> = vec![];
-        if k == 0 {
-            chain.extend(run.iter().take_while(|p| p[0] <= c0 + 1e-12));
-        } else {
-            chain.push([c0, chain_y(run, c0)]);
-        }
-        chain.extend(run.iter().filter(|p| p[0] > c0 + 1e-12 && p[0] < c1 - 1e-12));
-        if k + 1 == n {
-            chain.extend(run.iter().skip_while(|p| p[0] < c1 - 1e-12));
-        } else {
-            chain.push([c1, chain_y(run, c1)]);
-        }
-        chain.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
-        let outline = mirrored(&chain);
-        let label = if n > 1 { format!("{tag}-{}", k + 1) } else { tag.to_string() };
-        let xm = 0.5 * (c0 + c1);
-        let wm = 2.0 * chain_y(&chain, xm);
-        let text_h = (0.3 * wm).clamp(0.2, 1.0);
-        let mut marks = vec![];
-        if c1 - c0 > 2.0 {
-            marks.push([[c0 + 0.5, 0.0], [c1 - 0.5, 0.0]]);
-        }
-        let mut t = (c0 / TICK_IN).floor() * TICK_IN + TICK_IN;
-        while t < c1 - 1e-9 {
-            let hw = (0.5f64).min(0.4 * chain_y(&chain, t));
-            if hw > 0.05 {
-                marks.push([[t, -hw], [t, hw]]);
-            }
-            t += TICK_IN;
-        }
-        out.push(Piece {
-            text: format!("{label} <BOW"),
-            label,
-            layer,
-            area_in2: area(&outline).abs(),
-            outline,
-            marks,
-            text_at: [xm, 0.6 * text_h],
-            text_deg: 0.0,
-            text_h,
-        });
-    }
-    Ok(out)
+        })
 }
 
-/// The rib at x: the inner section there (linear between the neighbouring stations, point by
-/// point, as the export's bulkhead rows), in (y, height above the floor), closed by the floor.
-fn rib(rows: &[NetRow], x: f64, z_top: f64, label: &str, layer: usize) -> Piece {
+/// A run cut at the block joints: one cut per block it reaches, labelled `<tag>-<block>`.
+fn cuts_at(run: &[Pt], guide: &[Vec<Pt>], tag: &str, edges: &[f64]) -> Vec<Cut> {
+    edges
+        .windows(2)
+        .enumerate()
+        .filter_map(|(k, w)| {
+            let chain = clip(run, w[0], w[1])?;
+            // A sliver under a hundredth of an inch is the run just touching the joint.
+            (chain[chain.len() - 1][0] - chain[0][0] > 0.01).then(|| Cut {
+                label: format!("{tag}-{}", k + 1),
+                c0: w[0].max(run[0][0]),
+                c1: w[1].min(run[run.len() - 1][0]),
+                guide: guide.iter().filter_map(|g| clip(g, w[0], w[1])).collect(),
+                chain,
+            })
+        })
+        .collect()
+}
+
+fn split_run(
+    run: &[Pt],
+    guide: &[Vec<Pt>],
+    tag: &str,
+    max_len: Option<f64>,
+    spec: &MoldSpec,
+) -> Result<Vec<Cut>> {
+    let (x0, x1) = (run[0][0], run[run.len() - 1][0]);
+    let span = x1 - x0;
+    let edge = |n: usize, k: usize| if k == n { x1 } else { x0 + span * k as f64 / n as f64 };
+    let n_min = max_len.map_or(1, |m| ((span / m).ceil() as usize).max(1));
+    let n = (n_min..=200)
+        .find(|&n| {
+            (0..n).all(|k| clip(run, edge(n, k), edge(n, k + 1)).is_some_and(|c| piece_fits(&c, spec)))
+        })
+        .with_context(|| {
+            format!(
+                "layer {tag} ({:.1} in wide) does not fit {} in any number of pieces",
+                2.0 * run.iter().map(|p| p[1]).fold(0.0, f64::max),
+                fit_what(spec)
+            )
+        })?;
+    Ok((0..n)
+        .map(|k| {
+            let (c0, c1) = (edge(n, k), edge(n, k + 1));
+            Cut {
+                label: if n > 1 { format!("{tag}-{}", k + 1) } else { tag.to_string() },
+                chain: clip(run, c0, c1).expect("checked above"),
+                c0,
+                c1,
+                guide: guide.iter().filter_map(|g| clip(g, c0, c1)).collect(),
+            }
+        })
+        .collect())
+}
+
+/// Is chain b chain a turned end for end (within SAME_SHAPE_IN)?
+fn mirror_shape(a: &Cut, b: &Cut) -> bool {
+    let (la, lb) = (a.c1 - a.c0, b.c1 - b.c0);
+    if (la - lb).abs() > SAME_SHAPE_IN {
+        return false;
+    }
+    (0..=100).all(|i| {
+        let s = la * i as f64 / 100.0;
+        (chain_y(&a.chain, a.c0 + s) - chain_y(&b.chain, b.c1 - s)).abs() <= SAME_SHAPE_IN
+    })
+}
+
+/// The run's cuts as hardboard pieces: one full-width piece each, or (FewestShapes) a half
+/// template each, shared with the mirror-image cut at the other end when there is one.
+fn flat_pieces(cuts: &[Cut], layer: usize, spec: &MoldSpec, used: &mut Vec<usize>, ps: &mut Vec<Piece>) {
+    let half = spec.packing == Packing::FewestShapes;
+    let mut made: Vec<(usize, usize)> = vec![]; // (cut, piece)
+    for (k, c) in cuts.iter().enumerate() {
+        if half && let Some(&(_, pi)) = made.iter().find(|&&(j, _)| mirror_shape(&cuts[j], c)) {
+            // Turned end for end: the template traces this cut's port side as it is and its
+            // starboard side flipped over.
+            ps[pi].traces.extend([format!("{} P", c.label), format!("{} S (flip)", c.label)]);
+            let n = ps[pi].traces.len();
+            ps[pi].text = format!("{} <BOW x{n}", ps[pi].label);
+            continue;
+        }
+        let traces = if half {
+            vec![format!("{} S", c.label), format!("{} P (flip)", c.label)]
+        } else {
+            vec![c.label.clone()]
+        };
+        made.push((k, ps.len()));
+        used.push(ps.len());
+        ps.push(flat_piece(c, layer, half, traces, spec));
+    }
+}
+
+fn flat_piece(c: &Cut, layer: usize, half: bool, traces: Vec<String>, spec: &MoldSpec) -> Piece {
+    let outline = if half { half_poly(&c.chain) } else { mirrored(&c.chain) };
+    let (c0, c1) = (c.c0, c.c1);
+    let xm = 0.5 * (c0 + c1);
+    let ym = chain_y(&c.chain, xm);
+    let mut marks = vec![];
+    if !half && c1 - c0 > 2.0 {
+        marks.push([[c0 + 0.5, 0.0], [c1 - 0.5, 0.0]]);
+    }
+    let mut t = (c0 / TICK_IN).floor() * TICK_IN + TICK_IN;
+    while t < c1 - 1e-9 {
+        let hw = (0.5f64).min(0.4 * chain_y(&c.chain, t));
+        if hw > 0.05 {
+            marks.push([[t, if half { 0.0 } else { -hw }], [t, hw]]);
+        }
+        t += TICK_IN;
+    }
+    for g in &c.guide {
+        for w in g.windows(2) {
+            marks.push([w[0], w[1]]);
+            if !half {
+                marks.push([[w[0][0], -w[0][1]], [w[1][0], -w[1][1]]]);
+            }
+        }
+    }
+    let (text_h, text_at) = if half {
+        let h = (0.25 * ym).clamp(0.2, 1.0);
+        (h, [xm, (0.45 * ym).max(0.6 * h)])
+    } else {
+        let h = (0.3 * 2.0 * ym).clamp(0.2, 1.0);
+        (h, [xm, 0.6 * h])
+    };
+    let n = traces.len();
+    // Alignment holes at the stations: on the centreline, or 1 in off it on a half template.
+    let mut stations = vec![];
+    let mut t = (c0 / TICK_IN).floor() * TICK_IN + TICK_IN;
+    while t < c1 - 1e-9 {
+        stations.push([t, if half { 1.0 } else { 0.0 }]);
+        t += TICK_IN;
+    }
+    let holes = hole_spots(&outline, &stations, spec);
+    Piece {
+        text: if n > 1 { format!("{} <BOW x{n}", c.label) } else { format!("{} <BOW", c.label) },
+        label: c.label.clone(),
+        layer,
+        area_in2: area(&outline).abs(),
+        holes,
+        outline,
+        marks,
+        text_at,
+        text_deg: 0.0,
+        text_h,
+        traces,
+    }
+}
+
+/// The candidate hole centres that sit well inside the outline: at least the hole radius plus
+/// 3/8 in from its edge. None without `spec.holes`.
+fn hole_spots(outline: &[Pt], candidates: &[Pt], spec: &MoldSpec) -> Vec<Pt> {
+    if !spec.holes {
+        return vec![];
+    }
+    let clear = 0.5 * spec.hole_in + 0.375;
+    candidates
+        .iter()
+        .copied()
+        .filter(|&p| inside_poly(outline, p) && edge_dist(outline, p) >= clear)
+        .collect()
+}
+
+/// Distance from p to the polygon's edge.
+fn edge_dist(poly: &[Pt], p: Pt) -> f64 {
+    let n = poly.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % n]);
+            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+            let ll = dx * dx + dy * dy;
+            let t =
+                if ll > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / ll).clamp(0.0, 1.0) } else { 0.0 };
+            (p[0] - a[0] - t * dx).hypot(p[1] - a[1] - t * dy)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The inner section at x (linear between the neighbouring stations, point by point, as the
+/// export's bulkhead rows), as a half: (y, height above the floor) from the starboard sheer on
+/// the floor to the keel on the centreline.
+fn section(rows: &[NetRow], x: f64, z_top: f64) -> Vec<Pt> {
     let k = rows.partition_point(|r| r.0 < x).clamp(1, rows.len() - 1);
     let (a, b) = (&rows[k - 1], &rows[k]);
     let s = if b.0 - a.0 < 1e-12 { 0.0 } else { ((x - a.0) / (b.0 - a.0)).clamp(0.0, 1.0) };
-    let half: Vec<Pt> =
-        a.1.iter().zip(&b.1).map(|(p, q)| [p.0 + s * (q.0 - p.0), z_top - (p.1 + s * (q.1 - p.1))]).collect();
-    // Starboard sheer (on the floor) -> keel; then the port side back up.
-    let mut outline: Vec<Pt> = half.iter().map(|p| [p[0], p[1]]).collect();
+    a.1.iter().zip(&b.1).map(|(p, q)| [p.0 + s * (q.0 - p.0), z_top - (p.1 + s * (q.1 - p.1))]).collect()
+}
+
+/// A half section closed into the full section (both sides, the floor line), counter-clockwise.
+fn close_section(half: &[Pt]) -> Vec<Pt> {
+    let mut outline: Vec<Pt> = half.to_vec();
     outline.extend(half.iter().rev().filter(|p| p[0] > 1e-9).map(|p| [-p[0], p[1]]));
     outline.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
     if area(&outline) < 0.0 {
         outline.reverse();
     }
+    outline
+}
+
+fn half_area(half: &[Pt]) -> f64 {
+    area(&close_section(half)).abs()
+}
+
+/// An upright layer's hardboard piece: the full section, or (FewestShapes) its starboard half
+/// closed along the centreline, traced on both sides.
+#[allow(clippy::too_many_arguments)]
+fn rib_pieces(
+    half: &[Pt],
+    guide: Option<&[Pt]>,
+    x: f64,
+    label: &str,
+    layer: usize,
+    spec: &MoldSpec,
+    used: &mut Vec<usize>,
+    ps: &mut Vec<Piece>,
+) -> Result<()> {
+    let halved = spec.packing == Packing::FewestShapes;
+    let outline = if halved {
+        let mut p: Vec<Pt> = half.to_vec();
+        p.push([0.0, 0.0]);
+        p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+        if area(&p) < 0.0 {
+            p.reverse();
+        }
+        p
+    } else {
+        close_section(half)
+    };
+    ensure!(
+        fits_board(&outline, spec),
+        "{label} does not fit the hardboard ({} in) with a {} in gap",
+        MoldSpec::sizes(&spec.sheets),
+        spec.gap_in
+    );
     let hk = half.last().map_or(0.0, |p| p[1]);
     let text_h = (0.15 * hk).clamp(0.2, 0.75);
-    let marks = if hk > 1.5 { vec![[[0.0, 0.5], [0.0, hk - 0.5]]] } else { vec![] };
-    Piece {
+    let mut marks = if hk > 1.5 && !halved { vec![[[0.0, 0.5], [0.0, hk - 0.5]]] } else { vec![] };
+    if let Some(g) = guide {
+        for w in g.windows(2) {
+            marks.push([w[0], w[1]]);
+            if !halved {
+                marks.push([[-w[0][0], w[0][1]], [-w[1][0], w[1][1]]]);
+            }
+        }
+    }
+    let traces = if halved {
+        vec![format!("{label} S"), format!("{label} P (flip)")]
+    } else {
+        vec![label.to_string()]
+    };
+    let y_mid = half.iter().map(|p| p[0]).fold(0.0, f64::max);
+    // Alignment holes 1 and 4 in above the floor, on the centreline (half slabs: 1 in off it):
+    // in line from slab to slab.
+    let u = if halved { 1.0 } else { 0.0 };
+    let holes = hole_spots(&outline, &[[u, 1.0], [u, 4.0]], spec);
+    used.push(ps.len());
+    ps.push(Piece {
         label: label.to_string(),
         layer,
+        holes,
         area_in2: area(&outline).abs(),
         outline,
         marks,
-        text: format!("{label} x={x:.2}"),
-        text_at: [0.0, (0.3 * hk).max(0.6 * text_h)],
+        text: if halved { format!("{label} x={x:.2} x2") } else { format!("{label} x={x:.2}") },
+        text_at: if halved {
+            [0.45 * y_mid, (0.3 * hk).max(0.6 * text_h)]
+        } else {
+            [0.0, (0.3 * hk).max(0.6 * text_h)]
+        },
         text_deg: 0.0,
         text_h,
-    }
+        traces,
+    });
+    Ok(())
 }
 
 // ---------- nesting ----------
@@ -547,10 +1334,10 @@ fn raster_pad(spec: &MoldSpec) -> f64 {
     0.5 * spec.gap_in + CELL * std::f64::consts::FRAC_1_SQRT_2
 }
 
-/// Usable sheet raster: the sheet less `gap_in` at every edge.
-fn sheet_cells(spec: &MoldSpec) -> (usize, usize) {
-    let c = |v: f64| ((v - 2.0 * spec.gap_in) / CELL).floor().max(0.0) as usize;
-    (c(spec.sheet_length_in), c(spec.sheet_width_in))
+/// Usable raster of a [length, width] sheet: less `gap` at every edge.
+fn sheet_cells(size: [f64; 2], gap: f64) -> (usize, usize) {
+    let c = |v: f64| ((v - 2.0 * gap) / CELL).floor().max(0.0) as usize;
+    (c(size[0]), c(size[1]))
 }
 
 /// A piece rasterised: cell (i, j) covers origin + [i, i+1] x [j, j+1] cells and is occupied
@@ -559,6 +1346,8 @@ struct Raster {
     w: usize,
     h: usize,
     origin: Pt,
+    /// Occupied cells.
+    cells: usize,
     /// Occupied cells per row, as inclusive [a, b] runs.
     rows: Vec<Vec<(usize, usize)>>,
 }
@@ -623,7 +1412,7 @@ fn raster(poly: &[Pt], r: f64) -> Raster {
     let (occ, w0, w, h) = (occ, w, i1 - i0 + 1, j1 - j0 + 1);
     let occ: Vec<bool> =
         (0..h).flat_map(|j| (0..w).map(move |i| (i, j))).map(|(i, j)| occ[(j + j0) * w0 + i + i0]).collect();
-    let rows = (0..h)
+    let rows: Vec<Vec<(usize, usize)>> = (0..h)
         .map(|j| {
             let mut runs = vec![];
             let mut i = 0;
@@ -641,30 +1430,35 @@ fn raster(poly: &[Pt], r: f64) -> Raster {
             runs
         })
         .collect();
-    Raster { w, h, origin, rows }
+    let cells = rows.iter().flatten().map(|&(a, b): &(usize, usize)| b - a + 1).sum();
+    Raster { w, h, origin, cells, rows }
 }
 
 /// Sheet occupancy as per-row prefix counts (pre[j][i] = occupied cells left of i).
 struct Grid {
     nx: usize,
     ny: usize,
+    /// Free cells left.
+    free_cells: usize,
     pre: Vec<Vec<u32>>,
 }
 
 impl Grid {
     fn new(nx: usize, ny: usize) -> Grid {
-        Grid { nx, ny, pre: vec![vec![0; nx + 1]; ny] }
+        Grid { nx, ny, free_cells: nx * ny, pre: vec![vec![0; nx + 1]; ny] }
     }
     fn free(&self, r: &Raster, x: usize, y: usize) -> bool {
-        r.rows.iter().enumerate().all(|(j, runs)| {
+        let row = |j: usize| {
             let p = &self.pre[y + j];
-            runs.iter().all(|&(a, b)| p[x + b + 1] == p[x + a])
-        })
+            r.rows[j].iter().all(|&(a, b)| p[x + b + 1] == p[x + a])
+        };
+        // Every 8th row first: most collisions show there, so most spots are rejected early.
+        (0..r.h).step_by(8).all(row) && (0..r.h).filter(|j| j % 8 != 0).all(row)
     }
     /// Lowest free spot: least x (along the sheet length), then least y. A tie between quarter
     /// turns goes to the first (0 deg: a long flat-layer piece along the sheet length).
     fn spot(&self, r: &Raster) -> Option<(usize, usize)> {
-        if r.w > self.nx || r.h > self.ny {
+        if r.w > self.nx || r.h > self.ny || r.cells > self.free_cells {
             return None;
         }
         (0..=self.nx - r.w).find_map(|x| (0..=self.ny - r.h).find(|&y| self.free(r, x, y)).map(|y| (x, y)))
@@ -679,57 +1473,133 @@ impl Grid {
             for i in 0..self.nx {
                 p[i + 1] = p[i] + u32::from(occ[i]);
             }
+            self.free_cells = self.free_cells.saturating_sub(runs.iter().map(|&(a, b)| b - a + 1).sum());
         }
     }
 }
 
+/// p turned counter-clockwise by deg about the origin (quarter turns exact).
 fn rot(p: Pt, deg: u32) -> Pt {
-    match deg {
+    match deg % 360 {
+        0 => p,
         90 => [-p[1], p[0]],
         180 => [-p[0], -p[1]],
         270 => [p[1], -p[0]],
-        _ => p,
+        d => {
+            let (s, c) = f64::from(d).to_radians().sin_cos();
+            [c * p[0] - s * p[1], s * p[0] + c * p[1]]
+        }
     }
 }
 
-/// Pack the pieces onto as few sheets as the greedy placement finds (module doc), trying the
-/// pieces largest box first, longest first and widest first; the fewest sheets wins (ties: that
-/// order).
-pub fn nest(pieces: &[Piece], spec: &MoldSpec) -> Result<Vec<Sheet>> {
+/// Pack the pieces onto as few sheets as the greedy placement finds (module doc). Pieces turn
+/// in quarter turns, and, with `step_deg` < 90, also to every multiple of `step_deg`: placed
+/// lowest-spot-first, free angles can tilt a piece into a spot that blocks its neighbours, so
+/// both are packed and the fewer sheets kept (ties: quarter turns). Each is tried with the
+/// pieces largest box first, longest first and widest first (ties: that order). With several
+/// sheet sizes a new sheet is the largest that holds the piece; then each sheet's pieces move to
+/// the smallest size that still holds them all.
+pub fn nest(pieces: &[Piece], spec: &MoldSpec, step_deg: u32) -> Result<Vec<Sheet>> {
     let dims = |p: &Piece| {
         let (lo, hi) = bbox(&p.outline);
         let (a, b) = (hi[0] - lo[0], hi[1] - lo[1]);
         (a.max(b), a.min(b))
     };
     let keys: [fn((f64, f64)) -> f64; 3] = [|(l, w)| l * w, |(l, _)| l, |(_, w)| w];
-    let mut best: Option<Vec<Sheet>> = None;
-    for key in keys {
-        let mut order: Vec<usize> = (0..pieces.len()).collect();
-        order.sort_by(|&a, &b| key(dims(&pieces[b])).total_cmp(&key(dims(&pieces[a]))).then(a.cmp(&b)));
-        let s = nest_order(pieces, &order, spec)?;
-        if best.as_ref().is_none_or(|b| s.len() < b.len()) {
-            best = Some(s);
+    let steps: Vec<u32> = if step_deg.clamp(1, 90) < 90 { vec![90, step_deg.max(1)] } else { vec![90] };
+    let r = raster_pad(spec);
+    let runs: Vec<(usize, usize, Result<Vec<Sheet>>)> = steps
+        .par_iter()
+        .enumerate()
+        .flat_map(|(si, &step)| {
+            // Every piece at every angle, rasterised once for all orders.
+            let turned: Vec<Vec<Turned>> = pieces
+                .par_iter()
+                .map(|p| {
+                    (0..360)
+                        .step_by(step as usize)
+                        .map(|d| {
+                            let q: Vec<Pt> = p.outline.iter().map(|&v| rot(v, d)).collect();
+                            let ras = raster(&q, r);
+                            (d, q, ras)
+                        })
+                        .collect()
+                })
+                .collect();
+            keys.par_iter()
+                .enumerate()
+                .map(|(ki, key)| {
+                    let mut order: Vec<usize> = (0..pieces.len()).collect();
+                    order.sort_by(|&a, &b| {
+                        key(dims(&pieces[b])).total_cmp(&key(dims(&pieces[a]))).then(a.cmp(&b))
+                    });
+                    let sizes = spec.sheets_by_size();
+                    let packed = nest_order(pieces, &turned, &order, spec, &sizes).map(|sheets| {
+                        // Smallest size that takes each sheet's pieces on one sheet.
+                        sheets
+                            .into_iter()
+                            .map(|sh| {
+                                let mine: Vec<usize> = sh.parts.iter().map(|p| p.piece).collect();
+                                sizes
+                                    .iter()
+                                    .rev()
+                                    .filter(|z| z[0] * z[1] < sh.length_in * sh.width_in - 1e-9)
+                                    .find_map(|&z| {
+                                        nest_order(pieces, &turned, &mine, spec, &[z])
+                                            .ok()
+                                            .filter(|v| v.len() == 1)
+                                    })
+                                    .map_or(sh, |mut v| v.remove(0))
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    (si, ki, packed)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // Err only when every packing fails (a piece may fit only when turned off the square).
+    let (mut best, mut err): (Option<Vec<Sheet>>, Option<anyhow::Error>) = (None, None);
+    for (_, _, s) in runs {
+        let area = |v: &Vec<Sheet>| v.iter().map(|s| s.length_in * s.width_in).sum::<f64>();
+        match s {
+            Ok(s)
+                if best.as_ref().is_none_or(|b| {
+                    s.len() < b.len() || (s.len() == b.len() && area(&s) < area(b) - 1e-9)
+                }) =>
+            {
+                best = Some(s)
+            }
+            Ok(_) => {}
+            Err(e) => {
+                err.get_or_insert(e);
+            }
         }
     }
-    Ok(best.unwrap_or_default())
+    match (best, err) {
+        (Some(b), _) => Ok(b),
+        (None, Some(e)) => Err(e),
+        (None, None) => Ok(vec![]),
+    }
 }
 
-fn nest_order(pieces: &[Piece], order: &[usize], spec: &MoldSpec) -> Result<Vec<Sheet>> {
-    let r = raster_pad(spec);
-    let (nx, ny) = sheet_cells(spec);
+/// A piece turned by an angle: (deg, outline, raster).
+type Turned = (u32, Vec<Pt>, Raster);
+
+/// Pack `order` lowest-spot-first; a new sheet is the first of `sizes` that holds the piece.
+fn nest_order(
+    pieces: &[Piece],
+    turned: &[Vec<Turned>],
+    order: &[usize],
+    spec: &MoldSpec,
+    sizes: &[[f64; 2]],
+) -> Result<Vec<Sheet>> {
     let m = spec.gap_in;
     let mut grids: Vec<Grid> = vec![];
     let mut sheets: Vec<Sheet> = vec![];
     for &pi in order {
         let p = &pieces[pi];
-        let rasters: Vec<(u32, Vec<Pt>, Raster)> = [0, 90, 180, 270]
-            .into_iter()
-            .map(|d| {
-                let q: Vec<Pt> = p.outline.iter().map(|&v| rot(v, d)).collect();
-                let ras = raster(&q, r);
-                (d, q, ras)
-            })
-            .collect();
+        let rasters = &turned[pi];
         let best = |g: &Grid| {
             rasters
                 .iter()
@@ -739,23 +1609,31 @@ fn nest_order(pieces: &[Piece], order: &[usize], spec: &MoldSpec) -> Result<Vec<
         };
         let mut hit = grids.iter().enumerate().find_map(|(s, g)| best(g).map(|b| (s, b)));
         if hit.is_none() {
-            grids.push(Grid::new(nx, ny));
-            sheets.push(Sheet { parts: vec![], used_in2: 0.0 });
-            let s = grids.len() - 1;
-            match best(&grids[s]) {
-                Some(b) => hit = Some((s, b)),
-                None => bail!(
-                    "piece {} does not fit a {} x {} in sheet with a {} in gap",
+            let Some((z, g, b)) = sizes.iter().find_map(|&z| {
+                let (nx, ny) = sheet_cells(z, m);
+                let g = Grid::new(nx, ny);
+                best(&g).map(|b| (z, g, b))
+            }) else {
+                bail!(
+                    "piece {} does not fit the hardboard ({} in) with a {} in gap",
                     p.label,
-                    spec.sheet_length_in,
-                    spec.sheet_width_in,
+                    MoldSpec::sizes(sizes),
                     spec.gap_in
-                ),
-            }
+                );
+            };
+            grids.push(g);
+            sheets.push(Sheet { length_in: z[0], width_in: z[1], parts: vec![], used_in2: 0.0 });
+            hit = Some((grids.len() - 1, b));
         }
         let (s, (_, k, x, y)) = hit.unwrap();
         let (d, q, ras) = &rasters[k];
-        grids[s].fill(ras, x, y);
+        // Nested: only a ring along the edge (and the gap outside it) is taken; the middle stays
+        // free for smaller pieces.
+        if spec.nest_inside {
+            grids[s].fill(&ring_raster(q, raster_pad(spec), spec.ring_in, ras), x, y);
+        } else {
+            grids[s].fill(ras, x, y);
+        }
         let shift = [m + x as f64 * CELL - ras.origin[0], m + y as f64 * CELL - ras.origin[1]];
         let mv = |v: Pt| {
             let w = rot(v, *d);
@@ -764,15 +1642,136 @@ fn nest_order(pieces: &[Piece], order: &[usize], spec: &MoldSpec) -> Result<Vec<
         sheets[s].used_in2 += p.area_in2;
         sheets[s].parts.push(Placed {
             piece: pi,
+            inside: None,
             rot_deg: *d,
             shift,
             outline: q.iter().map(|v| [v[0] + shift[0], v[1] + shift[1]]).collect(),
             marks: p.marks.iter().map(|[a, b]| [mv(*a), mv(*b)]).collect(),
+            holes: p.holes.iter().map(|h| mv(*h)).collect(),
             text_at: mv(p.text_at),
             text_deg: (p.text_deg + f64::from(*d)) % 360.0,
         });
     }
+    if spec.nest_inside {
+        for sh in &mut sheets {
+            hosts(sh, pieces, spec.ring_in);
+        }
+    }
     Ok(sheets)
+}
+
+/// Even-odd point in polygon.
+fn inside_poly(poly: &[Pt], p: Pt) -> bool {
+    let n = poly.len();
+    let mut c = false;
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// Nested parts: which part each is cut out of (the smallest that contains it), the host's
+/// marks over its children dropped and its label moved onto the ring if it falls on one.
+fn hosts(sh: &mut Sheet, pieces: &[Piece], ring: f64) {
+    let n = sh.parts.len();
+    for i in 0..n {
+        let probe = sh.parts[i].outline[0];
+        sh.parts[i].inside =
+            (0..n).filter(|&j| j != i && inside_poly(&sh.parts[j].outline, probe)).min_by(|&a, &b| {
+                pieces[sh.parts[a].piece].area_in2.total_cmp(&pieces[sh.parts[b].piece].area_in2)
+            });
+    }
+    for h in 0..n {
+        let kids: Vec<Vec<Pt>> =
+            (0..n).filter(|&i| sh.parts[i].inside == Some(h)).map(|i| sh.parts[i].outline.clone()).collect();
+        if kids.is_empty() {
+            continue;
+        }
+        let on_kid = |p: Pt| kids.iter().any(|k| inside_poly(k, p));
+        let part = &mut sh.parts[h];
+        part.marks.retain(|[a, b]| {
+            !on_kid([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]) && !on_kid(*a) && !on_kid(*b)
+        });
+        part.holes.retain(|h| !on_kid(*h));
+        if on_kid(part.text_at) {
+            // Half a ring in from the outline, at the first vertex where that is clear of the kids.
+            let o = &part.outline;
+            let c = o.iter().fold([0.0, 0.0], |s, p| [s[0] + p[0], s[1] + p[1]]);
+            let c = [c[0] / o.len() as f64, c[1] / o.len() as f64];
+            let clear = o
+                .iter()
+                .map(|v| {
+                    let (dx, dy) = (c[0] - v[0], c[1] - v[1]);
+                    let l = dx.hypot(dy).max(1e-9);
+                    [v[0] + 0.5 * ring * dx / l, v[1] + 0.5 * ring * dy / l]
+                })
+                .find(|&p| !on_kid(p));
+            if let Some(at) = clear {
+                part.text_at = at;
+            }
+        }
+    }
+}
+
+/// The cells a nested piece takes: those of its raster `like` that lie outside it or within
+/// `ring` + `r` of its edge (same origin and size as `like`).
+fn ring_raster(poly: &[Pt], r: f64, ring: f64, like: &Raster) -> Raster {
+    let (w, h, origin) = (like.w, like.h, like.origin);
+    let mut occ = vec![false; w * h];
+    for (j, runs) in like.rows.iter().enumerate() {
+        for &(a, b) in runs {
+            occ[j * w + a..=j * w + b].iter_mut().for_each(|c| *c = true);
+        }
+    }
+    let cx = |i: usize| origin[0] + (i as f64 + 0.5) * CELL;
+    let cy = |j: usize| origin[1] + (j as f64 + 0.5) * CELL;
+    // Outside the piece: kept (the gap around it).
+    let mut keep: Vec<bool> = (0..w * h).map(|k| !inside_poly(poly, [cx(k % w), cy(k / w)])).collect();
+    // Within ring + r of the edge: kept.
+    let reach = ring + r;
+    let cell = |v: f64, o: f64| ((v - o) / CELL).floor();
+    let n = poly.len();
+    for e in 0..n {
+        let (a, b) = (poly[e], poly[(e + 1) % n]);
+        let i0 = cell(a[0].min(b[0]) - reach, origin[0]).max(0.0) as usize;
+        let i1 = (cell(a[0].max(b[0]) + reach, origin[0]).max(0.0) as usize).min(w - 1);
+        let j0 = cell(a[1].min(b[1]) - reach, origin[1]).max(0.0) as usize;
+        let j1 = (cell(a[1].max(b[1]) + reach, origin[1]).max(0.0) as usize).min(h - 1);
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let ll = dx * dx + dy * dy;
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let (px, py) = (cx(i) - a[0], cy(j) - a[1]);
+                let t = if ll > 0.0 { ((px * dx + py * dy) / ll).clamp(0.0, 1.0) } else { 0.0 };
+                if (px - t * dx).hypot(py - t * dy) <= reach {
+                    keep[j * w + i] = true;
+                }
+            }
+        }
+    }
+    let rows: Vec<Vec<(usize, usize)>> = (0..h)
+        .map(|j| {
+            let mut runs = vec![];
+            let mut i = 0;
+            while i < w {
+                if occ[j * w + i] && keep[j * w + i] {
+                    let s = i;
+                    while i < w && occ[j * w + i] && keep[j * w + i] {
+                        i += 1;
+                    }
+                    runs.push((s, i - 1));
+                } else {
+                    i += 1;
+                }
+            }
+            runs
+        })
+        .collect();
+    let cells = rows.iter().flatten().map(|&(a, b)| b - a + 1).sum();
+    Raster { w, h, origin, cells, rows }
 }
 
 // ---------- DXF ----------
@@ -804,8 +1803,8 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
     g(10, "0.0");
     g(20, "0.0");
     g(9, "$EXTMAX");
-    g(10, &dxf_num(l.spec.sheet_length_in));
-    g(20, &dxf_num(l.spec.sheet_width_in));
+    g(10, &dxf_num(sheet.length_in));
+    g(20, &dxf_num(sheet.width_in));
     g(0, "ENDSEC");
     g(0, "SECTION");
     g(2, "TABLES");
@@ -852,10 +1851,27 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
         g(0, "SEQEND");
         g(8, layer);
     };
-    let (sl, sw) = (l.spec.sheet_length_in, l.spec.sheet_width_in);
-    poly(&mut g, "SHEET", &[[0.0, 0.0], [sl, 0.0], [sl, sw], [0.0, sw]]);
-    for part in &sheet.parts {
-        poly(&mut g, "CUT", &part.outline);
+    let (sl, sw) = (sheet.length_in, sheet.width_in);
+    let marks = l.spec.dxf_marks;
+    if marks {
+        poly(&mut g, "SHEET", &[[0.0, 0.0], [sl, 0.0], [sl, sw], [0.0, sw]]);
+    }
+    // Each piece: its holes, then its outline from its sharpest corner, with the cut width
+    // allowed for ([`cut_order`]).
+    let half_kerf = 0.5 * l.spec.kerf_in;
+    for i in cut_order(sheet) {
+        let part = &sheet.parts[i];
+        for h in &part.holes {
+            g(0, "CIRCLE");
+            g(8, "CUT");
+            g(10, &dxf_num(h[0]));
+            g(20, &dxf_num(h[1]));
+            g(30, "0.0");
+            g(40, &dxf_num(0.5 * l.spec.hole_in - half_kerf));
+        }
+        let outline =
+            if half_kerf > 0.0 { offset_out(&part.outline, half_kerf) } else { part.outline.clone() };
+        poly(&mut g, "CUT", &from_corner(&outline));
     }
     let text = |g: &mut dyn FnMut(i32, &str), at: Pt, h: f64, deg: f64, s: &str| {
         g(0, "TEXT");
@@ -872,7 +1888,7 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
         g(21, &dxf_num(at[1]));
         g(31, "0.0");
     };
-    for part in &sheet.parts {
+    for part in sheet.parts.iter().filter(|_| marks) {
         let p = &l.pieces[part.piece];
         for [a, b] in &part.marks {
             g(0, "LINE");
@@ -899,10 +1915,89 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
         sl,
         sw
     );
-    text(&mut g, [0.5 * sl, -1.0], 0.5, 0.0, &title);
+    if marks {
+        text(&mut g, [0.5 * sl, -1.0], 0.5, 0.0, &title);
+    }
     g(0, "ENDSEC");
     g(0, "EOF");
     Ok(o)
+}
+
+/// The order the water jet cuts a sheet's parts: pieces cut out of others first (deepest first,
+/// so a host is cut free after its middle), and within that nearest first from the sheet corner
+/// (each from where the last one started).
+pub fn cut_order(sheet: &Sheet) -> Vec<usize> {
+    let parts = &sheet.parts;
+    let depth = |mut i: usize| {
+        let mut d = 0;
+        while let Some(h) = parts[i].inside {
+            d += 1;
+            i = h;
+        }
+        d
+    };
+    let start = |i: usize| from_corner(&parts[i].outline)[0];
+    let mut left: Vec<usize> = (0..parts.len()).collect();
+    let (mut out, mut at) = (vec![], [0.0, 0.0]);
+    while !left.is_empty() {
+        let deepest = left.iter().map(|&i| depth(i)).max().unwrap();
+        let k = left
+            .iter()
+            .enumerate()
+            .filter(|&(_, &i)| depth(i) == deepest)
+            .min_by(|a, b| {
+                let d = |i: usize| (start(i)[0] - at[0]).hypot(start(i)[1] - at[1]);
+                d(*a.1).total_cmp(&d(*b.1)).then(a.1.cmp(b.1))
+            })
+            .map(|(k, _)| k)
+            .unwrap();
+        let i = left.remove(k);
+        at = start(i);
+        out.push(i);
+    }
+    out
+}
+
+/// The outline starting at its sharpest corner (a square joint end, a tip): the water jet's
+/// lead-in then marks a corner, not a traced curve.
+fn from_corner(o: &[Pt]) -> Vec<Pt> {
+    let n = o.len();
+    let turn = |i: usize| {
+        let (a, b, c) = (o[(i + n - 1) % n], o[i], o[(i + 1) % n]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        let (lu, lv) = (u[0].hypot(u[1]), v[0].hypot(v[1]));
+        if lu < 1e-12 || lv < 1e-12 {
+            return 0.0;
+        }
+        ((u[0] * v[0] + u[1] * v[1]) / (lu * lv)).clamp(-1.0, 1.0).acos()
+    };
+    let k = (0..n).max_by(|&a, &b| turn(a).total_cmp(&turn(b)).then(b.cmp(&a))).unwrap_or(0);
+    o[k..].iter().chain(&o[..k]).copied().collect()
+}
+
+/// A counter-clockwise outline moved out by d (mitred, the mitre capped at 2 d).
+fn offset_out(o: &[Pt], d: f64) -> Vec<Pt> {
+    let n = o.len();
+    let normal = |a: Pt, b: Pt| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let l = dx.hypot(dy).max(1e-12);
+        [dy / l, -dx / l]
+    };
+    let sign = if area(o) >= 0.0 { 1.0 } else { -1.0 };
+    (0..n)
+        .map(|i| {
+            let (a, b, c) = (o[(i + n - 1) % n], o[i], o[(i + 1) % n]);
+            let (n1, n2) = (normal(a, b), normal(b, c));
+            let (sx, sy) = (n1[0] + n2[0], n1[1] + n2[1]);
+            let l = sx.hypot(sy);
+            if l < 1e-9 {
+                return [b[0] + sign * d * n1[0], b[1] + sign * d * n1[1]];
+            }
+            let (ux, uy) = (sx / l, sy / l);
+            let m = (d / (ux * n1[0] + uy * n1[1]).max(0.5)).min(2.0 * d);
+            [b[0] + sign * m * ux, b[1] + sign * m * uy]
+        })
+        .collect()
 }
 
 /// File name for sheet k: `<hull>_sheet_01.dxf`.
@@ -948,8 +2043,7 @@ mod tests {
 
     #[test]
     fn nest_keeps_gap_and_stays_on_sheet() {
-        let spec =
-            MoldSpec { sheet_length_in: 40.0, sheet_width_in: 20.0, gap_in: 0.25, ..MoldSpec::default() };
+        let spec = MoldSpec { sheets: vec![[40.0, 20.0]], gap_in: 0.25, ..MoldSpec::default() };
         let pieces: Vec<Piece> = (0..10)
             .map(|k| Piece {
                 label: format!("P{k}"),
@@ -961,9 +2055,11 @@ mod tests {
                 text_deg: 0.0,
                 text_h: 0.5,
                 area_in2: 60.0,
+                traces: vec![],
+                holes: vec![],
             })
             .collect();
-        let sheets = nest(&pieces, &spec).unwrap();
+        let sheets = nest(&pieces, &spec, 90).unwrap();
         // 3 x 3 fit a 40 x 20 in sheet (36.5 x 15.5 in with the gaps); the tenth needs a second.
         assert_eq!(sheets.len(), 2);
         assert_eq!(sheets[0].parts.len(), 9);
@@ -990,8 +2086,34 @@ mod tests {
     }
 
     #[test]
+    fn a_bar_longer_than_the_sheet_fits_on_the_diagonal() {
+        let spec = MoldSpec { sheets: vec![[48.0, 48.0]], ..MoldSpec::default() };
+        let bar = Piece {
+            label: "bar".into(),
+            layer: 0,
+            outline: rect(55.0, 3.0),
+            marks: vec![],
+            text: String::new(),
+            text_at: [27.5, 1.5],
+            text_deg: 0.0,
+            text_h: 0.5,
+            area_in2: 165.0,
+            traces: vec![],
+            holes: vec![],
+        };
+        assert!(nest(std::slice::from_ref(&bar), &spec, 90).is_err(), "too long square to the edges");
+        let sh = nest(&[bar], &spec, 5).unwrap();
+        let p = &sh[0].parts[0];
+        assert!(!p.rot_deg.is_multiple_of(90), "turned to {} deg", p.rot_deg);
+        let (lo, hi) = bbox(&p.outline);
+        assert!(
+            lo[0] >= 0.25 - 1e-9 && lo[1] >= 0.25 - 1e-9 && hi[0] <= 47.75 + 1e-9 && hi[1] <= 47.75 + 1e-9
+        );
+    }
+
+    #[test]
     fn too_big_piece_errs() {
-        let spec = MoldSpec { sheet_length_in: 20.0, sheet_width_in: 10.0, ..MoldSpec::default() };
+        let spec = MoldSpec { sheets: vec![[20.0, 10.0]], ..MoldSpec::default() };
         let p = Piece {
             label: "big".into(),
             layer: 0,
@@ -1002,27 +2124,363 @@ mod tests {
             text_deg: 0.0,
             text_h: 0.5,
             area_in2: 900.0,
+            traces: vec![],
+            holes: vec![],
         };
-        assert!(nest(&[p], &spec).unwrap_err().to_string().contains("does not fit"));
+        assert!(nest(&[p], &spec, 5).unwrap_err().to_string().contains("does not fit"));
+    }
+
+    /// Largest change of direction between consecutive segments, deg.
+    fn max_turn(c: &[Pt]) -> f64 {
+        c.windows(3)
+            .map(|w| {
+                let a = (w[1][1] - w[0][1]).atan2(w[1][0] - w[0][0]);
+                let b = (w[2][1] - w[1][1]).atan2(w[2][0] - w[1][0]);
+                (b - a).abs().to_degrees()
+            })
+            .fold(0.0, f64::max)
     }
 
     #[test]
-    fn split_run_makes_pieces_that_fit() {
-        // A 200 in lens, 24 in wide, onto 96 x 48 in sheets: 3 pieces of 66.7 in.
-        let run: Vec<Pt> = (0..=100)
+    fn smoothing_removes_station_kinks_and_rounds_the_tip() {
+        // A loft-like waterline: linear between table stations (every 2 in) of a sqrt nose, with
+        // rows every 0.5 in, starting at a centreline tip at x = 0 and ending square at x = 20.
+        let table: Vec<f64> = (1..=10).map(|k| 2.0 * k as f64).collect();
+        let g = |x: f64| 3.0 * x.sqrt();
+        let mut run: Vec<Pt> = vec![[0.0, 0.0]];
+        for i in 1..=40 {
+            let x = 0.5 * i as f64;
+            let k = ((x / 2.0).ceil() * 2.0).max(2.0);
+            let (xa, xb) = (k - 2.0, k);
+            run.push([x, g(xa) + (x - xa) / 2.0 * (g(xb) - g(xa))]);
+        }
+        run.push([20.0, 0.0]);
+        let sm = smooth_run(&run, &table);
+        // Station values and both ends kept.
+        for &x in &table[..9] {
+            assert!((chain_y(&sm, x) - g(x)).abs() < 1e-9, "station {x}");
+        }
+        assert_eq!(sm[0], [0.0, 0.0]);
+        assert_eq!(sm[sm.len() - 1], [20.0, 0.0]);
+        assert!(sm[sm.len() - 2][0] == 20.0, "square end kept");
+        // Kinks gone: the smoothed chain (less its square end) turns far less per step.
+        let inner = &sm[1..sm.len() - 1];
+        assert!(
+            max_turn(inner) < 0.5 * max_turn(&run[2..run.len() - 1]),
+            "{} vs {}",
+            max_turn(inner),
+            max_turn(&run[2..run.len() - 1])
+        );
+        // Pointed nose: the curve leaves the tip heading for the first station (no bulb).
+        let (a, b) = (sm[0], sm[1]);
+        let chord = g(2.0).atan2(2.0).to_degrees();
+        assert!(((b[1] - a[1]).atan2(b[0] - a[0]).to_degrees() - chord).abs() < 15.0);
+        // x never runs backwards.
+        assert!(sm.windows(2).all(|w| w[1][0] >= w[0][0]));
+    }
+
+    /// A 200 in lens, 24 in wide (symmetric fore and aft).
+    fn lens() -> Vec<Pt> {
+        (0..=100)
             .map(|i| {
                 let x = 2.0 * i as f64;
                 [x, 12.0 * (1.0 - ((x - 100.0) / 100.0).powi(2))]
             })
-            .collect();
-        let ps = split_run(&run, "L1", 0, None, &MoldSpec::default()).unwrap();
+            .collect()
+    }
+
+    #[test]
+    fn split_run_makes_pieces_that_fit_the_foam_and_the_hardboard() {
+        // 96 in foam sheets: 3 foam pieces of 66.7 in, one template each.
+        let spec = MoldSpec::default();
+        let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
+        assert_eq!(cuts.len(), 3);
+        assert_eq!(cuts[1].label, "L1-2");
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
         assert_eq!(ps.len(), 3);
-        assert_eq!(ps[1].label, "L1-2");
         let total: f64 = ps.iter().map(|p| p.area_in2).sum();
         let exact = 2.0 * 12.0 * 200.0 * 2.0 / 3.0;
         assert!((total - exact).abs() / exact < 0.01, "{total} vs {exact}");
         for p in &ps {
             assert!(area(&p.outline) > 0.0, "counter-clockwise");
+            assert_eq!(p.traces, vec![p.label.clone()]);
         }
+        // Shorter foam sheets: more, shorter foam pieces.
+        let short = MoldSpec { foam_sheets: vec![[45.0, 48.0]], ..spec };
+        assert_eq!(split_run(&lens(), &[], "L1", None, &short).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn fewest_shapes_halves_and_shares_mirror_image_ends() {
+        let spec = MoldSpec { packing: Packing::FewestShapes, ..MoldSpec::default() };
+        let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        // Bow and stern thirds are one template (four traces), the middle its own (two).
+        assert_eq!(ps.len(), 2);
+        assert_eq!(ps[0].traces, ["L1-1 S", "L1-1 P (flip)", "L1-3 P", "L1-3 S (flip)"]);
+        assert_eq!(ps[1].traces, ["L1-2 S", "L1-2 P (flip)"]);
+        assert!(ps[0].text.ends_with("x4"));
+        // Half templates: on the starboard side of the centreline, half the full area.
+        let (lo, _) = bbox(&ps[1].outline);
+        assert!(lo[1].abs() < 1e-9);
+        let full = area(&mirrored(&cuts[1].chain));
+        assert!((2.0 * ps[1].area_in2 - full).abs() < 1e-6 * full);
+        // A lopsided run shares nothing.
+        let skew: Vec<Pt> = lens().iter().map(|p| [p[0], p[1] * (1.0 + p[0] / 400.0)]).collect();
+        let cuts = split_run(&skew, &[], "L2", None, &spec).unwrap();
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        assert_eq!(ps.len(), 3);
+    }
+
+    #[test]
+    fn envelope_takes_the_wider_outline_everywhere() {
+        // Two lenses crossing: one longer, one wider in the middle.
+        let a: Vec<Pt> = vec![[0.0, 0.0], [5.0, 3.0], [10.0, 0.0]];
+        let b: Vec<Pt> = vec![[2.0, 0.0], [5.0, 4.0], [8.0, 0.0]];
+        let e = envelope(std::slice::from_ref(&a), std::slice::from_ref(&b));
+        assert_eq!(e.len(), 1);
+        for x in [1.0, 3.0, 5.0, 7.0, 9.0] {
+            let want = chain_y(&a, x).max(if (2.0..=8.0).contains(&x) { chain_y(&b, x) } else { 0.0 });
+            assert!(chain_y(&e[0], x) >= want - 1e-9, "x = {x}");
+        }
+        assert_eq!((e[0][0][0], e[0][e[0].len() - 1][0]), (0.0, 10.0));
+    }
+
+    #[test]
+    fn foam_order_mixes_thicknesses_to_fit() {
+        // 7 in from 1.5 and 2 in foam: exactly, in 4 layers, thick on the floor.
+        assert_eq!(foam_order(&[1.5, 2.0], 0.0, 7.0, true), [2.0, 2.0, 1.5, 1.5]);
+        // One thickness: enough layers to cover, the least over.
+        assert_eq!(foam_order(&[2.0], 0.0, 13.12, true), [2.0; 7]);
+        // Least over first (13.5 in), then fewest layers (6 x 2 + 1.5, not 3 x 2 + 5 x 1.5).
+        assert_eq!(foam_order(&[1.5, 2.0], 0.0, 13.12, true), [2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 1.5]);
+        // Boards in the mold count toward the stack.
+        assert_eq!(foam_order(&[2.0], 0.125, 6.3, true), [2.0; 3]);
+        // Upright: the thin slabs go to the two ends.
+        let o = foam_order(&[1.5, 2.0], 0.0, 11.0, false);
+        assert_eq!(o.iter().sum::<f64>(), 11.0);
+        assert_eq!((o[0], o[o.len() - 1]), (1.5, 1.5), "{o:?}");
+    }
+
+    #[test]
+    fn small_last_sheet_moves_to_a_smaller_size() {
+        // Ten 12 x 5 in pieces: nine fill a 40 x 20 in sheet, the tenth goes on a 20 x 10.
+        let spec = MoldSpec { sheets: vec![[20.0, 10.0], [40.0, 20.0]], gap_in: 0.25, ..MoldSpec::default() };
+        let pieces: Vec<Piece> = (0..10)
+            .map(|k| Piece {
+                label: format!("P{k}"),
+                layer: 0,
+                outline: rect(12.0, 5.0),
+                marks: vec![],
+                text: String::new(),
+                text_at: [6.0, 2.5],
+                text_deg: 0.0,
+                text_h: 0.5,
+                area_in2: 60.0,
+                traces: vec![],
+                holes: vec![],
+            })
+            .collect();
+        let sheets = nest(&pieces, &spec, 90).unwrap();
+        assert_eq!(sheets.len(), 2);
+        assert_eq!((sheets[0].length_in, sheets[0].width_in), (40.0, 20.0));
+        assert_eq!((sheets[1].length_in, sheets[1].width_in), (20.0, 10.0));
+        for p in &sheets[1].parts {
+            let (_, hi) = bbox(&p.outline);
+            assert!(hi[0] <= 19.75 + 1e-9 && hi[1] <= 9.75 + 1e-9);
+        }
+    }
+
+    #[test]
+    fn foam_in_reads_one_number_or_a_list() {
+        let one: MoldSpec = serde_json::from_str(r#"{"foam_in": 1.5}"#).unwrap();
+        assert_eq!(one.foam_in, [1.5]);
+        let many: MoldSpec =
+            serde_json::from_str(r#"{"foam_in": [1.5, 2], "sheets": [[96, 48], [48, 48]]}"#).unwrap();
+        assert_eq!(many.foam_in, [1.5, 2.0]);
+        assert_eq!(many.sheets.len(), 2);
+        assert!(
+            serde_json::from_str::<MoldSpec>(r#"{"sheet_length_in": 96}"#).is_err(),
+            "old field names refused"
+        );
+    }
+
+    fn plain(outline: Vec<Pt>, label: &str) -> Piece {
+        Piece {
+            label: label.into(),
+            layer: 0,
+            area_in2: area(&outline).abs(),
+            text_at: [1.0, 1.0],
+            marks: vec![[[1.0, 1.0], [2.0, 1.0]]],
+            outline,
+            text: label.into(),
+            text_deg: 0.0,
+            text_h: 0.5,
+            traces: vec![label.into()],
+            holes: vec![],
+        }
+    }
+
+    #[test]
+    fn nest_inside_cuts_a_small_piece_from_a_big_one_and_cuts_it_first() {
+        // A 44 x 20 in template and a 10 x 5 in one on a 48 x 24 in sheet: side by side they
+        // need two sheets; nested, the small one comes out of the big one's middle.
+        let ps = vec![plain(rect(44.0, 20.0), "big"), plain(rect(10.0, 5.0), "small")];
+        let flat = MoldSpec { sheets: vec![[48.0, 24.0]], ..MoldSpec::default() };
+        assert_eq!(nest(&ps, &flat, 90).unwrap().len(), 2);
+        let spec = MoldSpec { nest_inside: true, ring_in: 1.0, ..flat };
+        let sh = nest(&ps, &spec, 90).unwrap();
+        assert_eq!(sh.len(), 1);
+        let (big, small) = (&sh[0].parts[0], &sh[0].parts[1]);
+        assert_eq!((big.piece, big.inside, small.inside), (0, None, Some(0)));
+        // The ring is at least ring_in wide all round.
+        let ((bl, bh), (sl, shi)) = (bbox(&big.outline), bbox(&small.outline));
+        for d in [sl[0] - bl[0], sl[1] - bl[1], bh[0] - shi[0], bh[1] - shi[1]] {
+            assert!(d >= 1.0 - 1e-9, "ring {d}");
+        }
+        // The DXF cuts the small piece before the big one.
+        let (bx, sx) = (big.outline[0][0], small.outline[0][0]);
+        let l = Layout {
+            format: MOLD_FORMAT.into(),
+            hull: "t".into(),
+            spec,
+            stack: Stack {
+                layers: 1,
+                foam_layers: 1,
+                foam_pieces: 2,
+                joints_in: vec![],
+                foam_order_in: vec![2.0],
+                over_in: 0.0,
+                height_in: 2.0,
+                length_in: 40.0,
+                beam_in: 20.0,
+                depth_in: 2.0,
+                wall_in: 0.0,
+            },
+            layers: vec![],
+            pieces: ps,
+            utilization: 0.0,
+            sheets: sh,
+        };
+        let dxf = to_dxf(&l, 0).unwrap();
+        let first = |x: f64| dxf.find(&format!("CUT\n10\n{}\n", dxf_num(x))).unwrap();
+        assert!(first(sx) < first(bx), "inner piece cut first");
+    }
+
+    #[test]
+    fn a_host_loses_marks_over_its_children_and_its_label_moves_to_the_ring() {
+        let ps = vec![plain(rect(40.0, 20.0), "big"), plain(rect(10.0, 5.0), "small")];
+        let spec =
+            MoldSpec { sheets: vec![[48.0, 24.0]], nest_inside: true, ring_in: 1.0, ..MoldSpec::default() };
+        let mut ps = ps;
+        // The big piece's label and a mark sit right where the small piece will go.
+        ps[0].text_at = [4.0, 3.0];
+        ps[0].marks = vec![[[3.5, 3.0], [4.5, 3.0]], [[39.0, 19.0], [39.5, 19.0]]];
+        let sh = nest(&ps, &spec, 90).unwrap();
+        let (big, small) = (&sh[0].parts[0], &sh[0].parts[1]);
+        assert_eq!(big.marks.len(), 1, "the mark over the child is gone");
+        assert!(!inside_poly(&small.outline, big.text_at), "label moved off the child");
+        assert!(inside_poly(&big.outline, big.text_at), "label still on the host");
+    }
+
+    #[test]
+    fn outlines_start_at_their_sharpest_corner_and_offset_outward() {
+        // A lens closed by a square end: the start is one of the two square corners.
+        let lens: Vec<Pt> =
+            (0..=20).map(|i| [i as f64, 3.0 * (1.0 - ((i as f64 - 10.0) / 10.0).powi(2))]).collect();
+        let mut o: Vec<Pt> = lens.iter().map(|p| [p[0], -p[1]]).collect();
+        o.extend(lens.iter().rev().skip(1).take(10).copied());
+        o.push([10.0, -3.0]); // closes square at x = 10 (half lens)
+        let c = from_corner(&o);
+        assert_eq!(c.len(), o.len());
+        assert!((c[0][0] - 10.0).abs() < 1e-9 || c[0] == [0.0, 0.0], "{:?}", c[0]);
+        // A 10 x 5 rectangle moved out by 0.1 is 10.2 x 5.2.
+        let (lo, hi) = bbox(&offset_out(&rect(10.0, 5.0), 0.1));
+        assert!((hi[0] - lo[0] - 10.2).abs() < 1e-9 && (hi[1] - lo[1] - 5.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn holes_sit_on_the_stations_clear_of_the_edge() {
+        let spec = MoldSpec::default();
+        let cuts = split_run(&lens(), &[], "L1", None, &spec).unwrap();
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&cuts, 0, &spec, &mut used, &mut ps);
+        for p in &ps {
+            assert!(!p.holes.is_empty());
+            for h in &p.holes {
+                assert!((h[0] / TICK_IN - (h[0] / TICK_IN).round()).abs() < 1e-9 && h[1] == 0.0);
+                assert!(edge_dist(&p.outline, *h) >= 0.5 * spec.hole_in + 0.375);
+            }
+        }
+        // Half templates: 1 in off the centreline; none at all without holes.
+        let half = MoldSpec { packing: Packing::FewestShapes, ..MoldSpec::default() };
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&split_run(&lens(), &[], "L1", None, &half).unwrap(), 0, &half, &mut used, &mut ps);
+        assert!(ps.iter().flat_map(|p| &p.holes).all(|h| h[1] == 1.0));
+        let off = MoldSpec { holes: false, ..MoldSpec::default() };
+        let (mut used, mut ps) = (vec![], vec![]);
+        flat_pieces(&split_run(&lens(), &[], "L1", None, &off).unwrap(), 0, &off, &mut used, &mut ps);
+        assert!(ps.iter().all(|p| p.holes.is_empty()));
+    }
+
+    #[test]
+    fn cut_order_is_nested_first_then_nearest() {
+        let mk = |o: Vec<Pt>, inside: Option<usize>| Placed {
+            piece: 0,
+            inside,
+            rot_deg: 0,
+            shift: [0.0, 0.0],
+            outline: o,
+            marks: vec![],
+            holes: vec![],
+            text_at: [0.0, 0.0],
+            text_deg: 0.0,
+        };
+        let at = |x: f64, y: f64, w: f64| vec![[x, y], [x + w, y], [x + w, y + w], [x, y + w]];
+        let sh = Sheet {
+            length_in: 96.0,
+            width_in: 48.0,
+            used_in2: 0.0,
+            // 0: far, 1: host, 2: inside 1, 3: near the corner
+            parts: vec![
+                mk(at(80.0, 30.0, 5.0), None),
+                mk(at(20.0, 2.0, 20.0), None),
+                mk(at(25.0, 7.0, 5.0), Some(1)),
+                mk(at(1.0, 1.0, 5.0), None),
+            ],
+        };
+        // The inner piece first; then from its corner the host is nearest, then the corner piece.
+        assert_eq!(cut_order(&sh), [2, 1, 3, 0]);
+    }
+
+    #[test]
+    fn taper_tips_bridges_a_neck_and_a_spike() {
+        // A blunt round nose with a thin spike ahead of it (the underside reaching further than
+        // the layer's other slices), mirrored at the stern.
+        let mut c: Vec<Pt> = vec![[0.0, 0.0], [1.0, 0.1], [2.0, 0.15]];
+        c.extend((1..=40).map(|i| {
+            let x = 2.0 + 0.25 * i as f64;
+            [x, 0.15 + 4.0 * ((x - 2.0) / 10.0).sqrt()]
+        }));
+        let tail: Vec<Pt> = c.iter().rev().map(|p| [40.0 - p[0], p[1]]).collect();
+        c.extend(tail.into_iter().skip(1));
+        let t = taper_tips(&c);
+        // Never inside the original, and convex from each tip.
+        for p in &c {
+            assert!(chain_y(&t, p[0]) >= p[1] - 1e-9, "inside at x = {}", p[0]);
+        }
+        let slopes: Vec<f64> = t
+            .windows(2)
+            .filter(|w| w[0][0] < 12.0 && w[1][0] > w[0][0])
+            .map(|w| (w[1][1] - w[0][1]) / (w[1][0] - w[0][0]))
+            .collect();
+        assert!(slopes.windows(2).all(|s| s[1] <= s[0] + 1e-9), "{slopes:?}");
+        assert_eq!((t[0], t[t.len() - 1]), (c[0], c[c.len() - 1]), "tips kept");
+        // A square end is left alone.
+        let sq: Vec<Pt> = vec![[0.0, 0.0], [0.0, 3.0], [5.0, 4.0], [10.0, 0.0]];
+        assert_eq!(taper_tips(&sq)[..2], sq[..2]);
     }
 }
