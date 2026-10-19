@@ -48,7 +48,7 @@ cargo build --release
   `docs/SHAPE_SEARCH.md`)
 
 Contributors and agents: read `AGENTS.md`. Open work: `docs/PLAN.md`.
-New release for the download links: `git tag v0.4.2 && git push origin v0.4.2` (bump `version` in
+New release for the download links: `git tag v0.5.0 && git push origin v0.5.0` (bump `version` in
 Cargo.toml first); `.github/workflows/release.yml` builds both zips and publishes them with
 `packaging/release-notes.md` plus the generated changelog.
 

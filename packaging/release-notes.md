@@ -2,6 +2,27 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.0
+* **Manufacture tab: water-jet files for the mold.** After a run, the Manufacture tab (or
+  `jaguar mold result.json`) lays out hardboard for the winner's male foam mold, built upside down
+  on the gunwale, and gives one DXF per hardboard sheet for the water jet.
+  * **Tracing templates** (default): one hardboard template per foam piece; trace it on the foam,
+    cut just outside the line, sand to shape. Templates cover everything their layer covers, so the
+    foam is never cut short, and taper smoothly to a point at the bow and stern. Or choose
+    **boards in the mold** (hardboard between the foam layers).
+  * **Packing:** **blocks** (default; every layer is cut at the same joints, so the mold comes
+    apart in whole blocks for demolding), **continuous** (fewest pieces), **tight** (least
+    hardboard), **fewest shapes** (half templates flipped over for the other side, and shared by
+    the bow and stern). **Nest inside** cuts small templates out of the middle of big ones.
+  * **Your stock:** list foam thicknesses (e.g. 1.5, 2: the layers mix them to fit the mold),
+    foam sheet sizes and hardboard sheet sizes. Layers lie flat or stand upright.
+  * **Ready for the water jet:** files hold only cut lines (OMAX cuts every line it imports;
+    tick DXF marks for names and reference lines), alignment holes at every 12 in station (the same
+    places in every layer, to line up the stack), pieces in cutting order, each cut starting at a
+    corner.
+  * **Shop packet:** a printable page with the steps, the stack order and a drawing of each
+    layer, what every template traces, and every sheet in cutting order, with boxes to tick.
+
 ## New in 0.4.2
 * **No more kink at the bow and stern of searched hulls:** hulls with full ends (Bow/Stern
   waterplane below 1) were drawn with a straight wedge from the tip and a corner about 5 in in.
