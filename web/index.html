@@ -721,7 +721,7 @@ function wireMeshImport() {
     }
     for (const n of [0, 1]) $(`search.depth_in.${n}`).value = m.depth_in.toFixed(3);
     const wall = typeof m.thickness_in === 'number' ? `wall ${m.thickness_in.toFixed(3)} in (2V/A ${m.thickness_volume_in != null ? m.thickness_volume_in.toFixed(3) : '-'})` : 'no wall (surface mesh): thickness range searched';
-    note.textContent = `${v.file} (${v.read}): ${(m.length_in / 12).toFixed(1)} ft x ${m.beam_in.toFixed(1)} in, depth ${m.depth_in.toFixed(2)} in, ${wall}; units ${m.units}. Search pinned to the drawn design: Run to analyse it.`
+    note.textContent = `${v.file} (${v.read}): ${(m.length_in / 12).toFixed(1)} ft x ${m.beam_in.toFixed(1)} in, depth ${m.depth_in.toFixed(3)} in, ${wall}; units ${m.units}. Search pinned to the drawn design: Run to analyse it.`
       + (notes.length ? ' Note: ' + notes.join(' ') : '');
     schedulePrefs(); loadHull(v.file);
   };
@@ -2036,7 +2036,7 @@ function plotMfg(ctx, W, H) {
   const s = m.stack, sp = m.spec, flat = sp.orientation === 'flat', tpl = sp.boards === 'templates', used = (100 * m.utilization).toFixed(0);
   const what = tpl ? `${m.pieces.length} hardboard templates` : `${m.pieces.length} hardboard pieces (${s.layers} boards between the foam)`;
   ctx.fillStyle = C.muted; ctx.font = font(11);
-  ctx.fillText(`Male foam mold, upside down on the gunwale: ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}${tpl ? ` (${s.foam_pieces} foam pieces)` : ''}, ${s.height_in.toFixed(2)} in ${flat ? 'high' : 'long'}; inner surface = hull less the ${s.wall_in} in wall. ${what} on ${m.sheets.length} hardboard sheets, ${used}% used. Foam layers ${s.foam_order_in.join(' + ')} in (${s.over_in.toFixed(2)} in over).`, 12, 16);
+  ctx.fillText(`Male foam mold, upside down on the gunwale: ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}${tpl ? ` (${s.foam_pieces} foam pieces)` : ''}, ${s.height_in.toFixed(3)} in ${flat ? 'high' : 'long'}; inner surface = hull less the ${s.wall_in} in wall. ${what} on ${m.sheets.length} hardboard sheets, ${used}% used. Foam layers ${s.foam_order_in.join(' + ')} in (${s.over_in.toFixed(2)} in over).`, 12, 16);
   const poly = (pts, X, Y) => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.closePath(); };
   if (mfgView > 0) {
     const sh = m.sheets[mfgView - 1], L = sh.length_in, Wd = sh.width_in;
@@ -2316,7 +2316,7 @@ function showWinner() {
     ${c.zones ? `<div class="group">Dense rectangles <span class="hint">x from the bow, z above the keel, in</span></div>` + c.zones.dense.map((q, n) =>
       kv(`${n + 1}`, `x ${inch(q.x0_in)} to ${inch(q.x1_in)}, z ${inch(q.z0_in)} to ${inch(q.z1_in)}`, 'Dense mix over this length, from this height to that one, the whole girth on both sides.')).join('') : ''}
     ${kv('Side flare', `${f(flareDeg(), 1)} deg`)}
-    ${kv('Mold depth', `${f(c.depth_in, 2)} in${depthEdge(win)}`, 'Gunwale height above the keel, from Search > Search ranges > Mold depth.')}
+    ${kv('Mold depth', `${f(c.depth_in, 3)} in${depthEdge(win)}`, 'Gunwale height above the keel, from Search > Search ranges > Mold depth.')}
     ${kv('Hull weight', `${f(c.hull_weight_lb, 1)} lb`)}
     ${typeof c.drag_n === 'number' ? kv('Drag', dragTxt(c.drag_n)) : ''}
     ${gmRows(c, f)}
@@ -2450,7 +2450,7 @@ function reportHtml(canoeImg, charts) {
   const stats = [
     ['Length', `${f(c.length_in, 1)} in <span class="muted">${typeof c.length_in === 'number' ? ftin(c.length_in) : ''}</span>`],
     ['Beam overall', `${f(c.beam_in, 1)} in`], sh ? ['Beam at waterline', `${f(sh.beam_in, 1)} in`] : null, sh ? ['Design draft', `${f(sh.draft_in, 2)} in`] : null,
-    ['Wall thickness', `${f(c.thickness_in, 3)} in`], ['Mold depth', `${f(c.depth_in, 2)} in`], ['Side flare', `${f(flareDeg(), 1)} deg`],
+    ['Wall thickness', `${f(c.thickness_in, 3)} in`], ['Mold depth', `${f(c.depth_in, 3)} in`], ['Side flare', `${f(flareDeg(), 1)} deg`],
     ['Mix density', `${f(c.density_pcf, 1)} pcf${c.mix ? ' (' + esc(c.mix) + ')' : ''}`], prov ? ['Mix source', provTxt] : null,
     c.zones ? ['Dense mix', `${f(c.zones.dense_pcf, 1)} pcf${c.dense_mix ? ' (' + esc(c.dense_mix) + ')' : ''}; ` + c.zones.dense.map((q, n) => `${n + 1}: x ${inch(q.x0_in)}-${inch(q.x1_in)}, z ${inch(q.z0_in)}-${inch(q.z1_in)}`).join('; ')] : null,
     result.zones ? ['Two-mix saving', result.zones.single_mix_lb == null ? 'no single-mix wall passes' : `${f(result.zones.saved_lb || 0, 1)} lb vs single mix ${f(result.zones.single_mix_lb, 1)} lb`] : null,
@@ -2532,7 +2532,7 @@ function reportHtml(canoeImg, charts) {
       <h1>Canoe design report.</h1>
       <div class="muted">${esc(hullName)} &middot; ${now.toLocaleString()}</div>
       <div class="big">${f(c.hull_weight_lb, 1)} lb</div>
-      <div class="muted">hull weight, ${f(c.thickness_in, 3)} in wall at ${f(c.density_pcf, 1)} pcf, ${f(c.depth_in, 2)} in deep</div>
+      <div class="muted">hull weight, ${f(c.thickness_in, 3)} in wall at ${f(c.density_pcf, 1)} pcf, ${f(c.depth_in, 3)} in deep</div>
       <div style="margin-top:8pt"><span class="badge ${win.verified && !failing ? 'ok' : 'bad'}">${failing ? 'FAILS' : win.verified ? 'Verified' : 'Not verified'}</span>
         <span class="muted">&nbsp;D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations, gate ${f(p.gates && p.gates.dc_verify, 2)}</span></div>
       <div class="muted" style="margin-top:4pt">Objective: ${esc(objKind)}. ${cands.length} candidates tried, ${cands.filter(k => k.passes).length} pass.</div>
@@ -2670,7 +2670,7 @@ function calcHtml(win) {
   out.push('<h3>3. Hull section and weight</h3>');
   out.push(eq('Thin shell of thickness t along the mold-line girth of both sides plus the flat keel strip. Per station:',
     'A = 2 y<sub>0</sub> t + 2 t &Sigma; &Delta;s<sub>k</sub>, &nbsp; z&#772; = &Sigma; A<sub>k</sub> z<sub>k</sub> / A, &nbsp; I = &Sigma; A<sub>k</sub> [(z<sub>k</sub> &minus; z&#772;)<sup>2</sup> + &Delta;z<sub>k</sub><sup>2</sup>/12] + 2 y<sub>0</sub> t z&#772;<sup>2</sup>, &nbsp; S<sub>top</sub> = I / (D &minus; z&#772;), &nbsp; S<sub>bot</sub> = I / z&#772;',
-    `t = ${g(k0.thickness_in, 3)} in, D = ${g(k0.depth_in, 2)} in (mold depth)`));
+    `t = ${g(k0.thickness_in, 3)} in, D = ${g(k0.depth_in, 3)} in (mold depth)`));
   const d0 = (caseOf(k0.case).x_in ? caseOf(k0.case) : win.diagrams) || {};
   const pick = (n, extra) => { const s = new Set(); for (let j = 0; j <= 20; j++) s.add(Math.round(j * (n - 1) / 20)); for (const i of extra) if (i >= 0) s.add(i); return [...s].sort((a, b) => a - b); };
   const nearest = (xs, x) => { let b = -1, bd = Infinity; xs.forEach((v, i) => { const dd = Math.abs(v - x); if (dd < bd) { bd = dd; b = i; } }); return b; };
@@ -2704,7 +2704,7 @@ function calcHtml(win) {
     if (k.freeboard && k.freeboard.gate) {
       // The RFP check: static, at staging, where the lettering is. The range over the strength
       // seat samples is shown, not gated.
-      const F = k.freeboard, Lh = k.length_in, at = s => `f(${g(s.at_x_in, 1)}) = ${g(k.depth_in, 2)} &minus; [${g(s.draft_in, 3)} + (${g(s.trim_in, 3)}) (${g(s.at_x_in, 1)} &minus; ${g(Lh / 2, 1)}) / ${g(Lh, 1)}] = ${g(k.depth_in, 2)} &minus; ${g(s.waterline_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`;
+      const F = k.freeboard, Lh = k.length_in, at = s => `f(${g(s.at_x_in, 1)}) = ${g(k.depth_in, 3)} &minus; [${g(s.draft_in, 3)} + (${g(s.trim_in, 3)}) (${g(s.at_x_in, 1)} &minus; ${g(Lh / 2, 1)}) / ${g(Lh, 1)}] = ${g(k.depth_in, 3)} &minus; ${g(s.waterline_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`;
       const where = F.lettering.length
         ? `at the lettering: ${F.lettering.map(s => `&ldquo;${esc(s.text)}&rdquo; x = ${g(s.x0_in, 1)} to ${g(s.x1_in, 1)} in`).join(', ')}${P.lettering ? ` (${g(P.lettering.height_in, 2)} in letters, ${g(P.lettering.below_gunwale_in, 2)} in below the gunwale, so their bottom edge is ${g(P.lettering.below_gunwale_in + P.lettering.height_in, 2)} in down)` : ''}`
         : 'over the whole hull';
@@ -2716,14 +2716,14 @@ function calcHtml(win) {
           `information, not gated: every knee moved &plusmn;${g(q.seat_variance_in, 1)} in (the strength samples): ${g(F.worst.freeboard_in, 3)} to ${g(F.best.freeboard_in, 3)} in`].filter(Boolean).join('<br>')));
     } else if (k.freeboard) {
       // Results before 0.4: the gate was the worst seat sample over the whole hull.
-      const F = k.freeboard, fbl = (lbl, s, gate) => `${lbl}: knees ${s.seats_in.map(x => g(x, 1)).join(', ')} in; d = ${g(s.draft_in, 3)} in, &theta; = ${g(s.trim_in, 3)} in; f = ${g(k.depth_in, 2)} &minus; ${g(s.waterline_max_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`
+      const F = k.freeboard, fbl = (lbl, s, gate) => `${lbl}: knees ${s.seats_in.map(x => g(x, 1)).join(', ')} in; d = ${g(s.draft_in, 3)} in, &theta; = ${g(s.trim_in, 3)} in; f = ${g(k.depth_in, 3)} &minus; ${g(s.waterline_max_in, 3)} = <b>${g(s.freeboard_in, 3)} in</b>`
         + (gate ? ` ${s.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(s.freeboard_in >= FBR)}` : '');
       sec.push(eq(`Freeboard = mold depth minus the highest local waterline. Trim, and so freeboard, depends on where the crew sits: expected at the planned seats, best and worst over every seat sample (each knee &plusmn;${g(q.seat_variance_in, 1)} in); the gate is the worst:`,
         'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
         [fbl('expected (planned seats)', F.expected), fbl('best', F.best), fbl('worst', F.worst, true)].join('<br>')));
     } else {
       sec.push(eq('Freeboard = mold depth minus the highest local waterline:', 'f = D &minus; max<sub>x</sub>[d + &theta;(x &minus; L/2)/L]',
-        `f = ${g(k.depth_in, 2)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(sv.freeboard_in >= FBR)}`));
+        `f = ${g(k.depth_in, 3)} &minus; ${g(sv.waterline_max_in, 3)} = <b>${g(sv.freeboard_in, 3)} in</b> ${sv.freeboard_in >= FBR ? '&ge;' : '&lt;'} ${g(FBR, 2)} in ${ok(sv.freeboard_in >= FBR)}`));
     }
     sec.push(eq('Transverse stability:', 'GM = KB + BM &minus; KG, &nbsp; BM = I<sub>wp</sub> / V, &nbsp; KG = (&int; w z&#772; dx + W<sub>crew</sub> z<sub>crew</sub>) / W',
       `GM = ${g(sv.kb_in, 3)} + ${g(sv.bm_in, 3)} &minus; ${g(sv.kg_in, 3)} = <b>${g(sv.gm_in, 3)} in</b> at this sample; worst sample ${g(q.gm_in, 3)} in ${q.gm_in >= ST.gm_min_in ? '&ge;' : '&lt;'} ${g(ST.gm_min_in, 2)} in ${ok(q.gm_in >= ST.gm_min_in)}`));
@@ -3044,7 +3044,7 @@ async function loadResult() {
     raceRes = result.race || null; raceErr = ''; raceEv = 0; animReset();
     if (result.winner_hull) {
       const wc = result.winner && result.winner.candidate;
-      setHull(result.winner_hull, (failing ? 'Closest design (FAILS): ' : 'Winner hull: ') + (result.winner_hull.name || '') + (wc ? `, ${wc.depth_in.toFixed(1)} in depth` : ''));
+      setHull(result.winner_hull, (failing ? 'Closest design (FAILS): ' : 'Winner hull: ') + (result.winner_hull.name || '') + (wc ? `, ${wc.depth_in.toFixed(3)} in depth` : ''));
     }
   }
   showWinner(); buildCanoe(); buildTabs(); drawPlot();

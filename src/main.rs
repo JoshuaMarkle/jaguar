@@ -564,7 +564,7 @@ fn main() -> Result<()> {
             std::fs::write(out.join("mold.json"), serde_json::to_string_pretty(&l)?)?;
             let s = &l.stack;
             println!(
-                "{}: {} foam layers {} ({:.2} in {}), {} foam pieces{}",
+                "{}: {} foam layers {} ({:.3} in {}), {} foam pieces{}",
                 l.hull,
                 s.foam_layers,
                 if vertical { "standing upright" } else { "laid flat" },

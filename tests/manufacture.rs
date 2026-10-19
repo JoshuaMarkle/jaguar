@@ -62,6 +62,43 @@ fn fits(p: &[Pt], l: f64, w: f64) -> bool {
     (a <= l + 1e-9 && b <= w + 1e-9) || (b <= l + 1e-9 && a <= w + 1e-9)
 }
 
+/// A generated hull whose section is blunter than a parabola at the keel: the mold (the inner
+/// surface) is the mold depth less the wall high, keel to gunwale.
+#[test]
+fn mold_height_is_depth_less_wall_on_a_generated_hull() {
+    let s = jaguar::hullgen::ShapeParams {
+        length_in: 216.0,
+        beam_in: 28.64,
+        draft_in: 7.0,
+        fore_wp: 0.818,
+        section: 0.706,
+        fore_rocker: 0.221,
+        aft_wp: 0.818,
+        aft_rocker: 0.221,
+        fore_len_frac: 0.5,
+        aft_len_frac: 0.5,
+        gunwale_radius_in: None,
+        metrics: None,
+    };
+    let hull = jaguar::hullgen::generate(&s, 41, 21, "blunt").unwrap();
+    let es = jaguar::export::ExportSpec {
+        depth_in: 14.875,
+        thickness_in: Some(0.375),
+        flare_deg: 3.0,
+        gunwale_radius_in: None,
+        stations: 241,
+        girth: 41,
+        pocket_in: None,
+        layers: None,
+        filled: false,
+    };
+    let spec = MoldSpec { foam_in: vec![8.0], ..MoldSpec::default() };
+    let st = jaguar::manufacture::layout(&hull, &es, &spec).unwrap().stack;
+    // 14.5 in less ~0.001: the lofted keel is a 4.6 deg V, where a wall t thick normal to the
+    // surface is t / cos 4.6 deg deep at the centreline. (Before the keel lift fix: 14.37 in.)
+    assert!((st.height_in - 14.5).abs() < 0.003, "mold {} in high", st.height_in);
+}
+
 #[test]
 fn flat_templates_in_blocks_from_the_gunwale_up() {
     let l = flat();

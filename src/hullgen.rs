@@ -10,7 +10,7 @@
 //! ([`waterplane`]: pointed, no corner). The table has extra stations near each tip
 //! ([`stations`]), so its straight lines between stations follow the curved ends.
 
-use crate::hull::{FORMAT, Hull, linspace};
+use crate::hull::{FORMAT, Hull, column_keel, linspace};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,8 @@ pub struct ShapeParams {
     pub length_in: f64,
     /// Maximum beam at the design waterline, in (half-breadth max = beam/2).
     pub beam_in: f64,
-    /// Design draft (top waterline of the table), in.
+    /// Design draft of the shape function, in. The table's top waterline is this less the
+    /// keel lift [`generate`] removes (0 to ~0.13 in).
     pub draft_in: f64,
     /// Fore waterplane exponent (>= 0). Larger = finer, more hollow bow
     /// waterlines; below 1 = fuller, still pointed at the stem ([`waterplane`]).
@@ -189,7 +190,26 @@ pub fn metrics(p: &ShapeParams) -> ShapeMetrics {
     }
 }
 
-/// The hull table: `n_stations` even stations plus the tip stations ([`stations`]).
+/// The table lowered so its lofted keel's lowest point is z = 0 (the mold depth is measured from
+/// z = 0). Below the lowest offsets the loft takes a parabola through the two lowest
+/// ([`column_keel`]); a section of (1 - zn^2)^section with section > 0.5 is blunter than that at
+/// the keel, so the lofted keel floats up to ~0.13 in above the analytic one at z = 0. The z = 0
+/// row is all zero (zn = 1), so it stays; the waterlines above move down by that gap and the loft
+/// is the same surface, shifted. The top waterline (the design draft) moves down with them.
+fn keel_on_zero(z: Vec<f64>, rows: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let kmin = rows.iter().filter_map(|r| column_keel(r, &z)).fold(f64::INFINITY, f64::min);
+    if kmin.is_nan() || kmin <= 1e-9 || rows.iter().any(|r| r[0] != 0.0) {
+        return (z, rows);
+    }
+    // Waterlines that would land on or below z = 0 go (only z[1], when kmin reached it).
+    let keep: Vec<usize> = std::iter::once(0).chain((1..z.len()).filter(|&k| z[k] - kmin > 1e-9)).collect();
+    let z2 = keep.iter().map(|&k| if k == 0 { 0.0 } else { z[k] - kmin }).collect();
+    let rows2 = rows.iter().map(|r| keep.iter().map(|&k| r[k]).collect()).collect();
+    (z2, rows2)
+}
+
+/// The hull table: `n_stations` even stations plus the tip stations ([`stations`]), keel at z = 0
+/// ([`keel_on_zero`]).
 pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &str) -> Result<Hull> {
     let (l, b, t) = (p.length_in, p.beam_in, p.draft_in);
     ensure!(l > 0.0 && b > 0.0 && t > 0.0, "length, beam, draft must be > 0");
@@ -226,6 +246,7 @@ pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &
                 .collect()
         })
         .collect();
+    let (z, half_breadth) = keel_on_zero(z, half_breadth);
     let h = Hull {
         format: FORMAT.into(),
         units: "in".into(),
@@ -235,7 +256,7 @@ pub fn generate(p: &ShapeParams, n_stations: usize, n_waterlines: usize, name: &
             p.fore_wp, p.aft_wp, p.section, p.fore_rocker, p.aft_rocker, p.fore_len_frac, p.aft_len_frac
         ),
         length: l,
-        draft_design: t,
+        draft_design: *z.last().unwrap(),
         x,
         z,
         half_breadth,
@@ -287,6 +308,47 @@ mod tests {
         let exact = 6.0 * 240f64.powi(3) / 12.0;
         assert!((m0.lateral_moment_in4 - exact).abs() / exact < 1e-4);
         assert!(m.lateral_moment_in4 < m0.lateral_moment_in4, "rocker turns easier");
+    }
+
+    /// A section blunter than a parabola at the keel (0.706, a shape-search winner): the loft's
+    /// keel would float ~0.13 in above z = 0, and the canoe would be that much shallower than its
+    /// mold depth.
+    fn blunt() -> ShapeParams {
+        ShapeParams {
+            length_in: 216.0,
+            beam_in: 28.64,
+            draft_in: 7.0,
+            fore_wp: 0.818,
+            section: 0.706,
+            fore_rocker: 0.221,
+            aft_wp: 0.818,
+            aft_rocker: 0.221,
+            fore_len_frac: 0.5,
+            aft_len_frac: 0.5,
+            gunwale_radius_in: None,
+            metrics: None,
+        }
+    }
+
+    #[test]
+    fn lofted_keel_sits_on_z_zero() {
+        let s = blunt();
+        let h = generate(&s, 41, 21, "t").unwrap();
+        let loft = h.loft();
+        let kmin = (0..=2160).map(|i| loft.keel(0.1 * i as f64).unwrap()).fold(f64::INFINITY, f64::min);
+        assert!(kmin.abs() < 1e-9, "lofted keel at {kmin}");
+        // The same surface, lowered: each waterline has the analytic offsets of its old height.
+        let lift = s.draft_in - h.draft_design;
+        assert!(lift > 0.1 && lift < 0.15, "lift {lift}");
+        let mid = h.x.iter().position(|&x| x == 108.0).unwrap();
+        for (k, &z) in h.z.iter().enumerate().skip(1) {
+            let zn = (s.draft_in - (z + lift)) / s.draft_in;
+            let y = 0.5 * s.beam_in * (1.0 - zn * zn).powf(s.section);
+            assert!((h.half_breadth[mid][k] - y).abs() < 1e-9, "z {z}");
+        }
+        // A parabola-like section needs no lift.
+        let h = generate(&shape(), 41, 21, "t").unwrap();
+        assert_eq!(h.draft_design, 6.0);
     }
 
     #[test]

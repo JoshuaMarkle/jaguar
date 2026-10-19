@@ -222,12 +222,13 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
     let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
     let s = to_shape(&mid);
     let hull = generate(&s, STATIONS, WATERLINES, "reference")?;
-    let drag_n = resistance(&hull, s.draft_in, params.objective.speed_mps, params.hull.roughness_um)
+    // At the table top (the shape's draft less the keel lift `generate` removes).
+    let draft = hull.draft_design;
+    let drag_n = resistance(&hull, draft, params.objective.speed_mps, params.hull.roughness_um)
         .context("drag of the reference (midpoint) shape")?
         .total_n;
-    let lb = displaced_volume_in3(&hull, s.draft_in) * WATER_PCF / IN3_PER_FT3;
-    let turn_n =
-        turn_at(params, &s, s.draft_in, lb).context("turn of the reference (midpoint) shape")?.drag_n;
+    let lb = displaced_volume_in3(&hull, draft) * WATER_PCF / IN3_PER_FT3;
+    let turn_n = turn_at(params, &s, draft, lb).context("turn of the reference (midpoint) shape")?.drag_n;
     anyhow::ensure!(drag_n > 0.0 && turn_n > 0.0, "reference shape has zero straight or turning drag");
     Ok(Refs { drag_n, turn_n })
 }

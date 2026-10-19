@@ -18,6 +18,13 @@ round nose in Series 7) is eased to a pointed tip over its last ~13% (`hullgen::
 same value and slope as X^wp there, finite entry angle). Before 2026-10-18 the table ran one
 chord from the tip to the 5.4 in station, a corner in top view (37 -> 21 deg at wp 0.62).
 
+The table's keel is on z = 0, where the mold depth is measured from. Below the lowest offsets the
+loft takes a parabola through the two lowest (`hull::column_keel`). A `section` above 0.5 is
+blunter than that at the keel, which lifts the lofted keel up to ~0.13 in above z = 0, so
+`hullgen::keel_on_zero` lowers the waterlines by that lift. The table top (`draft_design`) is then
+the shape's `draft_in` less the lift. Before 2026-10-18 the canoe came out that much shallower
+than its mold depth (14.749 in for a 14.875 in mold depth at section 0.706).
+
 The outer loop only changes the hull it hands to the inner search, so all strength, freeboard and
 stability logic lives in one place.
 
