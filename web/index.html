@@ -34,10 +34,19 @@
   #top .spacer { flex: 1; }
   #top .sep { width: 1px; align-self: stretch; margin: var(--s3) 0; background: var(--hair-soft); }
   #top .btn.primary { justify-self: auto; padding: 0 var(--s4); }
-  .runbox { display: grid; gap: 3px; width: 200px; }
+  #top > * { flex-shrink: 0; }
+  #top > .brand { flex-shrink: 1; }
+  /* Run status: grows to fit "Running n/N · elapsed · time left"; the count shrinks first, the time left never. */
+  .runbox { display: grid; gap: 3px; flex: 0 1 340px; min-width: 170px; }
   .objpick { display: flex; align-items: center; gap: var(--s2); color: var(--muted); white-space: nowrap; }
   .objpick select { width: 140px; color: var(--ink); }
-  .statusline { display: flex; justify-content: space-between; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .statusline { display: flex; gap: var(--s2); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; }
+  .statusline #status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .statusline #eta { margin-left: auto; flex-shrink: 0; color: var(--ink-soft); }
+  .statusline #eta:empty { display: none; }
+  /* Narrow windows: drop the tagline and the long labels before anything gets squeezed. */
+  @media (max-width: 1500px) { #top .brand span { display: none; } }
+  @media (max-width: 1280px) { .objpick .lbl { display: none; } #resetprefs .long { display: none; } #prefnote { display: none; } }
 
   /* ---------- side panels (inputs left, result right) ---------- */
   #left, #right { grid-row: 2 / 4; position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -45,7 +54,8 @@
   #right { grid-column: 3; border-left: 1px solid var(--hair); }
   .panehead { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
   .panehead b { font-weight: 650; font-size: 13px; }
-  .panehead .hint { margin-left: auto; }
+  .panehead .hint { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .panehead > b, .panehead > .btn { flex-shrink: 0; }
   #groups { margin: 0 var(--s4) var(--s2); }
   #groups button { height: 24px; }
   .scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--hair) transparent; scrollbar-gutter: stable;
@@ -54,7 +64,8 @@
   .scroll::-webkit-scrollbar-thumb { background: var(--hair); border-radius: 999px; border: 2px solid var(--canvas); }
   .scroll::-webkit-scrollbar-thumb:hover { background: var(--faint); }
   #rscroll > #err { margin: var(--s3) var(--s4) 0; }
-  #rscroll > #winner { padding: var(--s3) var(--s4); display: grid; gap: var(--s1); }
+  /* One column no wider than the panel: a wide child wraps or scrolls instead of widening (and clipping) the whole result. */
+  #rscroll > #winner { padding: var(--s3) var(--s4); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
   /* Run history: saved runs, newest first, hairline between them. */
   #history { padding: var(--s2) var(--s4) var(--s3); border-bottom: 1px solid var(--hair); }
   #history .hhead { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
@@ -64,6 +75,9 @@
   #history .run.cur { border-left: 3px solid var(--accent); padding-left: var(--s2); }
   #history .run .acts { grid-row: 1 / 3; grid-column: 2; display: flex; gap: var(--s1); align-items: center; }
   #history .run .acts .btn { height: 22px; padding: 0 var(--s2); }
+  #history .hfilt { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s1); margin-bottom: var(--s2); }
+  #history .hfilt input { grid-column: 1 / 3; }
+  #history .hfilt input, #history .hfilt select { height: 24px; }
   #histbtn { height: 22px; padding: 0 var(--s2); }
 
   .sec { border-bottom: 1px solid var(--hair-soft); }
@@ -81,7 +95,7 @@
 
   /* Every row is the same 3-column grid so labels, controls and units line up through the whole sidebar. */
   .row, .kv { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr) var(--unit-w); align-items: center; column-gap: var(--s2); min-height: var(--ctl-h); }
-  .row > label { color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+  .row > label { color: var(--ink-soft); overflow-wrap: anywhere; line-height: 1.2; padding: 2px 0; cursor: help; }
   .row > .unit { color: var(--muted); }
   .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: -2px; }
   .multi { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s1); }
@@ -161,6 +175,8 @@
   .tbl th { font-weight: 450; color: var(--muted); text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
   .tbl td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair-soft); white-space: nowrap; }
   .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
+  .tbl td:first-child { white-space: normal; }
+  .tblwrap { overflow-x: auto; scrollbar-width: thin; }
   .tbl tr.gov td { font-weight: 600; }
   .tbl td.nm { white-space: normal; text-align: left; }
   .mixedit td { padding: 1px 2px; } .mixedit input { height: 22px; padding: 0 4px; min-width: 52px; text-align: right; } .mixedit .btn { height: 22px; padding: 0 6px; }
@@ -212,11 +228,11 @@
   <div class="brand"><b>Jaguar</b><span>lightest concrete canoe wall that does not crack</span></div>
   <div class="spacer"></div>
   <span id="prefnote" class="hint"></span>
-  <button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset to canoe.toml</button>
+  <button type="button" class="btn soft" id="resetprefs" title="Forget the autosaved settings and reload the canoe.toml the server was started with.">Reset<span class="long"> to canoe.toml</span></button>
   <div class="sep"></div>
-  <label class="objpick" for="objective.kind" title="What best means among designs that pass every check. Weight = lightest hull. Drag = least water resistance at the race speed (matters with shape search). Race = shortest weighted race time over the [race] events (shape search only).">Optimize for
+  <label class="objpick" for="objective.kind" title="What best means among designs that pass every check. Weight = lightest hull. Drag = least water resistance at the race speed (matters with shape search). Race = shortest weighted race time over the [race] events (shape search only)."><span class="lbl">Optimize for</span>
     <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
-  <div class="runbox"><div class="statusline"><span id="status">idle</span></div><progress id="prog" value="0" max="1"></progress></div>
+  <div class="runbox"><div class="statusline"><span id="status">idle</span><span id="eta"></span></div><progress id="prog" value="0" max="1"></progress></div>
   <button id="run" class="btn primary">Run optimization</button>
   <span id="runctl" hidden>
     <button type="button" class="btn soft" id="pauserun" title="Hold the run after the candidates or hull shapes being checked now. Resume carries on where it stopped.">Pause</button>
@@ -288,6 +304,8 @@ function gutter(el, cssVar, key, size, clamp) {
     el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
   });
   el.addEventListener('dblclick', () => { root.removeProperty(cssVar); store.set(key, ''); resize(); });
+  // A saved size is re-clamped when the window shrinks, so a wide panel never covers the 3D view.
+  window.addEventListener('resize', () => { const v = Number(store.get(key)); if (v) root.setProperty(cssVar, clamp(v) + 'px'); });
 }
 gutter($('gutter-side'), '--side', 'side', e => e.clientX, x => Math.round(Math.min(Math.max(x, 300), window.innerWidth * 0.45)));
 gutter($('gutter-res'), '--res', 'res', e => window.innerWidth - e.clientX, x => Math.round(Math.min(Math.max(x, 260), window.innerWidth * 0.4)));
@@ -2249,7 +2267,7 @@ function checksTable(v) {
   const f = (x, n) => typeof x === 'number' ? x.toFixed(n) : '?';
   const rows = v.checks.map(k => `<tr class="${k.name === v.governing_check ? 'gov' : ''}"><td class="nm">${esc(k.name.replace(/_/g, ' '))}</td><td>${f(k.demand, 0)}</td><td>${f(k.capacity, 0)}</td>
     <td>${f(k.dc, 3)}</td><td><span class="bar" style="width:${Math.min(48, 48 * (k.dc || 0))}px;background:${dcShade(k.dc || 0)}"></span></td></tr>`).join('');
-  return `<table class="tbl"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table>`;
+  return `<div class="tblwrap"><table class="tbl"><tr><th>check</th><th>demand psi</th><th>capacity psi</th><th>D/C</th><th></th></tr>${rows}</table></div>`;
 }
 // Swamped flotation: air pocket length needed at each end (candidate.air_pocket_in), shown only when the run had [flotation].
 function pocketRow(c) {
@@ -2302,7 +2320,7 @@ function showWinner() {
       <span class="muted">${f(c.hull_weight_lb, 1)} lb hull, D/C ${f(win.verify_dc, 3)} at ${win.verify_stations} stations</span></div>
     ${failing ? `<div class="note-box error"><b>No design passes.</b> Shown: the closest design (${f(c.thickness_in, 3)} in wall, ${esc(c.mix || f(c.density_pcf, 1) + ' pcf')}), analysed in full. It fails:<ul style="margin:4px 0 0 18px;padding:0">${failing.fails.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
     ${result.ended_early ? `<div class="note-box warn">Ended early: ${esc(result.ended_early)}. This is the best of the hull shapes checked; a full run may find a better one.</div>` : ''}
-    <div style="display:flex;gap:var(--s2);margin-bottom:var(--s2)">
+    <div style="display:flex;flex-wrap:wrap;gap:var(--s2);margin-bottom:var(--s2)">
       ${failing ? '' : exportSplit('step', 'Export STEP', 'Winning canoe as a STEP solid (inches): hull, wall thickness and mold depth, for CAD and the mold shop.')}
       ${failing ? '' : exportSplit('stl', 'Export STL', 'Same solid as a binary STL mesh (inches), for 3D printing or mesh tools.')}
       <button type="button" class="btn soft" id="exportpdf" title="Report of this run: canoe picture and winner stats first, then search space, mix data, inputs and every chart. Opens the print dialog: choose Save as PDF.">Export PDF</button>
@@ -3063,30 +3081,68 @@ async function loadRuns() {
   if (!$('history').hidden) renderHistory();
 }
 const STATUS_BADGE = { verified: 'success', 'not verified': 'warn', fails: 'error' };
+// History sort + filter (kept per browser). Runs missing the sorted value go last.
+const HSORT = {
+  new: ['newest first', m => -(m.saved_unix || 0)], old: ['oldest first', m => m.saved_unix],
+  weight: ['lightest hull', m => m.hull_weight_lb], race: ['fastest race', m => m.race_s], drag: ['least drag', m => m.drag_n],
+  thick: ['thinnest wall', m => m.thickness_in], size: ['largest file', (m, r) => -r.bytes],
+};
+const hist = { q: store.get('hist.q') || '', status: store.get('hist.status') || '', kind: store.get('hist.kind') || '', sort: HSORT[store.get('hist.sort')] ? store.get('hist.sort') : 'new' };
 function renderHistory() {
   const box = $('history'), runs = (runsInfo && runsInfo.runs) || [];
-  const mb = b => b >= 1e6 ? `${(b / 1e6).toFixed(b >= 1e8 ? 0 : 1)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
+  const opt = (v, t, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${t}</option>`;
+  box.innerHTML = `<div class="hhead"><b>Saved runs</b><span class="hint" id="histcount"></span><button type="button" class="btn soft" id="histclose">Close</button></div>`
+    + (runs.length ? `<div class="hfilt">
+      <input type="text" id="histq" placeholder="Filter: hull, mix, file name" value="${esc(hist.q)}" title="Show runs whose hull, mix, objective or file name contains this text.">
+      <select id="histstatus" title="Show only runs with this result.">${opt('', 'any result', hist.status)}${['verified', 'not verified', 'fails', 'no design'].map(v => opt(v, v, hist.status)).join('')}</select>
+      <select id="histkind" title="Fixed hull (wall search only) or hull shape search.">${opt('', 'any search', hist.kind)}${opt('fixed', 'fixed hull', hist.kind)}${opt('shape', 'shape search', hist.kind)}</select>
+      <select id="histsort" title="Order of the list." style="grid-column:1/3">${Object.entries(HSORT).map(([k, [t]]) => opt(k, 'Sort: ' + t, hist.sort)).join('')}</select></div>`
+      : '<div class="hint">No saved runs yet. Every run that finishes from now on is kept here.</div>')
+    + '<div id="histlist"></div>'
+    + (runsInfo ? `<div class="hint" style="margin-top:var(--s2)">Saved in ${esc(runsInfo.dir)}. Shape searches are large: delete runs you no longer need.</div>` : '');
+  $('histclose').onclick = () => { box.hidden = true; };
+  const set = (k, v) => { hist[k] = v; store.set('hist.' + k, v); renderHistoryList(); };
+  if (runs.length) {
+    $('histq').oninput = e => set('q', e.target.value);
+    $('histstatus').onchange = e => set('status', e.target.value);
+    $('histkind').onchange = e => set('kind', e.target.value);
+    $('histsort').onchange = e => set('sort', e.target.value);
+  }
+  renderHistoryList();
+}
+const mb = b => b >= 1e6 ? `${(b / 1e6).toFixed(b >= 1e8 ? 0 : 1)} MB` : `${Math.max(1, Math.round(b / 1e3))} kB`;
+// The run rows only, so typing in the filter keeps its focus.
+function renderHistoryList() {
+  const runs = (runsInfo && runsInfo.runs) || [], busy = $('run').disabled;
+  const q = hist.q.trim().toLowerCase(), key = HSORT[hist.sort][1];
+  const shown = runs.filter(r => {
+    const m = r.meta || {};
+    if (hist.status && m.status !== hist.status) return false;
+    if (hist.kind && !!m.shape_search !== (hist.kind === 'shape')) return false;
+    return !q || [r.file, m.hull, m.mix, m.objective, m.status].some(x => x && String(x).toLowerCase().includes(q));
+  }).map((r, i) => ({ r, i, k: key(r.meta || {}, r) }))
+    .sort((a, b) => (a.k == null) - (b.k == null) || (a.k == null ? 0 : a.k - b.k) || a.i - b.i)
+    .map(x => x.r);
   const total = runs.reduce((s, r) => s + r.bytes, 0);
-  const busy = $('run').disabled;
-  box.innerHTML = `<div class="hhead"><b>Saved runs</b><span class="hint">${runs.length} run${runs.length === 1 ? '' : 's'}, ${mb(total)}</span><button type="button" class="btn soft" id="histclose">Close</button></div>`
-    + (runs.length ? '' : '<div class="hint">No saved runs yet. Every run that finishes from now on is kept here.</div>')
-    + runs.map(r => {
+  $('histcount').textContent = (shown.length === runs.length ? '' : `${shown.length} of `) + `${runs.length} run${runs.length === 1 ? '' : 's'}, ${mb(total)}`;
+  const list = $('histlist');
+  list.innerHTML = (runs.length && !shown.length ? '<div class="hint">No saved run matches the filter.</div>' : '')
+    + shown.map(r => {
       const m = r.meta || {}, cur = runsInfo.current === r.file;
-      const bits = [m.hull, m.hull_weight_lb != null ? `${m.hull_weight_lb.toFixed(1)} lb` : null, m.race_s != null ? `${m.race_s.toFixed(1)} s race` : null,
+      const bits = [m.hull, m.hull_weight_lb != null ? `${m.hull_weight_lb.toFixed(1)} lb` : null, m.thickness_in != null ? `${m.thickness_in.toFixed(3)} in wall` : null,
+        m.mix, m.race_s != null ? `${m.race_s.toFixed(1)} s race` : null, m.drag_n != null ? `${m.drag_n.toFixed(1)} N drag` : null,
         m.candidates != null ? `${m.candidates} ${m.shape_search ? 'shapes' : 'candidates'}` : null, mb(r.bytes)].filter(Boolean);
       return `<div class="run${cur ? ' cur' : ''}" title="${esc(r.file)}"><div>${m.saved_unix ? `<b>${esc(when(m.saved_unix))}</b>` : `<b>${esc(r.file)}</b>`} ${m.status ? `<span class="badge ${STATUS_BADGE[m.status] || ''}">${esc(m.status)}</span>` : ''}${m.ended_early ? ' <span class="hint">ended early</span>' : ''}${cur ? ' <span class="hint">shown</span>' : ''}</div>
         <div class="acts"><button type="button" class="btn soft" data-open="${esc(r.file)}" ${cur || busy ? 'disabled' : ''} title="Show this run: its candidates, charts, winner, export and report.">Open</button><button type="button" class="btn soft" data-del="${esc(r.file)}" title="Delete this saved run (the file in the runs folder).">Delete</button></div>
         <div class="hint">${bits.map(esc).join(' &middot; ')}</div></div>`;
-    }).join('')
-    + (runsInfo ? `<div class="hint" style="margin-top:var(--s2)">Saved in ${esc(runsInfo.dir)}. Shape searches are large: delete runs you no longer need.</div>` : '');
-  $('histclose').onclick = () => { box.hidden = true; };
-  for (const b of box.querySelectorAll('[data-open]')) b.onclick = async () => {
+    }).join('');
+  for (const b of list.querySelectorAll('[data-open]')) b.onclick = async () => {
     b.disabled = true;
     const r = await fetch('/api/runs/open?file=' + encodeURIComponent(b.dataset.open), { method: 'POST' });
     if (!r.ok) { $('err').textContent = 'open run: ' + ((await r.json()).error || r.status); b.disabled = false; return; }
     $('err').textContent = ''; await loadResult(); $('rscroll').scrollTop = 0;
   };
-  for (const b of box.querySelectorAll('[data-del]')) b.onclick = async () => {
+  for (const b of list.querySelectorAll('[data-del]')) b.onclick = async () => {
     if (!confirm(`Delete the saved run ${b.dataset.del}? This cannot be undone.`)) return;
     const r = await fetch('/api/runs?file=' + encodeURIComponent(b.dataset.del), { method: 'DELETE' });
     if (!r.ok) $('err').textContent = 'delete run: ' + ((await r.json()).error || r.status);
@@ -3133,15 +3189,18 @@ async function poll() {
   cands = cands.concat(s.candidates);
   runCtl(s);
   const word = s.stopping ? 'Ending (finishing the shapes in progress, then verifying)' : s.paused ? 'Paused' : s.state === 'stopped' ? 'Ended' : s.state[0].toUpperCase() + s.state.slice(1);
-  let time = '';
+  // Count + elapsed on the left (shrinks first), time left on the right (always shown in full).
+  let time = '', eta = '';
   if (s.state === 'running' && s.elapsed_s != null) {
     time = ` · ${dur(s.elapsed_s)}`;
     if (s.paused || s.stopping) { /* no estimate while held or ending */ }
-    else if (s.eta_s == null) time += ' · estimating time left';
-    else time += ` · about ${dur(s.eta_s)} left`;
+    else if (s.eta_s == null) eta = 'estimating';
+    else eta = `~${dur(s.eta_s)} left`;
   }
   $('status').textContent = `${word} ${s.done}/${s.total}` + time;
-  $('status').title = s.state === 'running' ? 'Time left = what is left at the speed so far (pauses not counted), plus a short final check of the winner. A hull shape search counts every refine round at full size, so it usually finishes a little sooner.' : '';
+  $('eta').textContent = eta;
+  $('status').parentNode.title = s.state === 'running' ? `${$('status').textContent}${eta ? ' · ' + eta : ''}
+Time left = what is left at the speed so far (pauses not counted), plus a short final check of the winner. A hull shape search counts every refine round at full size, so it usually finishes a little sooner.` : '';
   $('prog').max = s.total || 1; $('prog').value = s.done;
   $('err').textContent = s.error || '';
   drawPlot();
