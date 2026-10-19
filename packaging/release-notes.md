@@ -2,6 +2,14 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.1
+* **Searched hulls are now as deep as their mold depth.** A shape-search hull with rounded
+  sections (Section above 0.5) came out up to 0.13 in shallower than its mold depth, because its
+  keel was drawn slightly above the bottom. A 14.875 in mold depth built a 14.75 in canoe, and the
+  Manufacture tab showed a 14.37 in mold instead of 14.5 in. The keel now sits on the bottom.
+  Re-run the shape search: freeboard and wall weight change a little.
+* Mold depth and mold height are shown to 3 decimals (0.001 in).
+
 ## New in 0.5.0
 * **Manufacture tab: water-jet files for the mold.** After a run, the Manufacture tab (or
   `jaguar mold result.json`) lays out hardboard for the winner's male foam mold, built upside down
