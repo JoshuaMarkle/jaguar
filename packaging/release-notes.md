@@ -2,6 +2,12 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.2
+* **Half canoe (Manufacture tab):** for a canoe that is the same at the bow and stern, tick
+  **half canoe** to cut tracing templates for the bow half only. Each template also traces the
+  matching stern piece, turned end for end (the shop packet lists which), saving 2 to 4 hardboard
+  sheets. If the canoe is not the same fore and aft, the layout says which piece differs.
+
 ## New in 0.5.1
 * **Searched hulls are now as deep as their mold depth.** A shape-search hull with rounded
   sections (Section above 0.5) came out up to 0.13 in shallower than its mold depth, because its
