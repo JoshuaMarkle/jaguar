@@ -257,6 +257,24 @@ fn gate_line(w: &crate::optimize::Winner) -> Option<String> {
     (!items.is_empty()).then(|| format!("        binding  {}", items.join(" | ")))
 }
 
+/// Loaded GM of the case that sets the crew-CG threshold at the assumed crew CG and +/- 2 in,
+/// and the threshold (`Winner::crew_cg`).
+fn crew_cg_line(w: &crate::optimize::Winner) -> Option<String> {
+    let s = w.crew_cg.as_ref()?;
+    let k = s.cases.iter().find(|k| k.name == s.threshold_case)?;
+    Some(format!(
+        "        crew CG  GM ({}) {:.2} / {:.2} / {:.2} in at crew_cg {:.1} / {:.1} / {:.1} in; the GM gate holds to crew_cg {:.2} in",
+        k.name,
+        k.gm_in[0],
+        k.gm_in[1],
+        k.gm_in[2],
+        s.crew_cg_in - 2.0,
+        s.crew_cg_in,
+        s.crew_cg_in + 2.0,
+        s.threshold_in
+    ))
+}
+
 /// Winner density's lab provenance on one line, e.g.
 /// `mix 58 pcf predicted (fit); nearest tested: M2 55.6 (-2.4), final target 60.0 (+2.0); reach 2.0 pcf`.
 fn provenance_line(p: &crate::mix::MixProvenance) -> String {
@@ -595,6 +613,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
                 out.push(format!("        verification failed: {f}"));
             }
             out.extend(gate_line(w));
+            out.extend(crew_cg_line(w));
             out.extend(stands_lines(w));
             if !w.knee_split_sensitivity.is_empty() {
                 out.push(format!(
@@ -1017,6 +1036,7 @@ mod tests {
             knee_split_sensitivity: vec![],
             curves: None,
             gates: Vec::new(),
+            crew_cg: None,
         }
     }
 

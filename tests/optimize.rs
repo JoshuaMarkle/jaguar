@@ -798,3 +798,42 @@ fn winner_seats_are_planned_at_its_own_density() {
         (alone.candidate.depth_in, alone.candidate.hull_weight_lb)
     );
 }
+
+/// Crew-CG sensitivity (a diagnostic): GM is linear in the assumed crew CG, so the predicted GM
+/// at crew_cg + 2 in equals a re-analysis of the same design (same wall and seats) at that crew
+/// CG; at the threshold the setting case's GM is exactly the gate. On the wide hull loaded GM
+/// binds, so the threshold is within 0.5 in of the assumption and data_warnings says so.
+#[test]
+fn crew_cg_sensitivity_matches_a_reanalysis() {
+    let (mut p, h) = team_wide_hull();
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.unwrap();
+    let s = w.crew_cg.clone().expect("sensitivity of the winner");
+    let k = s.cases.iter().find(|k| k.name == s.threshold_case).unwrap();
+    let at_threshold = k.gm_in[1] + k.slope * (s.threshold_in - s.crew_cg_in);
+    assert!((at_threshold - p.stability.gm_min_in).abs() < 1e-9);
+    assert!(s.threshold_in - s.crew_cg_in <= optimize::CREW_CG_WARN_IN);
+    assert!(r.data_warnings.iter().any(|d| d.starts_with("WARNING crew_cg_in")), "{:?}", r.data_warnings);
+    // The same design, seats given, crew CG 2 in higher.
+    let c = &w.candidate;
+    p.material.mixes = Some(vec![c.mix.clone().unwrap()]);
+    p.search.thickness_in = [c.thickness_in, c.thickness_in, 0.125];
+    (p.search.depth_in, p.search.flare_deg) =
+        ([c.depth_in, c.depth_in, 0.5], Some([c.flare_deg, c.flare_deg, 0.5]));
+    for (lc, k) in p.load_cases.iter_mut().zip(&w.cases) {
+        lc.seats_in = Some(k.seats_in.clone());
+    }
+    p.stability.crew_cg_in += 2.0;
+    let r2 = optimize::run(&p, &h).unwrap();
+    let w2 = r2.winner.as_ref().or(r2.closest.as_ref().map(|c| &c.design)).unwrap();
+    let s2 = w2.crew_cg.as_ref().unwrap();
+    for (a, b) in s.cases.iter().zip(&s2.cases) {
+        assert!(
+            (a.gm_in[2] - b.gm_in[1]).abs() < 1e-9,
+            "{}: predicted {} analysed {}",
+            a.name,
+            a.gm_in[2],
+            b.gm_in[1]
+        );
+    }
+}

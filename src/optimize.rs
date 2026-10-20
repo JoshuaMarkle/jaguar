@@ -341,6 +341,79 @@ pub struct Winner {
     /// Every gate with its slack, closest to binding first ([`gate_slack`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gates: Vec<GateSlack>,
+    /// Loaded GM against the assumed crew CG height, a diagnostic ([`crew_cg_sensitivity`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crew_cg: Option<CrewCgSensitivity>,
+}
+
+/// How loaded GM depends on `stability.crew_cg_in`, the crew's assumed CG height (a diagnostic:
+/// no gate or physics reads it). GM is exactly linear in it: KG = (hull moment + crew x cg) /
+/// (hull + crew), and KB and BM depend on the weights and their fore-aft positions, not the CG
+/// height, so dGM/dcg = -crew / (hull + crew) per load case.
+#[derive(Debug, Clone, Serialize)]
+pub struct CrewCgSensitivity {
+    pub crew_cg_in: f64,
+    /// Per load case (input order), at the verification stations, worst seat sample.
+    pub cases: Vec<CrewCgCase>,
+    /// The crew CG height, in, above which some load case misses `gm_min_in` (at the verification
+    /// stations); below `crew_cg_in` when the design already misses it there.
+    pub threshold_in: f64,
+    /// The load case that sets `threshold_in`.
+    pub threshold_case: String,
+}
+
+/// One load case of [`CrewCgSensitivity`].
+#[derive(Debug, Clone, Serialize)]
+pub struct CrewCgCase {
+    pub name: String,
+    /// GM at crew_cg_in - 2, crew_cg_in and crew_cg_in + 2 in.
+    pub gm_in: [f64; 3],
+    /// dGM / d(crew CG), in per in: -crew / (hull + crew).
+    pub slope: f64,
+}
+
+/// [`CrewCgSensitivity`] of a design from its verification analysis `v` (hull weight and loaded
+/// GM per case at 2n-1 stations). None when the case GMs were not all computed.
+pub fn crew_cg_sensitivity(params: &Params, v: &Candidate) -> Option<CrewCgSensitivity> {
+    if v.gm_cases_in.len() != params.load_cases.len() {
+        return None;
+    }
+    let cg = params.stability.crew_cg_in;
+    let cases: Vec<CrewCgCase> = params
+        .load_cases
+        .iter()
+        .zip(&v.gm_cases_in)
+        .map(|(lc, &gm)| {
+            let crew: f64 = lc.weights_lb.iter().sum();
+            let slope = -crew / (v.hull_weight_lb + crew);
+            CrewCgCase { name: lc.name.clone(), gm_in: [gm - 2.0 * slope, gm, gm + 2.0 * slope], slope }
+        })
+        .collect();
+    let gm_min = params.stability.gm_min_in;
+    let (threshold_in, threshold_case) = cases
+        .iter()
+        .map(|k| (cg + (k.gm_in[1] - gm_min) / -k.slope, k.name.clone()))
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+    Some(CrewCgSensitivity { crew_cg_in: cg, cases, threshold_in, threshold_case })
+}
+
+/// Crew CG within this of [`CrewCgSensitivity::threshold_in`] warns: the loaded-GM gate is then
+/// set by the assumed crew CG rather than by the design.
+pub const CREW_CG_WARN_IN: f64 = 0.5;
+
+/// WARNING when the assumed crew CG is within [`CREW_CG_WARN_IN`] of the height above which the
+/// design's loaded-GM gate fails (or already past it).
+pub fn crew_cg_warning(params: &Params, s: &CrewCgSensitivity) -> Option<String> {
+    let gap = s.threshold_in - s.crew_cg_in;
+    let k = s.cases.iter().find(|k| k.name == s.threshold_case)?;
+    (gap <= CREW_CG_WARN_IN).then(|| {
+        format!(
+            "WARNING crew_cg_in {} in is {gap:+.2} in from {:.2} in, the crew CG above which loaded GM \
+             misses gm_min_in {} ({}): the GM gate is set by the assumed crew CG, not measured; each \
+             inch of crew CG moves that GM {:+.2} in",
+            s.crew_cg_in, s.threshold_in, params.stability.gm_min_in, s.threshold_case, k.slope
+        )
+    })
 }
 
 /// One gate of an analysed design and how close it is to binding (the report's binding
@@ -1435,6 +1508,7 @@ fn run_search(
     let mut data_warnings = fit.data_warnings(params.material.strength_model);
     let design = winner.as_ref().or(closest.as_ref().map(|c| &c.design));
     data_warnings.extend(design.and_then(|w| extrapolation_warning(params, &fit, &w.candidate)));
+    data_warnings.extend(design.and_then(|w| w.crew_cg.as_ref()).and_then(|s| crew_cg_warning(params, s)));
     Ok(RunResult {
         format: RESULT_FORMAT,
         params: params.clone(),
@@ -2373,6 +2447,7 @@ fn finish_winner(
         knee_split_sensitivity: Vec::new(),
         curves: None,
         gates,
+        crew_cg: crew_cg_sensitivity(params, &v),
     })
 }
 

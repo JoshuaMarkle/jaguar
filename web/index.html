@@ -2620,6 +2620,11 @@ function reportHtml(canoeImg, charts) {
   const gatesTbl = !gates.length ? '' : `<h3>Binding constraints</h3><div class="muted">Every gate of this design, closest to binding first (sorted by slack relative to the limit). Values are at the verification station count where it re-checks the gate; negative slack fails.</div>`
     + table(['gate', 'where', 'value', 'limit', 'slack', 'stations'], gates.map(g =>
       `<tr class="${g.slack < 0 ? 'gov' : ''}"><td>${esc(g.name)}</td><td>${esc(g.at || '')}</td><td>${f(g.value, 4)}</td><td>${g.at_least ? '&ge;' : '&le;'} ${f(g.limit, 3)}</td><td>${g.slack >= 0 ? '+' : ''}${f(g.slack, 4)}</td><td>${g.stations}</td></tr>`));
+  // Loaded GM against the assumed crew CG (win.crew_cg, a diagnostic).
+  const cg = win.crew_cg;
+  const cgTbl = !cg ? '' : `<h3>Crew CG sensitivity</h3><div class="muted">Loaded GM per load case at the assumed crew CG height (${f(cg.crew_cg_in, 1)} in above the keel, an assumption) and 2 in either side, at the verification stations. GM falls by crew / (hull + crew) per inch. The GM gate (${f(p.stability && p.stability.gm_min_in, 2)} in) holds up to a crew CG of <b>${f(cg.threshold_in, 2)} in</b> (${esc(cg.threshold_case)}).</div>`
+    + table(['load case', `GM at ${f(cg.crew_cg_in - 2, 1)} in`, `GM at ${f(cg.crew_cg_in, 1)} in`, `GM at ${f(cg.crew_cg_in + 2, 1)} in`, 'GM per in of crew CG'], cg.cases.map(k =>
+      `<tr class="${k.name === cg.threshold_case ? 'gov' : ''}"><td>${esc(k.name)}</td><td>${f(k.gm_in[0], 3)}</td><td>${f(k.gm_in[1], 3)}</td><td>${f(k.gm_in[2], 3)}</td><td>${f(k.slope, 3)}</td></tr>`));
   const s = result.strength, tested = p.material && p.material.strength_model === 'tested_mixes';
   const np = s ? (s.points || []).length : 0;
   // A line through 2 points is exact by construction (rms 0): no line or error is shown for it.
@@ -2656,6 +2661,7 @@ function reportHtml(canoeImg, charts) {
   ${raceSec}
   <div class="page"><h2 style="margin-top:0">Optimization data.</h2>
     ${gatesTbl}
+    ${cgTbl}
     <h3>Search space</h3>${space}
     ${conv ? `<h3>Station convergence of the winner</h3>${conv}` : ''}
     <h2>Mix data.</h2>${mix}

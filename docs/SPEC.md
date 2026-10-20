@@ -362,13 +362,22 @@ sag_max_lbin, x_sag_in, hog_max_lbin, x_hog_in, x_in, shear_lb, moment_lbin, ver
 beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, capacity_psi, dc}],
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
-gunwale_immersion_deg}]}, gates [{name, at, value, limit, at_least, slack, relative, stations}]}
+gunwale_immersion_deg}]}, gates [{name, at, value, limit, at_least, slack, relative, stations}],
+crew_cg {crew_cg_in, cases [{name, gm_in [at cg - 2, cg, cg + 2], slope}], threshold_in,
+threshold_case}}
 | null, closest, zones, ended_early, data_warnings, recheck {checked, failed}}`.
 `winner.gates`: every gate of the design with its signed slack (>= 0 passes; value - limit for a
 minimum, limit - value for a maximum), sorted by `relative` = slack / max(|limit|, 1): verified D/C
 (extrapolated, else 2n-1) vs `dc_verify`; each check's search D/C vs `dc_search`; then every other
 gate of the list (freeboard, loaded GM, empty GM, air pocket, overall beam) at 2n-1. The terminal prints the
 four closest as `binding`; the PDF report has the whole table.
+`winner.crew_cg` (a diagnostic, no gate reads it): loaded GM per load case at 2n-1 against the
+assumed `stability.crew_cg_in`. GM is exactly linear in it (KG = (hull moment + crew x cg) / (hull
++ crew); KB, BM do not depend on it): slope -crew / (hull + crew) per case (2M 2F on the team's
+hulls: -0.84 in per in). `threshold_in` = the crew CG above which some case misses `gm_min_in`.
+Terminal: one `crew CG` line; PDF: a table.
+`data_warnings` also gets a WARNING when `crew_cg_in` is within 0.5 in of that threshold (or past
+it): the GM gate is then set by the assumed crew CG.
 `data_warnings` (absent when empty): lab-data warnings, most serious first: rows that look like
 placeholders (name dummy / placeholder / fake / tbd / todo / xxx, final split outside 100-1000 psi,
 density outside 30-150 pcf, or final f'c under 500 psi), falling (negative slope) lines, weak
