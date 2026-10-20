@@ -1863,7 +1863,15 @@ async function raceGo() {
 // Hardboard tracing templates for the foam layers (or boards between them), packed onto sheets, one DXF per sheet.
 // Settings are a per-browser convenience (localStorage); a layout belongs to the result it was made from.
 const MFG_DEF = { boards: 'templates', orientation: 'flat', packing: 'blocks', foam_in: [2], foam_sheets: [[96, 48]],
-  board_in: 0.125, sheets: [[96, 48]], gap_in: 0.25, nest_inside: false, ring_in: 1, holes: true, hole_in: 0.25, kerf_in: 0, dxf_marks: false, half_canoe: false };
+  board_in: 0.125, sheets: [[96, 48]], gap_in: 0.25, nest_inside: false, ring_in: 1, holes: true, hole_in: 0.25, kerf_in: 0, dxf_marks: false, half_canoe: false, switch_in: null, keel_foam_in: null,
+  labor: { trace_in_per_min: 60, place_min: 0.5, cut_in2_per_min: 40, curve_radius_in: 12, corner_min: 0.25, sand_in3_per_min: 10, finish_ft2_per_min: 0.5, assemble_min: 2 } };
+// Shop rates for the labor estimate (time a test piece and set them): [key, label, tooltip].
+const MFG_LABOR = [['trace_in_per_min', 'trace in/min', 'Tracing along a template, inches per minute.'], ['place_min', 'place min', 'Placing a template on the foam for each trace, minutes.'],
+  ['cut_in2_per_min', 'cut in\u00b2/min', 'Hand-cutting foam: cut face per minute (length x foam thickness), e.g. 40 = 20 in/min through 2 in foam.'],
+  ['curve_radius_in', 'curve in', 'Curves are slower: a curve of radius R cuts as slowly as (1 + this / R) times its length straight.'],
+  ['corner_min', 'corner min', 'A sharp corner (over 30 deg): stop and turn the cut, minutes.'], ['sand_in3_per_min', 'sand in\u00b3/min', 'Foam sanded off per minute, cubic inches.'],
+  ['finish_ft2_per_min', 'finish ft\u00b2/min', 'Final sanding pass over the whole mold surface, square feet per minute.'], ['assemble_min', 'glue min', 'Gluing and aligning one foam piece in the stack, minutes.']];
+let mfgRates = false;
 // Saved settings, with those of the first version (one foam thickness and one size each) carried over.
 let mfgSpec = (() => {
   let v = {}; try { v = JSON.parse(store.get('mfg') || '{}') || {}; } catch (e) { v = {}; }
@@ -1876,7 +1884,8 @@ let mfgSpec = (() => {
 let mfgRes = null, mfgFor = null, mfgView = 0, mfgBusy = false, mfgErr = '';
 const MFG_SEL = [
   ['boards', 'What the hardboard is for', [['templates', 'tracing templates', 'Templates to trace and cut each foam layer; the mold is foam only.'], ['mold', 'boards in the mold', 'A hardboard sheet between each pair of foam layers, cut to the outline; the foam is sanded to the board edges.']]],
-  ['orientation', 'How the foam layers lie', [['flat', 'layers flat', 'Foam layers stacked flat, gunwale on the floor.'], ['vertical', 'layers upright', 'Foam slabs standing upright across the canoe like ribs.']]],
+  ['orientation', 'How the foam layers lie', [['flat', 'layers flat', 'Foam layers stacked flat, gunwale on the floor.'], ['vertical', 'layers upright', 'Foam slabs standing upright across the canoe like ribs.'],
+    ['hybrid', 'flat + upright keel', 'Flat layers up to a switch height, then upright slabs across the canoe on top for the bottom and keel: flat layers follow the steep sides, upright slabs the flat bottom, so much less sanding.']]],
   ['packing', 'How the outlines are cut and packed', [['blocks', 'blocks (joints line up)', 'Every layer is cut at the same places along the canoe, so the joints line up from floor to keel and the mold comes apart in whole blocks for demolding.'],
     ['continuous', 'continuous', 'Fewest pieces per layer (each template is one whole foam piece), then the fewest sheets.'],
     ['tight', 'tight (min hardboard)', 'Fewest hardboard sheets; layers may be cut into more, shorter pieces.'],
@@ -1887,12 +1896,15 @@ const MFG_NUM = [['foam_in', 'foam', 'Foam thicknesses on hand, in, comma separa
   ['board_in', 'board', 'Hardboard thickness, in (between the layers, boards in the mold only).', 'num'],
   ['sheets', 'hardboard', 'Hardboard sheet sizes on hand, length x width in, comma separated (e.g. 96x48, 48x48): a new sheet is the largest that holds the piece, then each sheet moves to the smallest size that holds its pieces.', 'sizes'],
   ['gap_in', 'gap', 'Least space between pieces and from the sheet edge, in (water-jet kerf and lead-ins).', 'num'],
+  ['switch_in', 'switch', 'Flat + upright keel: height above the floor where the flat layers stop and the keel slabs start, in (rounded to a layer top). Blank: the height leaving the least foam to sand.', 'opt'],
+  ['keel_foam_in', 'keel slabs', 'Flat + upright keel: keel slab thickness, in. Blank: the thickest foam listed. Thicker slabs mean fewer pieces but more sanding.', 'opt'],
   ['ring_in', 'ring', 'Nest inside: least width of hardboard left around pieces cut out of a template, in.', 'num'],
   ['hole_in', 'holes', 'Alignment hole size, in: holes at the 12 in stations, the same places in every layer, to mark the foam or dowel the stack.', 'num'],
   ['kerf_in', 'cut width', 'Water-jet cut width to allow for, in: outlines moved out and holes in by half of it. Leave 0 unless a test cut comes out undersize (most water-jet software compensates itself).', 'num']];
-const mfgShow = (v, kind) => kind === 'sizes' ? v.map(([a, b]) => `${a}x${b}`).join(', ') : kind === 'list' ? v.join(', ') : String(v);
+const mfgShow = (v, kind) => kind === 'opt' ? (v == null ? '' : String(v)) : kind === 'sizes' ? v.map(([a, b]) => `${a}x${b}`).join(', ') : kind === 'list' ? v.join(', ') : String(v);
 // Text -> value, or null when it does not parse.
 function mfgParse(t, kind) {
+  if (kind === 'opt') { if (t.trim() === '') return 'blank'; const v = Number(t); return isFinite(v) && v > 0 ? v : null; }
   if (kind === 'num') { const v = Number(t); return t.trim() !== '' && isFinite(v) && v >= 0 ? v : null; }
   const parts = t.split(',').map(x => x.trim()).filter(Boolean); if (!parts.length) return null;
   if (kind === 'list') { const v = parts.map(Number); return v.every(x => isFinite(x) && x > 0) ? v : null; }
@@ -1902,8 +1914,8 @@ const mfgLive = () => mfgRes && mfgFor === result ? mfgRes : null;
 function mfgCtl() {
   const m = mfgLive(), win = !!(result && result.winner), tpl = mfgSpec.boards === 'templates';
   const sels = MFG_SEL.map(([k, t, opts]) => `<select id="mfg.${k}" title="${t}">${opts.map(([v, l, d]) => `<option value="${v}" title="${d}" ${mfgSpec[k] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`).join('');
-  const nums = MFG_NUM.filter(([k]) => (tpl ? k !== 'board_in' : k !== 'foam_sheets') && (k !== 'ring_in' || mfgSpec.nest_inside) && (k !== 'hole_in' || mfgSpec.holes))
-    .map(([k, l, t, kind]) => `<span class="muted" title="${t}">${l}</span><input type="text" class="mfgn${kind === 'sizes' ? ' wide' : ''}" id="mfg.${k}" value="${esc(mfgShow(mfgSpec[k], kind))}" title="${t}">`).join('');
+  const nums = MFG_NUM.filter(([k]) => (tpl ? k !== 'board_in' : k !== 'foam_sheets') && (k !== 'ring_in' || mfgSpec.nest_inside) && (k !== 'hole_in' || mfgSpec.holes) && (!['switch_in', 'keel_foam_in'].includes(k) || mfgSpec.orientation === 'hybrid'))
+    .map(([k, l, t, kind]) => `<span class="muted" title="${t}">${l}</span><input type="text" class="mfgn${kind === 'sizes' ? ' wide' : ''}" id="mfg.${k}" value="${esc(mfgShow(mfgSpec[k], kind))}"${kind === 'opt' ? ' placeholder="auto"' : ''} title="${t}">`).join('');
   const views = m ? `<span class="muted">view</span><select id="mfgview">${['Stack', ...m.sheets.map((s, i) => `Sheet ${i + 1}: ${s.length_in}×${s.width_in} (${s.parts.length})`)].map((t, i) => `<option value="${i}" ${i === mfgView ? 'selected' : ''}>${t}</option>`).join('')}</select>
     <button type="button" class="btn" id="mfgdxf" ${mfgView ? '' : 'disabled'} title="This sheet as DXF (R12, inches; layer CUT = outlines and holes in cutting order; with DXF marks also LABEL and SHEET)">DXF</button>
     <button type="button" class="btn" id="mfgall" title="Every sheet, one DXF each">All DXF</button>
@@ -1911,15 +1923,22 @@ function mfgCtl() {
   const nest = `<span class="muted" title="Cut smaller pieces out of the middle of bigger ones: a tracing template only needs its outer edge, so it becomes a ring around them. Saves hardboard when some layers are much narrower than others; not with blocks (every block piece is as long as the others).">nest inside</span><input type="checkbox" class="switch" id="mfg.nest_inside" ${mfgSpec.nest_inside ? 'checked' : ''}>`
     + `<span class="muted" title="Alignment holes in every template at the 12 in stations">holes</span><input type="checkbox" class="switch" id="mfg.holes" ${mfgSpec.holes ? 'checked' : ''}>`
     + `<span class="muted" title="Also put the reference lines (names, centreline, ticks, sanding line, sheet edge) in the DXF on layers LABEL and SHEET. Off: cut lines only, since OMAX Layout cuts every line it imports unless told not to.">DXF marks</span><input type="checkbox" class="switch" id="mfg.dxf_marks" ${mfgSpec.dxf_marks ? 'checked' : ''}>`
-    + (tpl && mfgSpec.orientation === 'flat' ? `<span class="muted" title="For a canoe that is the same at the bow and stern: cut templates for the bow half only; each also traces the matching stern piece, turned end for end. Lay out fails if the canoe is not the same fore and aft.">half canoe</span><input type="checkbox" class="switch" id="mfg.half_canoe" ${mfgSpec.half_canoe ? 'checked' : ''}>` : '');
-  return `${sels}${nums}${nest}<button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out'}</button>${views}`;
+    + (tpl && mfgSpec.orientation !== 'vertical' ? `<span class="muted" title="For a canoe that is the same at the bow and stern: cut templates for the bow half only; each also traces the matching stern piece, turned end for end. Lay out fails if the canoe is not the same fore and aft.">half canoe</span><input type="checkbox" class="switch" id="mfg.half_canoe" ${mfgSpec.half_canoe ? 'checked' : ''}>` : '');
+  const rates = `<span class="muted" title="Shop rates for the labor estimate (tracing, cutting, sanding, gluing): time a test piece and set them">labor rates</span><input type="checkbox" class="switch" id="mfgrates" ${mfgRates ? 'checked' : ''}>`
+    + (mfgRates ? MFG_LABOR.map(([k, l, t]) => `<span class="muted" title="${t}">${l}</span><input type="text" class="mfgn" id="mfg.labor.${k}" value="${esc(String((mfgSpec.labor || MFG_DEF.labor)[k]))}" title="${t}">`).join('') : '');
+  return `${sels}${nums}${nest}${rates}<button type="button" class="btn" id="mfggo" ${mfgBusy || !win ? 'disabled' : ''}>${mfgBusy ? 'Laying out...' : 'Lay out'}</button>${views}`;
 }
 function mfgWire() {
   const save = () => store.set('mfg', JSON.stringify(mfgSpec));
-  for (const [k] of MFG_SEL) $('mfg.' + k).onchange = e => { mfgSpec[k] = e.target.value; save(); if (k === 'boards') buildTabs(); };
+  for (const [k] of MFG_SEL) $('mfg.' + k).onchange = e => { mfgSpec[k] = e.target.value; save(); if (k === 'boards' || k === 'orientation') buildTabs(); };
+  $('mfgrates').onchange = e => { mfgRates = e.target.checked; buildTabs(); };
+  for (const [k] of MFG_LABOR) {
+    const el = $('mfg.labor.' + k); if (!el) continue;
+    el.onchange = e => { const v = mfgParse(e.target.value, 'num'); el.style.outline = v === null ? `1px solid ${C.error}` : ''; if (v !== null) { mfgSpec.labor = { ...MFG_DEF.labor, ...(mfgSpec.labor || {}), [k]: v }; save(); } };
+  }
   for (const [k, , , kind] of MFG_NUM) {
     const el = $('mfg.' + k); if (!el) continue;
-    el.onchange = e => { const v = mfgParse(e.target.value, kind); el.style.outline = v === null ? `1px solid ${C.error}` : ''; if (v !== null) { mfgSpec[k] = v; save(); } };
+    el.onchange = e => { const v = mfgParse(e.target.value, kind); el.style.outline = v === null ? `1px solid ${C.error}` : ''; if (v !== null) { mfgSpec[k] = v === 'blank' ? null : v; save(); } };
   }
   $('mfg.nest_inside').onchange = e => { mfgSpec.nest_inside = e.target.checked; save(); buildTabs(); };
   $('mfg.holes').onchange = e => { mfgSpec.holes = e.target.checked; save(); buildTabs(); };
@@ -1935,17 +1954,22 @@ function mfgWire() {
 // Settings, the steps, the stack (one drawing per layer with its foam pieces and holes), every template
 // with what it traces, and every sheet in cutting order, with boxes to tick.
 function mfgPacketHtml(m) {
-  const sp = m.spec, s = m.stack, tpl = sp.boards === 'templates', flat = sp.orientation === 'flat';
-  const f = (x, n = 2) => typeof x === 'number' && isFinite(x) ? x.toFixed(n) : '-';
+  const sp = m.spec, s = m.stack, tpl = sp.boards === 'templates', flat = sp.orientation !== 'vertical', hybrid = sp.orientation === 'hybrid';
+  const keel = m.layers.filter(l => l.upright && hybrid);
+  const f = (x, n = 2) => typeof x === 'number' && isFinite(x) ? (Math.abs(x) < 0.5 * 10 ** -n ? 0 : x).toFixed(n) : '-';
   const box = '<span class="box"></span>';
   const sizes = v => v.map(([a, b]) => `${a} × ${b}`).join(', ');
   const packing = { blocks: 'blocks (joints line up)', continuous: 'continuous', tight: 'tight (min hardboard)', fewest_shapes: 'fewest shapes' }[sp.packing] || sp.packing;
   const sheetOf = {}; m.sheets.forEach((sh, k) => sh.parts.forEach(p => { sheetOf[p.piece] = k + 1; }));
   // One layer drawn in plan (flat) or as a section (upright), 680 px wide, with piece names and holes.
+  const span = (ly, k) => { const v = ly.foam.flat().map(p => p[k]); return Math.max(...v) - Math.min(...v); };
+  const ups = m.layers.filter(l => l.upright);
+  const slabSc = ups.length ? Math.min(150 / Math.max(...ups.map(l => span(l, 0)), 1), 80 / Math.max(...ups.map(l => span(l, 1)), 1)) : 1;
   const draw = ly => {
     const pts = ly.foam.flat(), xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const W = 680, sc = Math.min(W / (x1 - x0 || 1), 160 / (y1 - y0 || 1)), H = (y1 - y0) * sc + 8;
+    // Slabs drawn small, several to a row, all at one scale; flat layers full width.
+    const W = ly.upright ? 150 : 680, sc = ly.upright ? slabSc : Math.min(W / (x1 - x0 || 1), 160 / (y1 - y0 || 1)), H = (y1 - y0) * sc + 8;
     const X = x => 4 + (x - x0) * sc, Y = y => 4 + (y1 - y) * sc;
     const polys = ly.foam.map((poly, k) => {
       const d = poly.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('') + 'Z';
@@ -1953,7 +1977,7 @@ function mfgPacketHtml(m) {
       const cx = X((Math.min(...bx) + Math.max(...bx)) / 2), cy = Y((Math.min(...by) + Math.max(...by)) / 2);
       return `<path d="${d}" fill="#f3f3f3" stroke="#141414" stroke-width="1"/><text x="${cx.toFixed(1)}" y="${(cy - 6).toFixed(1)}" text-anchor="middle">${esc(ly.foam_labels[k] || '')}</text>`;
     }).join('');
-    const joints = flat ? (s.joints_in || []).map(j => `<line x1="${X(j)}" y1="0" x2="${X(j)}" y2="${H}" stroke="#707070" stroke-dasharray="4 3"/>`).join('') : '';
+    const joints = flat && !ly.upright ? (s.joints_in || []).map(j => `<line x1="${X(j)}" y1="0" x2="${X(j)}" y2="${H}" stroke="#707070" stroke-dasharray="4 3"/>`).join('') : '';
     const holes = ly.pieces.flatMap(pi => m.pieces[pi].holes).filter(() => tpl && sp.packing !== 'fewest_shapes')
       .map(h => `<circle cx="${X(h[0]).toFixed(1)}" cy="${Y(h[1]).toFixed(1)}" r="2" fill="#141414"/>`).join('');
     return `<svg width="${W + 8}" height="${H.toFixed(0)}" viewBox="0 0 ${W + 8} ${H.toFixed(0)}">${polys}${joints}${holes}</svg>`;
@@ -1966,9 +1990,17 @@ function mfgPacketHtml(m) {
       (sp.half_canoe ? ' Templates are cut for the bow half only: turn each end for end to trace the matching stern piece (listed under Templates).' : '')
       : `Lay a board, then a foam layer, and so on (thicknesses below); sand the foam to the board edges.`,
     flat ? `Stack the layers from the floor (gunwale, L1) up to the keel${sp.holes ? ', lining up the holes (a dowel through them keeps the stack straight)' : ''}${sp.packing === 'blocks' ? '; joints line up through every layer, so each block can come out whole when demolding' : ''}.`
+      + (keel.length ? ` Then stand the keel slabs ${keel[0].label} to ${keel[keel.length - 1].label} upright across the canoe on top of the flat stack (${f(s.switch_in)} in above the floor), in order from the bow, each slab's centreline on the stack's centreline${sp.holes ? ', holes lined up' : ''}.` : '')
       : `Stand the slabs in order from the bow (R1)${sp.holes ? ', lining up the holes' : ''}.`,
     tpl ? 'Sand each layer from its outline (bottom face) to the next layer up, so the steps blend into a smooth hull.' : 'Sand the foam to meet the board edges.',
   ];
+  const lb = m.labor, rt = sp.labor, hr = h => `${f(h, 1)} h`;
+  const laborHtml = `<h2>Labor estimate: about ${hr(lb.total_hr)}</h2><table><tr><th>task</th><th>counted from</th><th>time</th></tr>
+    <tr><td>Tracing</td><td>${lb.traces} tracings, ${f(lb.trace_in / 12, 0)} ft of outline at ${rt.trace_in_per_min} in/min, plus ${rt.place_min} min to place each</td><td>${hr(lb.trace_hr)}</td></tr>
+    <tr><td>Cutting</td><td>${lb.foam_pieces} foam pieces, ${f(lb.cut_in / 12, 0)} ft of cut (curves count as ${f(lb.curve_in / 12, 0)} ft more), cut face at ${rt.cut_in2_per_min} in\u00b2/min; ${lb.corners} corners at ${rt.corner_min} min</td><td>${hr(lb.cut_hr)}</td></tr>
+    <tr><td>Sanding</td><td>${f(lb.sand_in3 / 1728)} ft\u00b3 of steps to sand off at ${rt.sand_in3_per_min} in\u00b3/min (deepest step ${f(s.max_step_in)} in), plus a final pass over ${f(lb.surface_ft2, 0)} ft\u00b2 at ${rt.finish_ft2_per_min} ft\u00b2/min</td><td>${hr(lb.sand_hr)}</td></tr>
+    <tr><td>Assembly</td><td>${lb.foam_pieces} foam pieces glued and aligned at ${rt.assemble_min} min each</td><td>${hr(lb.assemble_hr)}</td></tr></table>
+    <p class="muted">Estimate from the shop rates in the Manufacture tab (labor rates); time one test piece and set them for a better figure. Water-jet time is not included.</p>`;
   const layerRows = m.layers.map(ly => `<tr><td>${box}</td><td><b>${esc(ly.label)}</b></td><td>${f(ly.pos_in)}</td><td>${f(ly.foam_in, 3)}</td><td>${ly.foam_labels.map(esc).join(', ')}</td><td>${ly.pieces.map(i => esc(m.pieces[i].label)).join(', ')}</td></tr>`).join('');
   const tplRows = m.pieces.map((p, i) => `<tr><td>${box}</td><td>${box}</td><td><b>${esc(p.label)}</b></td><td>${sheetOf[i] || '-'}</td><td>${p.traces.map(esc).join(', ')}</td><td>${p.holes.length}</td></tr>`).join('');
   const sheetBlocks = m.sheets.map((sh, k) => {
@@ -1988,20 +2020,23 @@ function mfgPacketHtml(m) {
   const css = `body{font:10pt -apple-system,"Helvetica Neue",Arial,sans-serif;color:#141414;margin:16mm}h1{font-size:16pt;margin:0 0 2pt}h2{font-size:12pt;margin:14pt 0 4pt;border-bottom:1px solid #e0e0e0}h3{font-size:10pt;margin:10pt 0 4pt}
     .muted{color:#707070}table{border-collapse:collapse;width:100%;font-size:9pt}td,th{border-bottom:1px solid #e0e0e0;padding:3pt 4pt;text-align:left;vertical-align:top}
     .box{display:inline-block;width:9pt;height:9pt;border:1px solid #141414;vertical-align:-1pt}ol li{margin:3pt 0}.layer,.sheet{break-inside:avoid}svg text{font:9px sans-serif}
-    .kv{display:grid;grid-template-columns:160px 1fr;gap:2pt 8pt}`;
+    .kv{display:grid;grid-template-columns:160px 1fr;gap:2pt 8pt}.slab{display:inline-block;margin:4pt 6pt 4pt 0;vertical-align:top;font-size:8pt}`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(m.hull)} shop packet</title><style>${css}</style></head><body>
     <h1>Mold shop packet: ${esc(m.hull)}</h1><div class="muted">${new Date().toLocaleString()} · Generated by JAGUAR</div>
     <h2>Settings</h2><div class="kv">
       <span class="muted">Hardboard for</span><span>${tpl ? 'tracing templates (foam-only mold)' : 'boards between the foam layers'}</span>
-      <span class="muted">Layers</span><span>${flat ? 'flat, gunwale on the floor' : 'upright across the canoe'}; packing ${packing}${sp.half_canoe ? '; bow half cut, stern traced from it' : ''}${sp.nest_inside ? `; pieces cut out of others (ring ${sp.ring_in} in)` : ''}</span>
-      <span class="muted">Foam</span><span>${s.foam_layers} layers, ${s.foam_order_in.join(' + ')} in (${f(s.over_in)} in over); ${s.foam_pieces} pieces; sheets ${sizes(sp.foam_sheets)} in</span>
+      <span class="muted">Layers</span><span>${hybrid ? (keel.length ? `flat up to ${f(s.switch_in)} in above the floor, then ${keel.length} upright keel slabs ${f(keel[0].foam_in, 3)} in thick` : 'flat (no keel slabs needed)') : flat ? 'flat, gunwale on the floor' : 'upright across the canoe'}; packing ${packing}${sp.half_canoe ? '; bow half cut, stern traced from it' : ''}${sp.nest_inside ? `; pieces cut out of others (ring ${sp.ring_in} in)` : ''}</span>
+      <span class="muted">Foam</span><span>${s.foam_layers} layers, ${keel.length ? `${s.foam_order_in.slice(0, -keel.length).join(' + ')} in flat + ${keel.length} keel slabs` : `${s.foam_order_in.join(' + ')} in (${f(s.over_in)} in over)`}; ${s.foam_pieces} pieces; sheets ${sizes(sp.foam_sheets)} in</span>
       <span class="muted">Mold</span><span>${f(s.height_in)} in ${flat ? 'high' : 'long'}, inner beam ${f(s.beam_in, 1)} in; hull less the ${s.wall_in} in wall</span>
+      <span class="muted">Sanding</span><span>about ${f(s.sand_ft3)} ft\u00b3 of foam to sand off after cutting (estimate)</span>
       <span class="muted">Hardboard</span><span>${m.pieces.length} pieces on ${m.sheets.length} sheets (${(100 * m.utilization).toFixed(0)}% used); gap ${sp.gap_in} in${sp.holes ? `; ${sp.hole_in} in alignment holes` : ''}${sp.kerf_in ? `; cut width ${sp.kerf_in} in allowed for` : ''}</span>
       ${flat && s.joints_in.length ? `<span class="muted">Block joints</span><span>${s.joints_in.map(j => f(j, 2)).join(', ')} in from the bow end of the mold</span>` : ''}
     </div>
     <h2>Steps</h2><ol>${steps.map(t => `<li>${box} ${t}</li>`).join('')}</ol>
-    <h2>Stack</h2><table><tr><th></th><th>layer</th><th>${flat ? 'underside above floor, in' : 'bow face x, in'}</th><th>foam, in</th><th>foam pieces</th><th>templates</th></tr>${layerRows}</table>
-    ${m.layers.map(ly => `<div class="layer"><h3>${esc(ly.label)} <span class="muted">${f(ly.foam_in, 3)} in foam, ${flat ? 'from ' + f(ly.pos_in) + ' in above the floor' : 'at x = ' + f(ly.pos_in) + ' in'}</span></h3>${draw(ly)}</div>`).join('')}
+    ${laborHtml}
+    <h2>Stack</h2><table><tr><th></th><th>layer</th><th>${hybrid ? 'height (flat) / x (keel), in' : flat ? 'underside above floor, in' : 'bow face x, in'}</th><th>foam, in</th><th>foam pieces</th><th>templates</th></tr>${layerRows}</table>
+    ${m.layers.filter(ly => !ly.upright).map(ly => `<div class="layer"><h3>${esc(ly.label)} <span class="muted">${f(ly.foam_in, 3)} in foam, from ${f(ly.pos_in)} in above the floor</span></h3>${draw(ly)}</div>`).join('')}
+    <div>${m.layers.filter(ly => ly.upright).map(ly => `<div class="layer slab"><b>${esc(ly.label)}</b> <span class="muted">x ${f(ly.pos_in, 1)}</span><br>${draw(ly)}</div>`).join('')}</div>
     <h2>Templates</h2><table><tr><th>cut</th><th>traced</th><th>template</th><th>sheet</th><th>traces</th><th>holes</th></tr>${tplRows}</table>
     <p class="muted">S / P = starboard / port side of the foam piece; (flip) = turn the template over.</p>
     <h2>Hardboard sheets</h2>${sheetBlocks}
@@ -2054,10 +2089,10 @@ function plotMfg(ctx, W, H) {
   const m = mfgLive();
   if (!m) return msg(ctx, W, H, mfgBusy ? 'Laying out the hardboard...' : mfgErr
     || (result && result.winner ? 'Set the foam and hardboard sizes and the packing, then press "Lay out".' : 'Run an optimization first, then lay out its mold.'));
-  const s = m.stack, sp = m.spec, flat = sp.orientation === 'flat', tpl = sp.boards === 'templates', used = (100 * m.utilization).toFixed(0);
+  const s = m.stack, sp = m.spec, flat = sp.orientation !== 'vertical', tpl = sp.boards === 'templates', used = (100 * m.utilization).toFixed(0);
   const what = tpl ? `${m.pieces.length} hardboard templates` : `${m.pieces.length} hardboard pieces (${s.layers} boards between the foam)`;
   ctx.fillStyle = C.muted; ctx.font = font(11);
-  ctx.fillText(`Male foam mold, upside down on the gunwale: ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}${tpl ? ` (${s.foam_pieces} foam pieces)` : ''}, ${s.height_in.toFixed(3)} in ${flat ? 'high' : 'long'}; inner surface = hull less the ${s.wall_in} in wall. ${what} on ${m.sheets.length} hardboard sheets, ${used}% used. Foam layers ${s.foam_order_in.join(' + ')} in (${s.over_in.toFixed(2)} in over).`, 12, 16);
+  ctx.fillText(`Male foam mold, upside down on the gunwale: ${s.foam_layers} foam ${flat ? 'layers' : 'slabs'}${tpl ? ` (${s.foam_pieces} foam pieces)` : ''}, ${s.height_in.toFixed(3)} in ${flat ? 'high' : 'long'}; inner surface = hull less the ${s.wall_in} in wall. ${what} on ${m.sheets.length} hardboard sheets, ${used}% used. Hand work about ${m.labor.total_hr.toFixed(1)} h (estimate); deepest step before sanding ${s.max_step_in.toFixed(2)} in.`, 12, 16);
   const poly = (pts, X, Y) => { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(X(x), Y(y)) : ctx.moveTo(X(x), Y(y))); ctx.closePath(); };
   if (mfgView > 0) {
     const sh = m.sheets[mfgView - 1], L = sh.length_in, Wd = sh.width_in;
@@ -2085,10 +2120,19 @@ function plotMfg(ctx, W, H) {
   // Stack view. Flat: each layer's foam pieces in plan, floor (gunwale, L1) at the bottom, the joints visible.
   // Upright: the slabs in side view, each from the floor to the inner keel.
   if (flat) {
-    const pts = m.layers.flatMap(l => l.foam.flat()), xs = pts.map(q => q[0]), x0 = Math.min(...xs), x1 = Math.max(...xs);
-    const n = m.layers.length, rowH = (H - 50) / n, yMax = Math.max(...pts.map(q => Math.abs(q[1]))) || 1;
+    // Hybrid: the keel slabs as one row on top, in side view (x along, height above the switch).
+    const flatL = m.layers.filter(l => !l.upright), keel = m.layers.filter(l => l.upright);
+    const pts = flatL.flatMap(l => l.foam.flat()), xs = pts.map(q => q[0]), x0 = Math.min(...xs), x1 = Math.max(...xs);
+    const n = flatL.length + (keel.length ? 1 : 0), rowH = (H - 50) / n, yMax = Math.max(...pts.map(q => Math.abs(q[1]))) || 1;
     const sc = Math.min((W - 110) / (x1 - x0), (rowH - 6) / (2 * yMax));
-    m.layers.forEach((ly, i) => {
+    if (keel.length) {
+      const cy = H - 22 - rowH * (flatL.length + 1) + 3, X = x => 90 + (x - x0) * sc, base = s.switch_in;
+      const top = keel.map(l => Math.max(...l.foam[0].map(q => q[1]))), hs = (rowH - 6) / Math.max(...top.map(t => t - base), 1);
+      ctx.fillStyle = C.soft; ctx.textAlign = 'left'; ctx.fillText(`K1-K${keel.length}  ${base.toFixed(2)} in`, 8, cy + rowH / 2);
+      keel.forEach((l, i) => { ctx.fillStyle = C.grid; ctx.strokeStyle = C.ink; const y = cy + rowH - 3 - (top[i] - base) * hs;
+        ctx.fillRect(X(l.pos_in), y, l.thick_in * sc, (top[i] - base) * hs); ctx.strokeRect(X(l.pos_in), y, l.thick_in * sc, (top[i] - base) * hs); });
+    }
+    flatL.forEach((ly, i) => {
       const cy = H - 22 - rowH * (i + 0.5), X = x => 90 + (x - x0) * sc, Y = y => cy - y * sc;
       ctx.fillStyle = C.soft; ctx.textAlign = 'left'; ctx.fillText(`${ly.label}  ${ly.pos_in.toFixed(2)} in`, 8, cy + 4);
       for (const f of ly.foam) { poly(f, X, Y); ctx.fillStyle = C.grid; ctx.fill(); ctx.strokeStyle = C.ink; ctx.stroke(); }
@@ -2102,7 +2146,7 @@ function plotMfg(ctx, W, H) {
       [x0, ...J, x1].forEach((a, k, e) => { if (k < e.length - 1) ctx.fillText(`block ${k + 1}`, X((a + e[k + 1]) / 2), 34); });
       ctx.textAlign = 'left';
     }
-    ctx.fillStyle = C.muted; ctx.fillText(`${tpl ? 'Foam layers' : 'Boards'} from the floor (gunwale, L1) up toward the keel, ${tpl ? 'each foam piece one template' : 'joints between the boards'}; height = underside above the floor. Bow at left.`, 12, H - 6);
+    ctx.fillStyle = C.muted; ctx.fillText(`${keel.length ? `Keel slabs (side view) on top, ${s.sand_ft3.toFixed(2)} ft\u00b3 to sand (estimate). ` : ''}${tpl ? 'Foam layers' : 'Boards'} from the floor (gunwale, L1) up toward the keel, ${tpl ? 'each foam piece one template' : 'joints between the boards'}; height = underside above the floor. Bow at left.`, 12, H - 6);
   } else {
     const xs = m.layers.map(l => l.pos_in), hs = m.layers.map(l => Math.max(...l.foam[0].map(q => q[1])));
     const r = { l: 64, t: 34, w: W - 84, h: H - 80 };

@@ -352,6 +352,82 @@ fn half_canoe_traces_every_foam_piece_from_bow_half_templates() {
 }
 
 #[test]
+fn hybrid_flat_layers_then_keel_slabs_on_top() {
+    let ex = example();
+    // 6 in keel slabs keep the piece count (and the debug-build nesting) small.
+    let spec = MoldSpec { orientation: Orientation::Hybrid, keel_foam_in: Some(6.0), ..MoldSpec::default() };
+    let l = from_result(&ex, &spec).unwrap();
+    let st = &l.stack;
+    let sw = st.switch_in.expect("keel slabs");
+    assert!(sw > 0.0 && sw < st.height_in, "switch {sw} of {}", st.height_in);
+    let (flat, keel): (Vec<_>, Vec<_>) = l.layers.iter().partition(|ly| !ly.upright);
+    // The flat stack ends exactly at the switch; every keel slab stands on it, reaches no higher
+    // than the keel, and the slabs follow one another every 6 in.
+    let last = flat.last().unwrap();
+    assert!((last.pos_in + last.foam_in - sw).abs() < 1e-9);
+    assert!(!keel.is_empty());
+    for ly in &keel {
+        let lo = ly.foam[0].iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+        let hi = ly.foam[0].iter().map(|p| p[1]).fold(0.0, f64::max);
+        assert!((lo - sw).abs() < 1e-9 && hi <= st.height_in + 1e-6 && hi > sw, "{}: {lo}..{hi}", ly.label);
+        assert_eq!(ly.foam_in, 6.0);
+    }
+    for w in keel.windows(2) {
+        assert!((w[1].pos_in - w[0].pos_in - 6.0).abs() < 1e-9);
+    }
+    assert_eq!(st.foam_order_in.len(), flat.len() + keel.len());
+    check_sheets(&l);
+    // Much less to sand than all flat (flat bottoms step a whole layer under flat layers), so less
+    // sanding time. (The deepest step can still be deeper: a 6 in slab near the bow.)
+    let all_flat = flat_sand(&ex);
+    assert!(st.sand_ft3 < 0.5 * all_flat, "{} vs {all_flat}", st.sand_ft3);
+    assert!(l.labor.sand_hr < crate::flat().labor.sand_hr);
+    assert!(st.max_step_in <= 6.0 + 1e-9);
+    // A given switch is rounded to a layer top.
+    let six = from_result(&ex, &MoldSpec { switch_in: Some(5.0), ..spec.clone() }).unwrap();
+    assert_eq!(six.stack.switch_in, Some(6.0));
+    // Half canoe: the aft slabs are traced with the bow slabs' templates; every foam piece once.
+    let half = from_result(&ex, &MoldSpec { half_canoe: true, ..spec.clone() }).unwrap();
+    assert!(half.pieces.len() < l.pieces.len());
+    let mut traced: Vec<String> = half
+        .pieces
+        .iter()
+        .flat_map(|p| &p.traces)
+        .map(|t| t.split(' ').next().unwrap().to_string())
+        .collect();
+    traced.sort();
+    let mut foam: Vec<String> = half.layers.iter().flat_map(|ly| ly.foam_labels.clone()).collect();
+    foam.sort();
+    assert_eq!(traced, foam);
+    // Only for tracing templates.
+    assert!(from_result(&ex, &MoldSpec { boards: Boards::Mold, ..spec }).is_err());
+}
+
+/// The default all-flat layout's sanding estimate.
+fn flat_sand(_ex: &str) -> f64 {
+    flat().stack.sand_ft3
+}
+
+#[test]
+fn labor_estimate_adds_up_and_follows_the_layout() {
+    let l = flat();
+    let lb = &l.labor;
+    let parts = lb.trace_hr + lb.cut_hr + lb.sand_hr + lb.assemble_hr;
+    assert!((lb.total_hr - parts).abs() < 1e-9 && lb.total_hr > 0.0);
+    assert_eq!(lb.traces, l.pieces.iter().map(|p| p.traces.len()).sum::<usize>());
+    assert_eq!(lb.foam_pieces, l.stack.foam_pieces);
+    assert!((lb.sand_in3 - 1728.0 * l.stack.sand_ft3).abs() < 1e-6);
+    // Flat layers step a flat bottom by a whole layer.
+    assert!((l.stack.max_step_in - 2.0).abs() < 0.05, "{}", l.stack.max_step_in);
+    // Twice as fast sanding halves the step-sanding part, nothing else.
+    let rates = jaguar::manufacture::LaborRates { sand_in3_per_min: 20.0, ..Default::default() };
+    let fast = from_result(&example(), &MoldSpec { labor: rates, ..MoldSpec::default() }).unwrap();
+    let saved = lb.sand_in3 / 20.0 / 60.0;
+    assert!((lb.sand_hr - fast.labor.sand_hr - saved).abs() < 1e-9);
+    assert!((lb.cut_hr - fast.labor.cut_hr).abs() < 1e-9);
+}
+
+#[test]
 fn boards_in_the_mold_sit_between_the_foam_layers() {
     let spec = MoldSpec { boards: Boards::Mold, ..MoldSpec::default() };
     let l = from_result(&example(), &spec).unwrap();

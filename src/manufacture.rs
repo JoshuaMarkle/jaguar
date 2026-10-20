@@ -25,7 +25,8 @@
 //! symmetric about the centreline, until the layer no longer reaches the keel; a layer is cut
 //! across into equal lengths. [`Orientation::Vertical`]: layers stand upright across the canoe
 //! like ribs, from the bow end xa of the hollow run, each a cross-section closed by the gunwale
-//! line on the floor.
+//! line on the floor. [`Orientation::Hybrid`]: flat layers up to a switch height, then upright
+//! keel slabs on them ([`keel_slabs`]); the switch defaults to the least sanding ([`sand_in3`]).
 //!
 //! [`Packing`]: `Blocks` (default) cuts every flat layer at the same joints (the fewest equal
 //! lengths for which every layer's piece in every block fits), so the joints line up from floor to
@@ -84,6 +85,9 @@ pub enum Orientation {
     Flat,
     /// Layers standing upright across the canoe (cross-section outlines).
     Vertical,
+    /// Flat layers up to a switch height, then upright keel slabs across the canoe standing on
+    /// them: flat layers follow the steep sides, upright slabs the flat bottom and keel.
+    Hybrid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +151,70 @@ pub struct MoldSpec {
     /// Double-symmetric canoe (the same fore and aft): cut templates for the bow half only; each
     /// also traces the matching stern piece, turned end for end. Flat tracing templates only.
     pub half_canoe: bool,
+    /// Hybrid: height above the floor where the flat layers stop (rounded to a layer top);
+    /// None = the one leaving the least foam to sand ([`sand_in3`]).
+    pub switch_in: Option<f64>,
+    /// Hybrid: keel slab thickness; None = the thickest foam on hand.
+    pub keel_foam_in: Option<f64>,
+    /// Shop rates for the labor estimate ([`Labor`]).
+    pub labor: LaborRates,
+}
+
+/// How fast the shop works, for the labor estimate. Guesses until the team times a test piece.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LaborRates {
+    /// Tracing along a template, in/min, and placing the template for each trace, min.
+    pub trace_in_per_min: f64,
+    pub place_min: f64,
+    /// Hand-cutting foam: cut face per minute (length x foam thickness), in^2/min.
+    pub cut_in2_per_min: f64,
+    /// A curve of radius R cuts as slowly as (1 + curve_radius_in / R) times its length straight.
+    pub curve_radius_in: f64,
+    /// A corner (a turn of over 30 deg at one point): stop and turn the cut, min.
+    pub corner_min: f64,
+    /// Sanding: foam removed, in^3/min, and the final pass over the whole surface, ft^2/min.
+    pub sand_in3_per_min: f64,
+    pub finish_ft2_per_min: f64,
+    /// Gluing and aligning one foam piece in the stack, min.
+    pub assemble_min: f64,
+}
+
+impl Default for LaborRates {
+    fn default() -> Self {
+        LaborRates {
+            trace_in_per_min: 60.0,
+            place_min: 0.5,
+            cut_in2_per_min: 40.0,
+            curve_radius_in: 12.0,
+            corner_min: 0.25,
+            sand_in3_per_min: 10.0,
+            finish_ft2_per_min: 0.5,
+            assemble_min: 2.0,
+        }
+    }
+}
+
+/// Estimated hand labor for the mold, hours, and what it is counted from.
+#[derive(Debug, Clone, Serialize)]
+pub struct Labor {
+    pub trace_hr: f64,
+    pub cut_hr: f64,
+    pub sand_hr: f64,
+    pub assemble_hr: f64,
+    pub total_hr: f64,
+    /// Template tracings, and the outline traced in all, in.
+    pub traces: usize,
+    pub trace_in: f64,
+    /// Foam cut in all (outline length), in; the extra length its curves count as, in; corners.
+    pub cut_in: f64,
+    pub curve_in: f64,
+    pub corners: usize,
+    /// Foam to sand off, in^3, and the mold surface given the final pass, ft^2.
+    pub sand_in3: f64,
+    pub surface_ft2: f64,
+    /// Foam pieces glued into the stack.
+    pub foam_pieces: usize,
 }
 
 impl Default for MoldSpec {
@@ -167,6 +235,9 @@ impl Default for MoldSpec {
             kerf_in: 0.0,
             dxf_marks: false,
             half_canoe: false,
+            switch_in: None,
+            keel_foam_in: None,
+            labor: LaborRates::default(),
         }
     }
 }
@@ -196,9 +267,35 @@ impl MoldSpec {
             "half canoe needs tracing templates: boards in the mold are each part of the mold"
         );
         ensure!(
-            !self.half_canoe || self.orientation == Orientation::Flat,
+            !self.half_canoe || self.orientation != Orientation::Vertical,
             "half canoe is for flat layers (upright slabs do not mirror fore and aft)"
         );
+        ensure!(
+            self.orientation != Orientation::Hybrid || self.templates(),
+            "flat + upright keel needs tracing templates"
+        );
+        let r = &self.labor;
+        for (v, what) in [
+            (r.trace_in_per_min, "tracing speed"),
+            (r.cut_in2_per_min, "cutting rate"),
+            (r.sand_in3_per_min, "sanding rate"),
+            (r.finish_ft2_per_min, "finish sanding rate"),
+        ] {
+            pos(v, what)?;
+        }
+        for (v, what) in [
+            (r.place_min, "template placing time"),
+            (r.curve_radius_in, "curve radius"),
+            (r.corner_min, "corner time"),
+            (r.assemble_min, "assembly time"),
+        ] {
+            ensure!(v.is_finite() && v >= 0.0, "{what} must be >= 0, got {v}");
+        }
+        for (v, what) in [(self.switch_in, "switch height"), (self.keel_foam_in, "keel slab thickness")] {
+            if let Some(v) = v {
+                pos(v, what)?;
+            }
+        }
         ensure!(
             self.kerf_in.is_finite()
                 && self.kerf_in >= 0.0
@@ -344,6 +441,8 @@ pub struct Layer {
     pub thick_in: f64,
     /// Thickness of the foam layer it belongs to (templates) or that sits on it (mold).
     pub foam_in: f64,
+    /// Stands upright across the canoe (pos_in is then the x of its bow face).
+    pub upright: bool,
     /// Foam pieces (templates) or boards (mold) of the layer, bow to stern, in the layer frame.
     pub foam: Vec<Vec<Pt>>,
     /// Names of those pieces (`L3-2`, `R7`).
@@ -392,6 +491,12 @@ pub struct Stack {
     /// far the stack runs past the mold.
     pub foam_order_in: Vec<f64>,
     pub over_in: f64,
+    /// Hybrid: height above the floor where the flat layers end and the keel slabs stand.
+    pub switch_in: Option<f64>,
+    /// Foam left to sand off after cutting, estimated ([`sand_in3`]), ft^3, and the deepest step
+    /// the cut foam leaves (how far it strays from the hull before sanding), in.
+    pub sand_ft3: f64,
+    pub max_step_in: f64,
     /// Flat: floor to the top of the inner keel. Upright: bow to stern of the hollow run.
     pub height_in: f64,
     /// Hollow run length and inner beam at the gunwale.
@@ -413,6 +518,8 @@ pub struct Layout {
     pub sheets: Vec<Sheet>,
     /// Pieces area over the sheets' area.
     pub utilization: f64,
+    /// Estimated hand labor.
+    pub labor: Labor,
 }
 
 /// Mold boards for a `jaguar-result/1` winner. Err if it has no winner, or a piece fits no sheet.
@@ -426,7 +533,7 @@ pub fn from_result(text: &str, spec: &MoldSpec) -> Result<Layout> {
 /// sanding line; upright, its half section (y, height) and the sanding half section.
 enum Shape {
     Flat { runs: Vec<Vec<Pt>>, guide: Vec<Vec<Pt>> },
-    Upright { half: Vec<Pt>, guide: Option<Vec<Pt>>, x: f64 },
+    Upright { half: Vec<Pt>, guide: Option<Vec<Pt>>, x: f64, grid: Option<i64> },
 }
 
 /// Mold boards for `hull` with the wall and depth of `es` (`es.thickness_in` required).
@@ -441,10 +548,39 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     let keel_min = rows.iter().map(|r| r.1.last().unwrap().1).fold(f64::INFINITY, f64::min);
     let beam = 2.0 * rows.iter().map(|r| r.1[0].0).fold(0.0, f64::max);
     let tpl = spec.templates();
-    let flat = spec.orientation == Orientation::Flat;
+    let hybrid = spec.orientation == Orientation::Hybrid;
+    // Flat layers (all of them, or below the switch with Hybrid).
+    let flat = spec.orientation != Orientation::Vertical;
     let total = if flat { z_top - keel_min } else { xb - xa };
     let board = if tpl { 0.0 } else { spec.board_in };
-    let order = foam_order(&spec.foam_in, board, total, flat);
+    let facets = facets(&rows, z_top);
+    let keel_t = spec.keel_foam_in.unwrap_or_else(|| spec.foam_in.iter().copied().fold(0.0, f64::max));
+    let hybrid_sand = |order: &[f64], switch: f64| {
+        sand_in3(&facets, |f| if f.h > switch { keel_t * f.nx } else { layer_at(order, f.h) * f.nz })
+    };
+    // Hybrid: the flat layers stop at a layer top, the given switch or the one leaving the least
+    // foam to sand (the whole height counts as all flat).
+    let (order, switch) = if hybrid {
+        match spec.switch_in {
+            Some(h) => {
+                let o = foam_order(&spec.foam_in, 0.0, h.min(total), true);
+                let top = o.iter().sum::<f64>();
+                (o, top)
+            }
+            None => {
+                let full = foam_order(&spec.foam_in, 0.0, total, true);
+                let k = (0..=full.len())
+                    .min_by(|&a, &b| {
+                        let (sa, sb) = (full[..a].iter().sum::<f64>(), full[..b].iter().sum::<f64>());
+                        hybrid_sand(&full, sa).total_cmp(&hybrid_sand(&full, sb)).then(b.cmp(&a))
+                    })
+                    .unwrap();
+                (full[..k].to_vec(), full[..k].iter().sum::<f64>())
+            }
+        }
+    } else {
+        (foam_order(&spec.foam_in, board, total, flat), f64::INFINITY)
+    };
     // Layer k starts at the sum of the layers (and boards) below / ahead of it.
     let start = |k: usize| order[..k.min(order.len())].iter().map(|t| t + board).sum::<f64>();
     let wl =
@@ -483,6 +619,9 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
             };
             shapes.push((label, pos, ft, shape));
         }
+        if hybrid && switch < total - 1e-6 {
+            shapes.extend(keel_slabs(&rows, z_top, switch, keel_t));
+        }
     } else {
         while shapes.len() < order.len() {
             let (pos, ft) = (xa + start(shapes.len()), order[shapes.len()]);
@@ -494,13 +633,13 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
                 // Both faces of the slab; the template is the bigger section, the other etched.
                 let (s0, s1) = (section(&rows, pos, z_top), section(&rows, (pos + ft).min(xb), z_top));
                 let (big, small) = if half_area(&s0) >= half_area(&s1) { (s0, s1) } else { (s1, s0) };
-                Shape::Upright { half: big, guide: Some(small), x: pos }
+                Shape::Upright { half: big, guide: Some(small), x: pos, grid: None }
             } else {
                 if pos + spec.board_in > xb + 1e-9 {
                     break;
                 }
                 let x = pos + 0.5 * spec.board_in;
-                Shape::Upright { half: section(&rows, x, z_top), guide: None, x }
+                Shape::Upright { half: section(&rows, x, z_top), guide: None, x, grid: None }
             };
             shapes.push((label, pos, ft, shape));
         }
@@ -535,6 +674,8 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     let mid = spec.half_canoe.then_some(0.5 * (xa + xb));
     let build = |max_len: Option<f64>| -> Result<(Vec<Layer>, Vec<Piece>)> {
         let (mut ls, mut ps) = (vec![], vec![]);
+        // Half canoe: keel slab grid index -> (its template, its section).
+        let mut slab_tpl: std::collections::BTreeMap<i64, (usize, Vec<Pt>)> = Default::default();
         for (li, (label, pos, ft, shape)) in shapes.iter().enumerate() {
             let thick_in = if tpl { *ft } else { spec.board_in };
             let mut layer = Layer {
@@ -542,6 +683,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
                 pos_in: *pos,
                 thick_in,
                 foam_in: *ft,
+                upright: matches!(shape, Shape::Upright { .. }),
                 foam: vec![],
                 foam_labels: vec![],
                 pieces: vec![],
@@ -565,7 +707,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
                     }
                     flat_pieces(&layer_cuts, li, spec, mid, &mut layer.pieces, &mut ps)?;
                 }
-                Shape::Upright { half, guide, x } => {
+                Shape::Upright { half, guide, x, grid } => {
                     let full = close_section(half);
                     ensure!(
                         !tpl || fits_foam(&full, spec),
@@ -576,7 +718,47 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
                     );
                     layer.foam.push(full);
                     layer.foam_labels.push(label.clone());
-                    rib_pieces(half, guide.as_deref(), *x, label, li, spec, &mut layer.pieces, &mut ps)?;
+                    // Half canoe: a keel slab aft of midships (grid k >= 0) is the mirror image of
+                    // slab -k-1 at the bow and is traced with its template.
+                    match grid.filter(|&g| mid.is_some() && g >= 0) {
+                        Some(g) => {
+                            let (pi, bow) = slab_tpl.get(&(-g - 1)).with_context(|| {
+                                format!("half canoe: {label} has no matching keel slab at the bow (the canoe is not the same fore and aft); turn half canoe off")
+                            })?;
+                            ensure!(
+                                bow.len() == half.len()
+                                    && bow
+                                        .iter()
+                                        .zip(half)
+                                        .all(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs())
+                                            <= SAME_SHAPE_IN),
+                                "half canoe: {label} differs from its bow match by more than {SAME_SHAPE_IN} in (the canoe is not the same fore and aft); turn half canoe off"
+                            );
+                            let p = &mut ps[*pi];
+                            if spec.packing == Packing::FewestShapes {
+                                p.traces.extend([format!("{label} P"), format!("{label} S (flip)")]);
+                            } else {
+                                p.traces.push(format!("{label} (other face up)"));
+                            }
+                            p.text = format!("{} x{}", p.label, p.traces.len());
+                            layer.pieces.push(*pi);
+                        }
+                        None => {
+                            if let Some(g) = grid {
+                                slab_tpl.insert(*g, (ps.len(), half.clone()));
+                            }
+                            rib_pieces(
+                                half,
+                                guide.as_deref(),
+                                *x,
+                                label,
+                                li,
+                                spec,
+                                &mut layer.pieces,
+                                &mut ps,
+                            )?;
+                        }
+                    }
                 }
             }
             ls.push(layer);
@@ -636,15 +818,34 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     let foam_pieces = layers.iter().map(|l| l.foam.len()).sum();
     let joints: Vec<f64> = edges.as_ref().map_or(vec![], |e| e[1..e.len() - 1].to_vec());
     let n = layers.len();
-    let over = order.iter().map(|t| t + board).sum::<f64>() - total;
+    let keel_n = layers.iter().filter(|l| l.upright && hybrid).count();
+    // With keel slabs the stack reaches the keel through them, not past it.
+    let over = if keel_n > 0 { 0.0 } else { order.iter().map(|t| t + board).sum::<f64>() - total };
+    let pitch_at = |o: &[f64], d: f64| layer_at(o, d) + board;
+    let sw = if keel_n > 0 { switch } else { f64::INFINITY };
+    let step = |f: &Facet| match spec.orientation {
+        Orientation::Flat => pitch_at(&order, f.h) * f.nz,
+        Orientation::Vertical => pitch_at(&order, f.x - xa) * f.nx,
+        Orientation::Hybrid if f.h > sw => keel_t * f.nx,
+        Orientation::Hybrid => layer_at(&order, f.h) * f.nz,
+    };
+    let sand_vol = sand_in3(&facets, step);
+    let sand = sand_vol / 1728.0;
+    let max_step = facets.iter().map(step).fold(0.0, f64::max);
+    let surface_ft2 = facets.iter().map(|f| f.area).sum::<f64>() / 144.0;
     let stack = if flat {
+        let mut foam_order_in = order.clone();
+        foam_order_in.extend(std::iter::repeat_n(keel_t, keel_n));
         Stack {
             layers: n,
-            foam_layers: order.len(),
+            foam_layers: foam_order_in.len(),
             foam_pieces,
             joints_in: joints.clone(),
-            foam_order_in: order.clone(),
+            foam_order_in,
             over_in: over,
+            switch_in: (keel_n > 0).then_some(switch),
+            sand_ft3: sand,
+            max_step_in: max_step,
             height_in: total,
             length_in: xb - xa,
             beam_in: beam,
@@ -659,6 +860,9 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
             joints_in: joints.clone(),
             foam_order_in: order.clone(),
             over_in: over,
+            switch_in: None,
+            sand_ft3: sand,
+            max_step_in: max_step,
             height_in: xb - xa,
             length_in: xb - xa,
             beam_in: beam,
@@ -668,6 +872,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     };
     let used: f64 = sheets.iter().map(|s| s.used_in2).sum();
     let utilization = used / sheets.iter().map(|s| s.length_in * s.width_in).sum::<f64>();
+    let labor = labor(&layers, &pieces, sand_vol, surface_ft2, spec);
     Ok(Layout {
         format: MOLD_FORMAT.into(),
         hull: hull.name.clone(),
@@ -677,6 +882,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
         pieces,
         sheets,
         utilization,
+        labor,
     })
 }
 
@@ -1266,6 +1472,189 @@ fn edge_dist(poly: &[Pt], p: Pt) -> f64 {
         .fold(f64::INFINITY, f64::min)
 }
 
+/// A facet of the inner surface (both sides counted): area, |normal| along x and z, centre x and
+/// height above the floor.
+struct Facet {
+    area: f64,
+    nx: f64,
+    nz: f64,
+    x: f64,
+    h: f64,
+}
+
+fn facets(rows: &[NetRow], z_top: f64) -> Vec<Facet> {
+    let mut out = vec![];
+    for w in rows.windows(2) {
+        let (r0, r1) = (&w[0], &w[1]);
+        for j in 0..r0.1.len().min(r1.1.len()).saturating_sub(1) {
+            let p = |x: f64, q: (f64, f64)| [x, q.0, q.1];
+            let (a, b, c, d) =
+                (p(r0.0, r0.1[j]), p(r1.0, r1.1[j]), p(r0.0, r0.1[j + 1]), p(r1.0, r1.1[j + 1]));
+            let sub = |u: [f64; 3], v: [f64; 3]| [u[0] - v[0], u[1] - v[1], u[2] - v[2]];
+            let cross = |u: [f64; 3], v: [f64; 3]| {
+                [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+            };
+            let (n1, n2) = (cross(sub(b, a), sub(c, a)), cross(sub(d, c), sub(d, b)));
+            let n = [n1[0] + n2[0], n1[1] + n2[1], n1[2] + n2[2]];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len < 1e-12 {
+                continue;
+            }
+            out.push(Facet {
+                area: len, // half the quad's doubled area, times the two sides
+                nx: (n[0] / len).abs(),
+                nz: (n[2] / len).abs(),
+                x: 0.25 * (a[0] + b[0] + c[0] + d[0]),
+                h: z_top - 0.25 * (a[2] + b[2] + c[2] + d[2]),
+            });
+        }
+    }
+    out
+}
+
+/// A closed outline's length, the turning along its smooth stretches (radians), and its corners
+/// (turns of over 30 deg at one point).
+fn outline_shape(o: &[Pt]) -> (f64, f64, usize) {
+    let n = o.len();
+    let (mut len, mut smooth, mut corners) = (0.0, 0.0, 0);
+    for i in 0..n {
+        let (a, b, c) = (o[(i + n - 1) % n], o[i], o[(i + 1) % n]);
+        len += (c[0] - b[0]).hypot(c[1] - b[1]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1]], [c[0] - b[0], c[1] - b[1]]);
+        let (lu, lv) = (u[0].hypot(u[1]), v[0].hypot(v[1]));
+        if lu < 1e-9 || lv < 1e-9 {
+            continue;
+        }
+        let turn = ((u[0] * v[0] + u[1] * v[1]) / (lu * lv)).clamp(-1.0, 1.0).acos();
+        if turn > 30f64.to_radians() {
+            corners += 1;
+        } else {
+            smooth += turn;
+        }
+    }
+    (len, smooth, corners)
+}
+
+/// The hand labor estimate ([`LaborRates`]): tracing every template trace (its outline, plus
+/// placing it), cutting every foam piece (outline x thickness, curves counted longer by
+/// curve_radius_in per radian turned, corners), sanding (the volume, plus a final pass over the
+/// surface) and gluing each foam piece in. Boards in the mold are cut to shape, not traced.
+fn labor(layers: &[Layer], pieces: &[Piece], sand_in3: f64, surface_ft2: f64, spec: &MoldSpec) -> Labor {
+    let r = &spec.labor;
+    let (mut traces, mut trace_in) = (0, 0.0);
+    if spec.templates() {
+        for p in pieces {
+            let per = outline_shape(&p.outline).0;
+            traces += p.traces.len();
+            trace_in += per * p.traces.len() as f64;
+        }
+    }
+    let (mut cut_in, mut curve_in, mut corners, mut cut_min) = (0.0, 0.0, 0, 0.0);
+    for ly in layers {
+        for f in &ly.foam {
+            let (len, smooth, c) = outline_shape(f);
+            let curve = r.curve_radius_in * smooth;
+            cut_in += len;
+            curve_in += curve;
+            corners += c;
+            cut_min += (len + curve) * ly.foam_in / r.cut_in2_per_min + c as f64 * r.corner_min;
+        }
+    }
+    let foam_pieces = layers.iter().map(|l| l.foam.len()).sum::<usize>();
+    let trace_hr = (trace_in / r.trace_in_per_min + traces as f64 * r.place_min) / 60.0;
+    let cut_hr = cut_min / 60.0;
+    let sand_hr = (sand_in3 / r.sand_in3_per_min + surface_ft2 / r.finish_ft2_per_min) / 60.0;
+    let assemble_hr = foam_pieces as f64 * r.assemble_min / 60.0;
+    Labor {
+        trace_hr,
+        cut_hr,
+        sand_hr,
+        assemble_hr,
+        total_hr: trace_hr + cut_hr + sand_hr + assemble_hr,
+        traces,
+        trace_in,
+        cut_in,
+        curve_in,
+        corners,
+        sand_in3,
+        surface_ft2,
+        foam_pieces,
+    }
+}
+
+/// Foam left to sand off, in^3, estimated: layers stacked across a facet leave steps as deep as
+/// the layer thickness times the facet normal's component along the stacking (`step`), half of it
+/// on average. A flat bottom under flat layers steps a full layer; a steep side, almost nothing.
+fn sand_in3(facets: &[Facet], step: impl Fn(&Facet) -> f64) -> f64 {
+    facets.iter().map(|f| 0.5 * f.area * step(f)).sum()
+}
+
+/// Thickness of the layer at distance d along a stack (the last layer past its end).
+fn layer_at(order: &[f64], d: f64) -> f64 {
+    let mut acc = 0.0;
+    for &t in order {
+        acc += t;
+        if d < acc {
+            return t;
+        }
+    }
+    order.last().copied().unwrap_or(0.0)
+}
+
+/// The part of a half section above height `base` (the flat stack the keel slabs stand on): from
+/// where it crosses `base` to the keel. None if it hardly reaches above it.
+fn clip_section(half: &[Pt], base: f64) -> Option<Vec<Pt>> {
+    let i = half.iter().position(|p| p[1] > base + 1e-6)?;
+    let foot = if i == 0 {
+        [half[0][0], base]
+    } else {
+        let (a, b) = (half[i - 1], half[i]);
+        let s = (base - a[1]) / (b[1] - a[1]);
+        [a[0] + s * (b[0] - a[0]), base]
+    };
+    let mut out = vec![foot];
+    out.extend(half[i..].iter().filter(|p| p[1] > base));
+    (out.len() >= 2 && half_area(&out) > 0.05).then_some(out)
+}
+
+/// Hybrid keel slabs `t` thick standing on the flat stack at height `base`, across the canoe
+/// wherever the hull rises above it, on a grid with a face at midships (so with a canoe the same
+/// fore and aft, slab k aft is the mirror of slab -k-1 at the bow). Each template is the biggest of
+/// its two faces' and middle sections above `base`, the smaller face etched: (label, x of the bow
+/// face, thickness, shape), bow to stern.
+fn keel_slabs(rows: &[NetRow], z_top: f64, base: f64, t: f64) -> Vec<(String, f64, f64, Shape)> {
+    let (xa, xb) = (rows[0].0, rows[rows.len() - 1].0);
+    let mid = 0.5 * (xa + xb);
+    let above: Vec<f64> =
+        rows.iter().filter(|r| z_top - r.1.last().unwrap().1 > base + 1e-6).map(|r| r.0).collect();
+    let (Some(&x0), Some(&x1)) = (above.first(), above.last()) else { return vec![] };
+    // One row spacing beyond the first and last rows above, so the slab grid covers the tips.
+    let dx = (xb - xa) / (rows.len() - 1) as f64;
+    let (x0, x1) = ((x0 - dx).max(xa), (x1 + dx).min(xb));
+    let (k0, k1) = (((x0 - mid) / t).floor() as i64, ((x1 - mid) / t).ceil() as i64);
+    let cut = |x: f64| clip_section(&section(rows, x.clamp(xa, xb), z_top), base);
+    let mut out = vec![];
+    for k in k0..k1 {
+        let f0 = mid + k as f64 * t;
+        let faces = [cut(f0), cut(f0 + t)];
+        let Some(big) = [cut(f0), cut(f0 + t), cut(f0 + 0.5 * t)]
+            .into_iter()
+            .flatten()
+            .max_by(|a, b| half_area(a).total_cmp(&half_area(b)))
+        else {
+            continue;
+        };
+        let guide = faces
+            .into_iter()
+            .flatten()
+            .min_by(|a, b| half_area(a).total_cmp(&half_area(b)))
+            .filter(|g| (half_area(g) - half_area(&big)).abs() > 1e-6);
+        let label = format!("K{}", out.len() + 1);
+        out.push((label, f0, t, Shape::Upright { half: big, guide, x: f0, grid: Some(k) }));
+    }
+    out
+}
+
 /// The inner section at x (linear between the neighbouring stations, point by point, as the
 /// export's bulkhead rows), as a half: (y, height above the floor) from the starboard sheer on
 /// the floor to the keel on the centreline.
@@ -1305,9 +1694,11 @@ fn rib_pieces(
     ps: &mut Vec<Piece>,
 ) -> Result<()> {
     let halved = spec.packing == Packing::FewestShapes;
+    // The height its foot stands at: the floor, or the flat stack under a keel slab.
+    let base = half[0][1];
     let outline = if halved {
         let mut p: Vec<Pt> = half.to_vec();
-        p.push([0.0, 0.0]);
+        p.push([0.0, base]);
         p.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
         if area(&p) < 0.0 {
             p.reverse();
@@ -1322,9 +1713,10 @@ fn rib_pieces(
         MoldSpec::sizes(&spec.sheets),
         spec.gap_in
     );
-    let hk = half.last().map_or(0.0, |p| p[1]);
+    let top = half.last().map_or(base, |p| p[1]);
+    let hk = top - base;
     let text_h = (0.15 * hk).clamp(0.2, 0.75);
-    let mut marks = if hk > 1.5 && !halved { vec![[[0.0, 0.5], [0.0, hk - 0.5]]] } else { vec![] };
+    let mut marks = if hk > 1.5 && !halved { vec![[[0.0, base + 0.5], [0.0, top - 0.5]]] } else { vec![] };
     if let Some(g) = guide {
         for w in g.windows(2) {
             marks.push([w[0], w[1]]);
@@ -1339,10 +1731,10 @@ fn rib_pieces(
         vec![label.to_string()]
     };
     let y_mid = half.iter().map(|p| p[0]).fold(0.0, f64::max);
-    // Alignment holes 1 and 4 in above the floor, on the centreline (half slabs: 1 in off it):
+    // Alignment holes 1 and 4 in above its foot, on the centreline (half slabs: 1 in off it):
     // in line from slab to slab.
     let u = if halved { 1.0 } else { 0.0 };
-    let holes = hole_spots(&outline, &[[u, 1.0], [u, 4.0]], spec);
+    let holes = hole_spots(&outline, &[[u, base + 1.0], [u, base + 4.0]], spec);
     used.push(ps.len());
     ps.push(Piece {
         label: label.to_string(),
@@ -1353,9 +1745,9 @@ fn rib_pieces(
         marks,
         text: if halved { format!("{label} x={x:.2} x2") } else { format!("{label} x={x:.2}") },
         text_at: if halved {
-            [0.45 * y_mid, (0.3 * hk).max(0.6 * text_h)]
+            [0.45 * y_mid, base + (0.3 * hk).max(0.6 * text_h)]
         } else {
-            [0.0, (0.3 * hk).max(0.6 * text_h)]
+            [0.0, base + (0.3 * hk).max(0.6 * text_h)]
         },
         text_deg: 0.0,
         text_h,
@@ -1949,6 +2341,7 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
         match l.spec.orientation {
             Orientation::Flat => "flat layers,",
             Orientation::Vertical => "upright ribs,",
+            Orientation::Hybrid => "flat layers and keel slabs,",
         },
         l.spec.board_in,
         sl,
@@ -2393,6 +2786,9 @@ mod tests {
                 joints_in: vec![],
                 foam_order_in: vec![2.0],
                 over_in: 0.0,
+                switch_in: None,
+                sand_ft3: 0.0,
+                max_step_in: 0.0,
                 height_in: 2.0,
                 length_in: 40.0,
                 beam_in: 20.0,
@@ -2400,6 +2796,7 @@ mod tests {
                 wall_in: 0.0,
             },
             layers: vec![],
+            labor: labor(&[], &ps, 0.0, 0.0, &MoldSpec::default()),
             pieces: ps,
             utilization: 0.0,
             sheets: sh,
@@ -2543,5 +2940,46 @@ mod tests {
         let (mut used, mut ps) = (vec![], vec![]);
         let e = flat_pieces(&cuts, 0, &spec, Some(100.0), &mut used, &mut ps).unwrap_err().to_string();
         assert!(e.contains("L1-3") && e.contains("not the same fore and aft"), "{e}");
+    }
+
+    #[test]
+    fn clip_section_keeps_the_part_above_the_platform() {
+        // A half section from the sheer (y 10, h 0) to the keel (y 0, h 10), straight.
+        let half: Vec<Pt> = (0..=10).map(|i| [10.0 - i as f64, i as f64]).collect();
+        let c = clip_section(&half, 6.5).unwrap();
+        assert_eq!(c[0], [3.5, 6.5], "foot where it crosses the platform");
+        assert_eq!(c[c.len() - 1], [0.0, 10.0]);
+        assert!(c.iter().all(|p| p[1] >= 6.5));
+        assert!(clip_section(&half, 10.0).is_none(), "nothing above the keel");
+        // Layer thickness along a stack, the last one past its end.
+        assert_eq!(
+            [layer_at(&[2.0, 2.0, 1.5], 0.5), layer_at(&[2.0, 2.0, 1.5], 4.2), layer_at(&[2.0, 1.5], 9.0)],
+            [2.0, 1.5, 1.5]
+        );
+    }
+
+    #[test]
+    fn outline_shape_counts_length_curves_and_corners() {
+        // A 10 x 5 rectangle: 30 in, four corners, no curve.
+        let (len, smooth, corners) = outline_shape(&rect(10.0, 5.0));
+        assert!((len - 30.0).abs() < 1e-9 && smooth.abs() < 1e-9 && corners == 4);
+        // A finely drawn circle of radius 10: one full turn, all of it smooth.
+        let circle: Vec<Pt> = (0..400)
+            .map(|i| {
+                let a = i as f64 / 400.0 * std::f64::consts::TAU;
+                [10.0 * a.cos(), 10.0 * a.sin()]
+            })
+            .collect();
+        let (len, smooth, corners) = outline_shape(&circle);
+        assert!((len - 20.0 * std::f64::consts::PI).abs() < 0.01);
+        assert!((smooth - std::f64::consts::TAU).abs() < 1e-6 && corners == 0);
+        // Rates: a partial set fills in the rest; bad rates are refused.
+        let r: LaborRates = serde_json::from_str(r#"{"sand_in3_per_min": 3}"#).unwrap();
+        assert_eq!((r.sand_in3_per_min, r.trace_in_per_min), (3.0, 60.0));
+        let bad = MoldSpec {
+            labor: LaborRates { cut_in2_per_min: 0.0, ..LaborRates::default() },
+            ..MoldSpec::default()
+        };
+        assert!(bad.validate().is_err());
     }
 }

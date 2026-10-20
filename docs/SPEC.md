@@ -15,7 +15,7 @@ jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
 jaguar import-mesh canoe.step|canoe.stp|canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
 jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets] [--filled]
-jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical] [--packing blocks|continuous|tight|fewest-shapes] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--kerf in] [--dxf-marks] [--half-canoe]
+jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical | --hybrid [--switch in] [--keel-foam in]] [--packing blocks|continuous|tight|fewest-shapes] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--kerf in] [--dxf-marks] [--half-canoe] [--labor rates.json]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
@@ -502,6 +502,24 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   hollow run, every foam (+ board) thickness, each a cross-section closed by the gunwale line on
   the floor (`R1`, `R2`, ...): templates take the bigger of the slab's two faces (the other etched),
   boards the section at their mid-plane.
+* **Flat + upright keel** (`--hybrid`, tracing templates): flat layers from the floor up to the
+  switch height, then keel slabs (`K1`, `K2`, ... `--keel-foam` thick, default the thickest
+  `--foam`) standing across the canoe on the flat stack wherever the hull rises above it, on a
+  grid with a face at midships; each slab's template is the biggest of its faces' and middle
+  sections above the switch (the smaller face etched), its foot on the switch line. The switch
+  (`--switch`, rounded to a layer top) defaults to the layer top that leaves the least foam to
+  sand. Sanding estimate (`stack.sand_ft3`, every layout): over the inner surface, half of
+  (layer thickness x the surface normal's component along the stacking) per unit area; flat
+  layers step a flat bottom by a whole layer, upright slabs barely. Half canoe: aft slabs reuse
+  their bow mirror's template.
+* **Labor estimate** (`labor`, every layout; shop packet, CLI): hours of tracing (each template
+  trace: outline / trace speed + placing it), cutting (each foam piece: (outline + curve allowance)
+  x foam thickness / cut rate, the curve allowance `curve_radius_in` per radian turned along smooth
+  stretches, so a radius-R curve cuts like (1 + curve_radius_in / R) times its length; plus each
+  corner over 30 deg), sanding (`stack.sand_ft3` / removal rate + mold surface / finish rate) and
+  assembly (per foam piece). Rates in `MoldSpec.labor` (web: labor rates; CLI `--labor` JSON);
+  defaults 60 in/min, 0.5 min, 40 in^2/min, 12 in, 0.25 min, 10 in^3/min, 0.5 ft^2/min, 2 min are
+  guesses to calibrate. `stack.max_step_in`: the deepest step before sanding (accuracy).
 * **Packing** (`--packing`): `blocks` (default) cuts every flat layer at the same joints, the
   fewest equal lengths over the floor layer's span for which every layer's piece in every block
   fits (foam and hardboard): the joints line up from floor to keel, so the mold comes apart in

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use jaguar::mix::{Property, StrengthFit};
 use jaguar::{hull::Hull, optimize, params::Params, report, serve};
@@ -138,8 +138,19 @@ enum Cmd {
         #[arg(long)]
         in_mold: bool,
         /// Layers standing upright across the canoe (ribs) instead of laid flat
-        #[arg(long)]
+        #[arg(long, conflicts_with = "hybrid")]
         vertical: bool,
+        /// Flat layers up to a switch height, then upright keel slabs across the canoe on top
+        /// (flat layers follow the sides, upright slabs the flat bottom: less sanding)
+        #[arg(long)]
+        hybrid: bool,
+        /// With --hybrid: height above the floor where the flat layers stop, in (rounded to a
+        /// layer top; default: the one leaving the least foam to sand)
+        #[arg(long)]
+        switch: Option<f64>,
+        /// With --hybrid: keel slab thickness, in (default: the thickest --foam)
+        #[arg(long)]
+        keel_foam: Option<f64>,
         /// blocks (joints line up in every layer: the mold comes apart in blocks) | continuous
         /// (fewest pieces per layer) | tight (fewest sheets) | fewest-shapes (half templates,
         /// flipped and shared)
@@ -183,6 +194,11 @@ enum Cmd {
         /// matching stern piece turned end for end (flat tracing templates)
         #[arg(long)]
         half_canoe: bool,
+        /// Shop rates for the labor estimate as JSON (any of trace_in_per_min, place_min,
+        /// cut_in2_per_min, curve_radius_in, corner_min, sand_in3_per_min, finish_ft2_per_min,
+        /// assemble_min; the rest default)
+        #[arg(long)]
+        labor: Option<PathBuf>,
     },
     /// Race the winner of a result.json over the `[race]` courses: time, straight vs turning,
     /// and recommended drag-objective weightings (src/race.rs).
@@ -522,6 +538,9 @@ fn main() -> Result<()> {
             out,
             in_mold,
             vertical,
+            hybrid,
+            switch,
+            keel_foam,
             packing,
             foam,
             foam_sheet,
@@ -535,11 +554,20 @@ fn main() -> Result<()> {
             kerf,
             dxf_marks,
             half_canoe,
+            labor,
         } => {
             use jaguar::manufacture::{self, Boards, MoldSpec, Orientation, Packing};
             let spec = MoldSpec {
                 boards: if in_mold { Boards::Mold } else { Boards::Templates },
-                orientation: if vertical { Orientation::Vertical } else { Orientation::Flat },
+                orientation: if vertical {
+                    Orientation::Vertical
+                } else if hybrid {
+                    Orientation::Hybrid
+                } else {
+                    Orientation::Flat
+                },
+                switch_in: switch,
+                keel_foam_in: keel_foam,
                 packing: match packing.as_str() {
                     "blocks" => Packing::Blocks,
                     "continuous" => Packing::Continuous,
@@ -561,6 +589,11 @@ fn main() -> Result<()> {
                 kerf_in: kerf,
                 dxf_marks,
                 half_canoe,
+                labor: match &labor {
+                    Some(p) => serde_json::from_str(&std::fs::read_to_string(p)?)
+                        .with_context(|| format!("labor rates {}", p.display()))?,
+                    None => Default::default(),
+                },
             };
             let l = manufacture::from_result(&std::fs::read_to_string(&result)?, &spec)?;
             std::fs::create_dir_all(&out)?;
@@ -573,16 +606,38 @@ fn main() -> Result<()> {
                 "{}: {} foam layers {} ({:.3} in {}), {} foam pieces{}",
                 l.hull,
                 s.foam_layers,
-                if vertical { "standing upright" } else { "laid flat" },
+                if vertical {
+                    "standing upright"
+                } else if hybrid {
+                    "flat + upright keel"
+                } else {
+                    "laid flat"
+                },
                 s.height_in,
                 if vertical { "long" } else { "high" },
                 s.foam_pieces,
                 if in_mold { format!(", {} hardboard layers between them", s.layers) } else { String::new() }
             );
+            let join = |v: &[f64]| v.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" + ");
+            let keel = l.layers.iter().filter(|ly| ly.upright && hybrid).count();
+            match s.switch_in {
+                Some(sw) => println!(
+                    "flat layers {} in up to {sw:.3} in above the floor, then {keel} keel slabs {} in thick",
+                    join(&s.foam_order_in[..s.foam_order_in.len() - keel]),
+                    s.foam_order_in.last().unwrap()
+                ),
+                None => {
+                    println!("foam layers {} in ({:.2} in over the mold)", join(&s.foam_order_in), s.over_in)
+                }
+            }
             println!(
-                "foam layers {} in ({:.2} in over the mold)",
-                s.foam_order_in.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" + "),
-                s.over_in
+                "about {:.2} ft3 of foam to sand off after cutting (deepest step {:.2} in)",
+                s.sand_ft3, s.max_step_in
+            );
+            let lb = &l.labor;
+            println!(
+                "labor about {:.1} h: tracing {:.1}, cutting {:.1}, sanding {:.1}, assembly {:.1} (estimate)",
+                lb.total_hr, lb.trace_hr, lb.cut_hr, lb.sand_hr, lb.assemble_hr
             );
             println!(
                 "{} hardboard {} on {} sheets ({}) ({:.0}% used); wrote {}",
