@@ -2,6 +2,17 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.4
+* **Flat + upright keel (Manufacture tab):** a new way to lay the foam. Flat layers build the
+  sides, then upright slabs standing across the canoe build the bottom and keel, where flat
+  layers leave big steps to sand. JAGUAR picks the height to switch at (the least sanding), or set
+  it yourself, and the keel slab thickness. On the current design it cuts the foam to sand from
+  about 2.5 ft³ to 0.3-0.4 ft³. Works with half canoe.
+* **Labor estimate:** the shop packet (and the tab) now estimate hours of tracing, cutting
+  (curves and corners count extra), sanding (from the foam left to remove) and gluing, plus how
+  far the cut foam strays from the hull before sanding. Time a test piece and enter your team's
+  rates under **labor rates** to compare layouts by real shop hours.
+
 ## New in 0.5.3
 * **Sort and filter saved runs (History):** type to filter by hull, mix or file name, show only
   verified (or failing) runs, fixed hull or shape searches, and sort by date, hull weight, race
