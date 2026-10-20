@@ -315,7 +315,7 @@ gutter($('gutter-plot'), '--plot', 'plot', e => window.innerHeight - e.clientY, 
 // [section, key, label, unit, tooltip, step, min]
 const FIELDS = {
   hull: [['flare_deg', 'Side flare', 'deg', 'How much the hull sides lean outward above the design waterline, in degrees from vertical. 0 = straight up. Typical canoes use 5-15. More flare = wider gunwale (more stable, more freeboard) but more concrete.', 'any', 0],
-    ['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer. The winner is re-checked at 2n-1 stations. At least 11.', 1, 11],
+    ['stations', 'Stations', '-', 'How many slices along the length the search checks. More is slower but finer; time grows about in proportion. The winner is re-checked at 2n-1 and 4n-3 stations whatever you pick. 61-81 is the sweet spot: on the team winner, weight within 1% and freeboard, GM and D/C within 0.01 of 321 stations, 3.5x faster; 41 can flip pass/fail at a gate. Any count works (not only 41, 81, 161). At least 11.', 1, 11],
     ['roughness_um', 'Surface roughness', 'um', 'Equivalent sand roughness of the finished outside of the hull, micrometres. Sets the skin friction in the drag, race and power numbers. 0 = hydraulically smooth. Rough guide: sealed and wet-sanded 400+ grit 5-20, sanded 120-220 grit 30-80, steel-troweled concrete 100-300, rough cast 500-1000. Below about 25-30 it makes no difference on a canoe.', 'any', 0]],
   material: [
     ['flex_over_split', 'Flex / split ratio', '-', 'Bending (flexural) strength divided by the split-cylinder tensile strength the lab measured. 1.0 is the safe choice; textbook relations give about 1.12.', 'any', 0],

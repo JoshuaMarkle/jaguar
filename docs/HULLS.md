@@ -72,6 +72,26 @@ costs a 1 in deeper mold (+10% wall) or a heavier mix. Search the template loft 
 Re-run with `cargo run --release -- run examples/<x>.toml`. Update this table when a change moves
 a winner.
 
+## Stations (search resolution)
+
+The team's 2026-10-20 race-search winner (216 in, 0.375 in, M4 A 65.4 pcf, flare 5, depth 14.975
+in, LRFD, 5 load cases, seat variance 6 in) re-run as a fixed hull at `hull.stations` = n. Any n
+works: verification uses 2n-1 and 4n-3 from whatever n is.
+
+| n | time | weight lb | freeboard in | loaded GM in | D/C |
+|---|---|---|---|---|---|
+| 41 | 0.9 s | no design: GM 2.99-3.00 < 3 gate from resolution alone | | | |
+| 51 | 1.1 s | 122.27 | 6.755 | 3.036 | 0.695 |
+| 61 | 1.5 s | 122.38 | 6.755 | 3.035 | 0.697 |
+| 81 | 1.6 s | 122.74 | 6.755 | 3.034 | 0.699 |
+| 161 | 2.7 s | 123.18 | 6.752 | 3.032 | 0.702 |
+| 321 | 5.4 s | 123.34 | 6.760 | 3.030 | 0.702 |
+
+Same wall, mix and depth from 51 up. Weight converges slowest (reads light, nearly the same for
+every shape, so shape ranking barely moves); the gates settle by 51. Default 61 (starter
+canoe.toml). Shape search effort matters more: 88 LHS shapes 108.5 s race vs 44 + refinement
+106.1 s.
+
 ## Making a new hull
 
 * Parametric: write a shape toml (see `examples/*_shape.toml`, fields documented in

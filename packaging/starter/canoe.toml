@@ -4,7 +4,7 @@
 # Hull shape search ([shape_search], no hull.file): 4000 samples take ~12 min on a recent laptop; 96 ~1 min.
 # off1_hull.json (the examples' hull) is too small for the 2M, 2F crew: it sinks.
 [hull]
-stations = 161
+stations = 61                # 61-81: within 1% of 321 stations (docs/HULLS.md); the winner is re-checked at 2n-1, 4n-3
 flare_deg = 3.0
 stem_radius_in = 2.0
 gunwale_max_flare_deg = 30.0
