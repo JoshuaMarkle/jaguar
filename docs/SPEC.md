@@ -160,9 +160,18 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    Also gives loaded freeboard (D minus local draft, min over stations) and transverse GM_T
    (crew CG at `stability.crew_cg_in`).
    **Seats** (`src/seats.rs`): `seats_in` if given; else `[seats] auto = true` (default) picks knee
-   positions and crew order (every distinct order, <= 4 unpinned paddlers) minimizing the highest
-   seat-dependent utilization max(D/C without punching / dc_search, 1 - (fb - fb_min)/s,
-   1 - (GM - gm_min)/s), s = max(min, 1 in); knees >= `spacing_min_in` apart within
+   positions and crew order (every distinct order, <= 4 unpinned paddlers) ranked strictly in
+   order (`seats::SeatScore`, no weighted blend): (1) the seat-dependent gates pass at their
+   search limits, else the least violation max(D/C / dc_search, 1 - (fb - fb_s)/s, 1 - (GM -
+   gm_s)/s) - 1, s = max(limit, 1 in); (2) the lowest worst-sample seat-affected D/C (bending
+   tension, bending compression, shear, biaxial; not punching, which seats do not move); (3) the
+   most gated freeboard. D/C and GM over the nominal seats and every +/- `variance_in` corner (the
+   samples the gate checks), freeboard as the gate sees it. A compass search per crew order on the
+   surrogate (nominal and the whole crew +/- variance), then EVERY order and even spacing scored
+   exactly (even wins ties; a set is dropped as soon as its samples so far cannot beat the best).
+   Until 2026-10-20 the score was the single highest utilization, flat once GM binds (GM depends
+   on the crew centroid only), so D/C was ignored, and only 3 orders were scored exactly.
+   Knees >= `spacing_min_in` apart within
    [`bow_clear_in`, L - `stern_clear_in`]. Solved once per (t, depth, flare) and density, at
    that density (its weight and strength; until 2026-10-20 at the middle density of the axis for
    every density), and reused for verify; a plan is never used on a wall of another density (the

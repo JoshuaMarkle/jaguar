@@ -5,10 +5,14 @@
 //!
 //! **Auto.** Seats only move the global V(x), M(x) (and through trim the
 //! freeboard and GM); knee punching does not depend on them. So the seats and
-//! crew order (paddlers pinned by `positions` stay in their seat) minimize the highest
-//! utilization of the seat-dependent gates
-//! ([`score`]: bending tension, bending compression, shear and biaxial D/C
-//! against dc_search, freeboard and GM against their minimums). Constraints: knees at least `spacing_min_in`
+//! crew order (paddlers pinned by `positions` stay in their seat) are ranked by
+//! [`SeatScore`], strictly in this order (no weighted blend): (1) the seat-dependent gates
+//! pass at their search limits (else the least violation), (2) the lowest worst-sample
+//! seat-affected D/C (bending tension, bending compression, shear, biaxial; not punching,
+//! which seats do not move, so it would make every layout tie once it governs), (3) the most
+//! gated (lettering) freeboard. Until 2026-10-20 the score was the single highest utilization,
+//! which goes flat once loaded GM (a function of the crew centroid only) binds: the search then
+//! ignored D/C. Constraints: knees at least `spacing_min_in`
 //! apart, within [`bow_clear_in`, L - `stern_clear_in`]. Every distinct crew
 //! order (<= 4 paddlers, <= 24 orders) is tried.
 //!
@@ -19,18 +23,16 @@
 //! interpolated linearly; each paddler's knee patch is then superposed in
 //! closed form (`equilibrium::patch_vm`). A compass search per crew order
 //! (from even spacing, steps down to 0.25 in) minimizes the surrogate score;
-//! the best few orders and the even seats are then scored EXACTLY (`exact`,
-//! a full equilibrium + check) and the lowest exact score wins (ties keep
+//! every order's result and the even seats are then scored EXACTLY (`exact`,
+//! a full equilibrium + check per seat sample) and the best exact score wins (ties keep
 //! even spacing). So auto seats are never worse than even spacing when even
 //! spacing satisfies the constraints.
 //!
 //! **Variance.** Whatever the source, a case is checked at the nominal seats
 //! and at all 2^k corners with each knee moved by +/- `variance_in`
-//! ([`samples`]); the case verdict is the worst sample. So auto seats are scored
-//! (surrogate and exact) as the worst of the nominal seats and the two corners
-//! that move the whole crew forward or aft by the variance ([`shifted`]): the
-//! float, freeboard and GM depend on the crew only through its centroid, so those
-//! two are their worst corners, and seats that only pass at nominal are not picked.
+//! ([`samples`]); the case verdict is the worst sample. Auto seats are scored on the
+//! same samples (surrogate and exact): D/C and GM the worst over the nominal seats and every
+//! corner, freeboard as the gate sees it, so seats that only pass at nominal are not picked.
 
 use crate::check::{Verdict, check, first_moment_below, hoop_psi, kupfer_dc};
 use crate::equilibrium::{CrewLoad, patch_vm, solve};
@@ -119,9 +121,13 @@ pub fn fixed(params: &Params, case: &LoadCase, grid: &Grid) -> Option<CaseSeats>
 /// 2^k corners, corner `m` moving knee j aft by v when bit j of m is set,
 /// forward otherwise. Knees are kept on the hull [x0, xL].
 pub fn samples(seats: &[f64], v: f64, grid: &Grid) -> Vec<Vec<f64>> {
+    samples_on(seats, v, (grid.x[0], grid.x[grid.nx() - 1]))
+}
+
+/// [`samples`] with the knees kept on [lo, hi].
+fn samples_on(seats: &[f64], v: f64, (lo, hi): (f64, f64)) -> Vec<Vec<f64>> {
     let mut out = vec![seats.to_vec()];
     if v > 0.0 {
-        let (lo, hi) = (grid.x[0], grid.x[grid.nx() - 1]);
         for m in 0..1usize << seats.len() {
             out.push(
                 seats
@@ -135,24 +141,58 @@ pub fn samples(seats: &[f64], v: f64, grid: &Grid) -> Vec<Vec<f64>> {
     out
 }
 
-/// Seat objective: the highest utilization of a seat-dependent gate,
-/// max(D/C / dc_search, 1 - (freeboard - min) / s, 1 - (GM - min) / s) with
-/// s = max(min, 1 in), where D/C is every check but punching. <= 1 = those
-/// gates pass; finite for any finite freeboard and GM, so a search that
-/// starts out failing a gate still sees which way is better. Minimizing it keeps
-/// the most margin on whichever gate binds, so the seats do not trade a
-/// passing gate's margin for a check that does not govern. Non-finite = +inf.
-pub fn score(params: &Params, v: &Verdict, gm_in: f64) -> f64 {
-    let dc = v.checks.iter().filter(|c| c.name != "punching").map(|c| c.dc).fold(0.0, f64::max);
-    utilization(params, dc, v.freeboard_in, gm_in)
+/// Checks seat positions can change: every check but punching (a knee-patch check, the same
+/// wherever the knees are): bending tension, bending compression, shear and biaxial.
+pub fn seat_affected(name: &str) -> bool {
+    name != "punching"
 }
 
-fn utilization(params: &Params, dc: f64, fb: f64, gm: f64) -> f64 {
-    let margin = |min: f64, v: f64| 1.0 - (v - min) / min.max(1.0);
-    let u = (dc / params.gates.dc_search)
-        .max(margin(params.gates.freeboard_required_in(), fb))
-        .max(margin(params.stability.gm_min_in, gm));
-    if u.is_finite() { u } else { f64::INFINITY }
+/// Highest seat-affected D/C of a verdict ([`seat_affected`]).
+pub fn seat_dc(v: &Verdict) -> f64 {
+    v.checks.iter().filter(|c| seat_affected(c.name)).map(|c| c.dc).fold(0.0, f64::max)
+}
+
+/// How good a seat set is, compared strictly in order (no weighted blend, so no amount of D/C
+/// buys a gate miss):
+/// 1. `violation`: how far the worst seat-dependent gate is past its search limit, the largest of
+///    D/C / dc_search, 1 - (freeboard - limit) / s and 1 - (GM - limit) / s (s = max(limit, 1 in)),
+///    less 1; 0 once every one passes, and graded while one fails so the search sees which way
+///    is better. Limits are the search's (`Params::freeboard_search_in`, `gm_search_in`).
+/// 2. `dc`: the highest seat-affected D/C ([`seat_affected`]) over the seat samples.
+/// 3. `fb`: the gated freeboard, higher is better (the lettering stays drier).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeatScore {
+    pub violation: f64,
+    pub dc: f64,
+    pub fb: f64,
+}
+
+impl SeatScore {
+    /// What an analysis that failed scores: worse than anything computed.
+    pub const WORST: SeatScore =
+        SeatScore { violation: f64::INFINITY, dc: f64::INFINITY, fb: f64::NEG_INFINITY };
+
+    /// From the worst seat-affected D/C and the lowest GM over the seat samples and the gated
+    /// freeboard. Non-finite inputs score [`Self::WORST`].
+    pub fn of(params: &Params, dc: f64, fb: f64, gm: f64) -> SeatScore {
+        let margin = |min: f64, v: f64| 1.0 - (v - min) / min.max(1.0);
+        let u = (dc / params.gates.dc_search)
+            .max(margin(params.freeboard_search_in(), fb))
+            .max(margin(params.gm_search_in(), gm));
+        if !(u.is_finite() && dc.is_finite() && fb.is_finite()) {
+            return SeatScore::WORST;
+        }
+        SeatScore { violation: u.max(1.0) - 1.0, dc, fb }
+    }
+
+    /// Strictly better than `o`: less violation, then lower D/C, then more freeboard.
+    pub fn better(&self, o: &SeatScore) -> bool {
+        self.order(o) == std::cmp::Ordering::Less
+    }
+
+    fn order(&self, o: &SeatScore) -> std::cmp::Ordering {
+        self.violation.total_cmp(&o.violation).then(self.dc.total_cmp(&o.dc)).then(o.fb.total_cmp(&self.fb))
+    }
 }
 
 /// Crew centroids the surrogate is solved at.
@@ -274,22 +314,26 @@ impl<'a> Surrogate<'a> {
     }
 
     /// Surrogate score of knees at `seats` (`weights_lb` order): D/C and GM the worst of the
-    /// nominal seats and the whole crew moved forward / aft by the seat variance ([`shifted`]),
-    /// freeboard the worst over `gates.freeboard_seat_shift_in` (what the gate sees).
-    fn score(&self, seats: &[f64]) -> f64 {
+    /// nominal seats and the whole crew moved forward / aft by the seat variance ([`shifted`]:
+    /// the worst corners for GM; for D/C a guide only, the exact score checks every corner),
+    /// freeboard the worst over `gates.freeboard_seat_shift_in` (what the gate sees). All 2^k
+    /// corners here cost 2.5x the run time for the same governing seats on the 2026-10-20 runs.
+    fn score(&self, seats: &[f64]) -> SeatScore {
         let (x0, xl) = (self.x[0], self.x[self.x.len() - 1]);
-        let at = |d: f64| self.parts(&seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect::<Vec<_>>());
-        let shifts = |v: f64| if v > 0.0 { vec![-v, 0.0, v] } else { vec![0.0] };
         let (mut dc, mut gm, mut fb) = (0.0_f64, f64::INFINITY, f64::INFINITY);
-        for d in shifts(self.params.seats.variance_in) {
-            let Some((a, _, g)) = at(d) else { return f64::INFINITY };
+        let v = self.params.seats.variance_in;
+        for d in if v > 0.0 { vec![0.0, -v, v] } else { vec![0.0] } {
+            let q: Vec<f64> = seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect();
+            let Some((a, _, g)) = self.parts(&q) else { return SeatScore::WORST };
             (dc, gm) = (dc.max(a), gm.min(g));
         }
+        let shifts = |v: f64| if v > 0.0 { vec![-v, 0.0, v] } else { vec![0.0] };
         for d in shifts(self.params.gates.freeboard_seat_shift_in) {
-            let Some((_, f, _)) = at(d) else { return f64::INFINITY };
+            let q: Vec<f64> = seats.iter().map(|&s| (s + d).clamp(x0, xl)).collect();
+            let Some((_, f, _)) = self.parts(&q) else { return SeatScore::WORST };
             fb = fb.min(f);
         }
-        utilization(self.params, dc, fb, gm)
+        SeatScore::of(self.params, dc, fb, gm)
     }
 
     /// (D/C, freeboard, GM) at `seats`; None where the float could not be solved.
@@ -376,9 +420,13 @@ fn orders(w: &[f64], pos: &[usize]) -> Vec<Vec<usize>> {
     out
 }
 
+/// Exact score of a seat set given the best score so far (see [`auto`]); None = cannot beat it.
+pub type ExactScore<'a> = dyn Fn(&[f64], Option<&SeatScore>) -> Result<Option<SeatScore>> + 'a;
+
 /// Auto seats for `case` on this wall (see the module docs). `exact` scores
 /// a seat set (`weights_lb` order) with the full analysis, Err = analysis
-/// failed. Err when the constraints leave no room for the crew, or when every
+/// failed; given the best score so far it may return None as soon as the set cannot beat it
+/// (a sample's worst only gets worse with more samples, so that is exact, not a shortcut). Err when the constraints leave no room for the crew, or when every
 /// exactly scored seat set failed (the first error).
 #[allow(clippy::too_many_arguments)]
 pub fn auto(
@@ -389,7 +437,7 @@ pub fn auto(
     t: f64,
     rho: f64,
     case: &LoadCase,
-    exact: &dyn Fn(&[f64]) -> Result<f64>,
+    exact: &ExactScore,
 ) -> Result<CaseSeats> {
     let sp = &params.seats;
     let k = case.weights_lb.len();
@@ -423,7 +471,7 @@ pub fn auto(
     let v = sp.variance_in;
     let sur = Surrogate::build(params, fit, grid, sec, t, rho, case, ((lo - v).max(x0), (hi + v).min(xl)));
     let pos = case.positions.clone().unwrap_or_else(|| vec![0; k]);
-    let mut best: Vec<(f64, Vec<usize>, Vec<f64>)> = Vec::new();
+    let mut best: Vec<(SeatScore, Vec<usize>, Vec<f64>)> = Vec::new();
     for order in orders(&case.weights_lb, &pos) {
         let mut p = start.clone();
         let mut f = sur.score(&place(&order, &p));
@@ -443,7 +491,7 @@ pub fn auto(
                     }
                     evals += 1;
                     let fq = sur.score(&place(&order, &q));
-                    if fq < f {
+                    if fq.better(&f) {
                         (p, f, moved) = (q, fq, true);
                     }
                 }
@@ -454,20 +502,22 @@ pub fn auto(
         }
         best.push((f, order.clone(), place(&order, &p)));
     }
-    best.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // Exact scoring: even spacing in the entered order (pins kept) first (wins ties), then the
-    // 3 best orders.
+    best.sort_by(|a, b| a.0.order(&b.0));
+    // Exact scoring: even spacing in the entered order (pins kept) first (wins ties), then every
+    // order's compass result, best surrogate score first (a surrogate that misranks orders
+    // cannot hide the best one; until 2026-10-20 only the 3 best were scored exactly).
     let mut tries: Vec<Vec<f64>> = Vec::new();
     if feasible(&ev) {
         tries.push(place(&default_order(case), &ev));
     }
-    tries.extend(best.into_iter().take(3).map(|b| b.2));
-    let mut pick: Option<(f64, Vec<f64>)> = None;
+    tries.extend(best.into_iter().map(|b| b.2));
+    let mut pick: Option<(SeatScore, Vec<f64>)> = None;
     let mut first_err = None;
     for s in tries {
-        match exact(&s) {
-            Ok(f) => {
-                if pick.as_ref().is_none_or(|(g, _)| f < *g) {
+        match exact(&s, pick.as_ref().map(|p| &p.0)) {
+            Ok(None) => {}
+            Ok(Some(f)) => {
+                if pick.as_ref().is_none_or(|(g, _)| f.better(g)) {
                     pick = Some((f, s));
                 }
             }
@@ -490,6 +540,29 @@ pub fn auto(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The seat score is strictly lexicographic: no D/C gain buys a gate miss (a weighted blend
+    /// let a GM failure through in the 2026-10-20 prototype), D/C breaks ties among layouts that
+    /// pass, freeboard breaks D/C ties; a failing layout closer to passing is better.
+    #[test]
+    fn seat_score_is_lexicographic() {
+        let p = Params::load(std::path::Path::new("examples/canoe.toml")).unwrap();
+        let (fb, gm) = (p.freeboard_search_in() + 1.0, p.gm_search_in() + 1.0);
+        let pass = SeatScore::of(&p, 0.80, fb, gm);
+        assert_eq!(pass.violation, 0.0);
+        // A layout missing the GM search limit by a hair loses to any passing one, whatever its D/C.
+        let gm_miss = SeatScore::of(&p, 0.10, fb, p.gm_search_in() - 1e-6);
+        assert!(gm_miss.violation > 0.0 && pass.better(&gm_miss) && !gm_miss.better(&pass));
+        // Both pass: lower seat-affected D/C wins even with less freeboard.
+        assert!(SeatScore::of(&p, 0.70, fb - 0.5, gm).better(&SeatScore::of(&p, 0.80, fb, gm)));
+        // Same D/C: more freeboard wins; identical scores are not better than each other.
+        assert!(SeatScore::of(&p, 0.80, fb + 0.1, gm).better(&pass));
+        assert!(!pass.better(&SeatScore::of(&p, 0.80, fb, gm)));
+        // Both fail: the smaller violation wins.
+        let worse = SeatScore::of(&p, 0.10, fb, p.gm_search_in() - 0.5);
+        assert!(gm_miss.better(&worse));
+        assert!(SeatScore::of(&p, f64::NAN, fb, gm) == SeatScore::WORST && worse.better(&SeatScore::WORST));
+    }
 
     #[test]
     fn orders_dedupe_equal_weights() {

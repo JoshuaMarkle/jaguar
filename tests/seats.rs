@@ -1,7 +1,7 @@
 //! Auto seats and the seat-variance envelope (src/seats.rs, PLAN B2).
 use jaguar::hull::{Grid, Hull};
 use jaguar::mix::StrengthFit;
-use jaguar::optimize::{self, eval_case, eval_envelope, plan_seats};
+use jaguar::optimize::{self, eval_case, eval_envelope, plan_seats, seat_score};
 use jaguar::params::{ObjectiveKind, Params};
 use jaguar::seats::{self, SeatSource};
 use jaguar::section::{Sections, sections};
@@ -18,9 +18,15 @@ fn setup() -> (Params, Hull, StrengthFit, Grid, Sections) {
     (p, h, fit, g, s)
 }
 
-fn exact(p: &Params, fit: &StrengthFit, g: &Grid, s: &Sections, case: usize, seats: &[f64]) -> f64 {
-    let e = eval_case(p, fit, g, s, 58.0, &p.load_cases[case], seats).unwrap();
-    seats::score(p, &e.verdict, e.service.gm_in)
+fn exact(
+    p: &Params,
+    fit: &StrengthFit,
+    g: &Grid,
+    s: &Sections,
+    case: usize,
+    seats: &[f64],
+) -> seats::SeatScore {
+    seat_score(p, fit, g, s, 58.0, &p.load_cases[case], seats).unwrap()
 }
 
 #[test]
@@ -35,8 +41,8 @@ fn auto_seats_never_worse_than_even_and_respect_constraints() {
         assert_eq!(cs.source, SeatSource::Auto);
         let even = seats::even(cs.seats_in.len(), &g);
         let (a, e) = (exact(&p, &fit, &g, &s, i, &cs.seats_in), exact(&p, &fit, &g, &s, i, &even));
-        eprintln!("case {i}: auto {:?} score {a:.4}, even {even:?} score {e:.4}", cs.seats_in);
-        assert!(a <= e, "case {i}: auto {a} > even {e}");
+        eprintln!("case {i}: auto {:?} score {a:?}, even {even:?} score {e:?}", cs.seats_in);
+        assert!(!e.better(&a), "case {i}: even {e:?} better than auto {a:?}");
         let mut x: Vec<f64> = cs.crew_order.iter().map(|&j| cs.seats_in[j]).collect();
         assert!(x.windows(2).all(|w| w[1] - w[0] >= sp.spacing_min_in - 1e-9), "{x:?}");
         assert!(x[0] >= sp.bow_clear_in - 1e-9 && x[x.len() - 1] <= l - sp.stern_clear_in + 1e-9);
@@ -45,7 +51,7 @@ fn auto_seats_never_worse_than_even_and_respect_constraints() {
     }
     let (a, e) =
         (exact(&p, &fit, &g, &s, 1, &plan[1].seats_in), exact(&p, &fit, &g, &s, 1, &seats::even(2, &g)));
-    assert!(a < 0.98 * e, "lopsided crew: auto {a} not clearly better than even {e}");
+    assert!(a.better(&e), "lopsided crew: auto {a:?} not better than even {e:?}");
 }
 
 #[test]
@@ -216,24 +222,17 @@ fn auto_seats_are_deterministic() {
     assert_eq!(a, b);
 }
 
-/// Auto seats are chosen at their worst forward / aft shift by the seat variance (where the
-/// verdict's worst float, freeboard and GM corners are), so with a large variance they are
-/// never worse than even spacing there.
+/// Auto seats are scored over the seat samples (nominal and every +/- variance corner, what the
+/// gate checks), so with a large variance they are never worse than even spacing there.
 #[test]
 fn auto_seats_are_scored_at_their_worst_shift() {
     let (mut p, _, fit, g, s) = setup();
     p.seats.variance_in = 12.0;
-    let robust = |case: usize, seats_in: &[f64]| {
-        seats::shifted(seats_in, p.seats.variance_in, &g)
-            .iter()
-            .map(|q| exact(&p, &fit, &g, &s, case, q))
-            .fold(0.0, f64::max)
-    };
     let plan = plan_seats(&p, &fit, &g, &s, 0.375, 58.0).unwrap();
     for (i, cs) in plan.iter().enumerate() {
         let even = seats::even(cs.seats_in.len(), &g);
-        let (a, e) = (robust(i, &cs.seats_in), robust(i, &even));
-        assert!(a <= e + 1e-12, "case {i}: auto {a} > even {e} at the worst shift");
+        let (a, e) = (exact(&p, &fit, &g, &s, i, &cs.seats_in), exact(&p, &fit, &g, &s, i, &even));
+        assert!(!e.better(&a), "case {i}: even {e:?} better than auto {a:?} over the samples");
     }
     // The shifted sets: nominal, all forward, all aft, kept on the hull.
     let l = g.x[g.nx() - 1];

@@ -169,6 +169,7 @@ fn one_selected_tested_mix_runs() {
     let w = r.winner.expect("winner at 60 pcf");
     assert_eq!(w.candidate.density_pcf, 60.0);
     let csv = format!("{HDR}final target,,60.0,300,1.0\n");
-    let one = tested_run(&csv, "one", None).unwrap();
+    // Its own temp-file tag: tests run in parallel and `tested_run` names the file by tag.
+    let one = tested_run(&csv, "one_row", None).unwrap();
     assert!(one.candidates.iter().all(|c| c.density_pcf == 60.0));
 }

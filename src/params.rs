@@ -1085,6 +1085,19 @@ impl Gates {
 }
 
 impl Params {
+    /// Freeboard the search gates at: the required freeboard plus its one-sided search margin
+    /// (`optimize::Gate`, and the seat planner).
+    pub fn freeboard_search_in(&self) -> f64 {
+        self.gates.freeboard_required_in() + self.gates.freeboard_search_margin_in
+    }
+
+    /// Loaded GM the search gates at: `gm_min_in` plus its one-sided search margin.
+    pub fn gm_search_in(&self) -> f64 {
+        self.stability.gm_min_in + self.gates.gm_search_margin_in
+    }
+}
+
+impl Params {
     /// Where the freeboard gate is checked on a hull `length_in` long: the lettering spans, or
     /// none (= the whole hull) without `[lettering]`.
     pub fn freeboard_spans(&self, length_in: f64) -> Result<Vec<LetterSpan>> {

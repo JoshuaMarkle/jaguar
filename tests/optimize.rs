@@ -552,6 +552,9 @@ fn stem_radius_keeps_length_and_reaches_the_export() {
     p.search.thickness_in = [0.375, 0.5, 0.125];
     p.search.depth_in = [12.0, 13.0, 1.0];
     assert_eq!(p.hull.stem_radius_in, 4.0, "examples/canoe.toml uses the default");
+    // Even seats in both runs, so the comparison sees the geometry alone (auto seats may pick
+    // another layout for a slightly different hull).
+    p.seats.auto = false;
     let r = jaguar::run(&p, &|_| {}).unwrap();
     p.hull.stem_radius_in = 0.0;
     p.validate().unwrap();

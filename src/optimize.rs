@@ -147,14 +147,8 @@ impl Gate {
         let g = &p.gates;
         match self {
             Gate::Dc => Some((g.dc_verify, false, g.dc_search)),
-            Gate::Freeboard => {
-                let r = g.freeboard_required_in();
-                Some((r, true, r + g.freeboard_search_margin_in))
-            }
-            Gate::LoadedGm => {
-                let m = p.stability.gm_min_in;
-                Some((m, true, m + g.gm_search_margin_in))
-            }
+            Gate::Freeboard => Some((g.freeboard_required_in(), true, p.freeboard_search_in())),
+            Gate::LoadedGm => Some((p.stability.gm_min_in, true, p.gm_search_in())),
             Gate::EmptyGm => p.stability.gm_empty_min_in.map(|m| (m, true, m + g.gm_empty_search_margin_in)),
             Gate::AirPocket => p
                 .flotation
@@ -2933,40 +2927,70 @@ pub fn plan_seats(
         .map(|case| match seats::fixed(params, case, grid) {
             Some(s) => Ok(s),
             None => {
-                // Worst of the nominal seats and the whole crew moved forward / aft by the
-                // variance, with the freeboard the gate sees at these seats.
-                let exact = |s: &[f64]| {
-                    let spans = fb_spans(params, grid)?.1;
-                    let mut worst: f64 = 0.0;
-                    let mut fb = None;
-                    for q in seats::shifted(s, params.seats.variance_in, grid) {
-                        let mut e = eval_case(params, fit, grid, sec, rho, case, &q)?;
-                        let f = match fb {
-                            Some(f) => f,
-                            None => {
-                                let g = gate_freeboard(
-                                    params,
-                                    grid,
-                                    sec,
-                                    Wall::Uniform(rho),
-                                    case,
-                                    &q,
-                                    &e.service,
-                                    &spans,
-                                )?;
-                                *fb.insert(g.freeboard_in)
-                            }
-                        };
-                        e.verdict.freeboard_in = f;
-                        worst = worst.max(seats::score(params, &e.verdict, e.service.gm_in));
-                    }
-                    Ok(worst)
+                let exact = |s: &[f64], bound: Option<&seats::SeatScore>| {
+                    seat_score_bounded(params, fit, grid, sec, rho, case, s, bound)
                 };
                 seats::auto(params, fit, grid, sec, t, rho, case, &exact)
                     .map_err(|e| anyhow::anyhow!("{}: {e:#}", case.name))
             }
         })
         .collect()
+}
+
+/// The exact [`seats::SeatScore`] of `case` with knees at `seats` on a uniform `rho` wall: the
+/// worst seat-affected D/C and the lowest GM over the same seat samples the gate checks
+/// ([`seats::samples`]: nominal and every corner), and the freeboard the gate sees at these seats.
+#[allow(clippy::too_many_arguments)]
+pub fn seat_score(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    case: &LoadCase,
+    seats: &[f64],
+) -> Result<seats::SeatScore> {
+    let s = seat_score_bounded(params, fit, grid, sec, rho, case, seats, None)?;
+    Ok(s.expect("an unbounded score is always computed"))
+}
+
+/// [`seat_score`], stopping with None once the samples so far already score no better than
+/// `bound`: more samples only raise the worst D/C and lower the worst GM (the freeboard is the
+/// nominal one), so the full score could not beat it either.
+#[allow(clippy::too_many_arguments)]
+fn seat_score_bounded(
+    params: &Params,
+    fit: &StrengthFit,
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    case: &LoadCase,
+    seats: &[f64],
+    bound: Option<&seats::SeatScore>,
+) -> Result<Option<seats::SeatScore>> {
+    let spans = fb_spans(params, grid)?.1;
+    let (mut dc, mut gm, mut fb) = (0.0_f64, f64::INFINITY, f64::NAN);
+    // Nominal first (the freeboard), then the whole crew aft and forward (GM's worst corners),
+    // then the rest: a set that cannot win is usually dropped after 3 samples. The order does
+    // not change the score.
+    let mut all = seats::samples(seats, params.seats.variance_in, grid);
+    if all.len() > 2 {
+        let aft = all.pop().expect("more than 2 samples");
+        all.insert(1, aft);
+    }
+    for (k, q) in all.into_iter().enumerate() {
+        let e = eval_case(params, fit, grid, sec, rho, case, &q)?;
+        if k == 0 {
+            // The first sample is the nominal seats, where the gate looks.
+            fb = gate_freeboard(params, grid, sec, Wall::Uniform(rho), case, &q, &e.service, &spans)?
+                .freeboard_in;
+        }
+        (dc, gm) = (dc.max(seats::seat_dc(&e.verdict)), gm.min(e.service.gm_in));
+        if bound.is_some_and(|b| !seats::SeatScore::of(params, dc, fb, gm).better(b)) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(seats::SeatScore::of(params, dc, fb, gm)))
 }
 
 /// A load case checked over its seat samples (`seats::samples`: nominal,
