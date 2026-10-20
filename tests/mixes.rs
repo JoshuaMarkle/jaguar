@@ -155,3 +155,20 @@ M3 B,,63.35,282.67,1.0
     );
     assert!(r.winner.is_none() || text.contains("two mixes: not searched"), "{text}");
 }
+
+/// One mix selected with material.mixes (the others stay in the CSV): every candidate uses it,
+/// and a run on a one-row file works the same (no fitted line needed for tested mixes).
+#[test]
+fn one_selected_tested_mix_runs() {
+    let mut p = Params::load(Path::new("examples/canoe_mixes.toml")).unwrap();
+    p.search.depth_in = [12.0, 13.0, 1.0];
+    p.material.mixes = Some(vec!["final target".into()]);
+    let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
+    let r = optimize::run(&p, &h).unwrap();
+    assert!(r.candidates.iter().all(|c| c.mix.as_deref() == Some("final target")));
+    let w = r.winner.expect("winner at 60 pcf");
+    assert_eq!(w.candidate.density_pcf, 60.0);
+    let csv = format!("{HDR}final target,,60.0,300,1.0\n");
+    let one = tested_run(&csv, "one", None).unwrap();
+    assert!(one.candidates.iter().all(|c| c.density_pcf == 60.0));
+}

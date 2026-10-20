@@ -67,6 +67,7 @@ fn golden_bending_dc() {
             factor_of_safety: f(i, "fs"),
             dynamic_load_factor: f(i, "dyn"),
             knee_patch_in: f(i, "knee_patch_in"),
+            mixes: None,
         };
         // The reference script's tensile line f_t = slope*rho + icpt, expressed as a
         // StrengthFit with flex/split = 1 so bending capacity is identical.

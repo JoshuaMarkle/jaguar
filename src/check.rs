@@ -558,6 +558,7 @@ mod tests {
             factor_of_safety: 2.0,
             dynamic_load_factor: 1.2,
             knee_patch_in: 3.0,
+            mixes: None,
         }
     }
 

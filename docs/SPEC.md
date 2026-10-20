@@ -194,7 +194,11 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    Densities are searched only within `density_extrapolation_pcf` of the tested range of every
    fitted line (split and each measured one; none below the lightest test of a line with a
    negative slope), or only at
-   tested mixes with `strength_model = "tested_mixes"`. `material.method = "asd"` (default): service
+   tested mixes with `strength_model = "tested_mixes"`. Optional `material.mixes = ["name", ...]`
+   uses only those rows (by `mix` name, or "name #k" for one of several rows sharing a name; an
+   unknown name is an error) in both models; the rest stay in the CSV. Under tested_mixes one mix
+   in use needs no line: the run uses that mix's own values (fit mode still needs 2+ densities).
+   `material.method = "asd"` (default): service
    loads (crew x `dynamic_load_factor`), every capacity divided by `factor_of_safety`. `"lrfd"`:
    the ASCE 7-22 2.3.1 gravity combinations, each load case re-solved for `lrfd_dead` D +
    `lrfd_live` L and `lrfd_dead_only` D alone (defaults 1.2D + 1.6L and 1.4D; D = self weight,

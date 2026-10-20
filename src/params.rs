@@ -612,6 +612,11 @@ pub struct Material {
     /// Knee contact patch length, in. NEVER zero: a point load is a
     /// singularity and D/C stops converging.
     pub knee_patch_in: f64,
+    /// Only these mixes of `mix_data` are used (their `mix` names, or "name #k" for one of
+    /// several rows sharing a name); the other rows stay in the file but are ignored, in both
+    /// strength models. Absent = every row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
@@ -1177,6 +1182,9 @@ impl Params {
         }
         if self.material.knee_patch_in <= 0.0 {
             bail!("material.knee_patch_in must be > 0 (a point load does not converge)");
+        }
+        if self.material.mixes.as_ref().is_some_and(|m| m.is_empty()) {
+            bail!("material.mixes is empty: list the mixes to use, or remove it to use all");
         }
         if self.material.factor_of_safety < 1.0 {
             bail!("material.factor_of_safety must be >= 1");

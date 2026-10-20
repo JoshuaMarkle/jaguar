@@ -985,9 +985,9 @@ pub fn run(params: &Params, hull: &Hull) -> Result<RunResult> {
     run_with_progress(params, hull, &|_| {})
 }
 
-/// Load and fit the mix data, and the density range the fit may be used on.
+/// Load the mix data (only `material.mixes` when given) and fit it ([`StrengthFit::load_for`]).
 pub fn strength(params: &Params) -> Result<StrengthFit> {
-    StrengthFit::load(&params.material.mix_data, params.material.flex_over_split)
+    StrengthFit::load_for(&params.material)
 }
 
 /// Densities from search.density_pcf clipped to the trusted fit range

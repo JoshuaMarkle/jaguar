@@ -57,10 +57,12 @@
 //!   Poll every ~250 ms with `?since=<count already seen>` to get only new
 //!   candidates (cheap incremental updates; no websockets needed).
 //! * `GET  /api/mix`       -> the mix::StrengthFit (lab points, fit line, tested
-//!   range) for the most recently submitted params (startup params before any run).
+//!   range) for the most recently submitted params (startup params before any run), of the
+//!   rows `material.mixes` selects.
 //!   500 {"error"} if the mix data cannot be loaded or fitted.
 //! * `POST /api/mix`       body = mix CSV text (docs/MIX_DATA.md format). Validated with
-//!   `StrengthFit::parse` (same loader as runs); 400 {"error"} if it does not parse or fit.
+//!   `StrengthFit::parse_for` (same loader as runs, every row whatever `material.mixes` selects);
+//!   400 {"error"} if it does not parse or fit.
 //!   Else the current params' `material.mix_data` is copied to `<file>.bak` and replaced
 //!   atomically (tmp + rename); 200 with the new StrengthFit plus "csv": the saved text.
 //!   `GET /api/mix` also returns "csv": the raw file text (feeds the editable table).
@@ -617,7 +619,10 @@ impl App {
 
     fn save_mix(&self, body: &str) -> Reply {
         let p = self.current();
-        let fit = match crate::mix::StrengthFit::parse(body, p.material.flex_over_split) {
+        // The file is checked whole (every row, whatever `material.mixes` selects), with the
+        // run's strength model: one tested mix needs no fitted line.
+        let all = crate::params::Material { mixes: None, ..p.material.clone() };
+        let fit = match crate::mix::StrengthFit::parse_for(body, &all) {
             Ok(f) => f,
             Err(e) => return err_reply(400, format!("{e:#}")),
         };

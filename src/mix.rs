@@ -30,6 +30,7 @@
 //!   is negative (a warning, not an error: inside its tested range the line
 //!   only interpolates real breaks).
 
+use crate::params::{Material, StrengthModel};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -500,6 +501,53 @@ impl StrengthFit {
         let points = parse_csv(text).context("parsing")?;
         Self::fit(points, flex_over_split).context("fitting")
     }
+
+    /// The strength model of a run: `material.mix_data`, only the `material.mixes` rows when
+    /// given ([`Self::parse_for`]).
+    pub fn load_for(m: &Material) -> Result<Self> {
+        let path = &m.mix_data;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading mix data {}", path.display()))?;
+        Self::parse_for(&text, m).with_context(|| format!("loading {}", path.display()))
+    }
+
+    /// [`Self::load_for`] from CSV text. With `strength_model = "tested_mixes"` and one mix in
+    /// use, that mix is the model ([`Self::for_mix`]: its own measured strength, nothing claimed
+    /// at any other density); otherwise a line is fitted (needs 2+ densities).
+    pub fn parse_for(text: &str, m: &Material) -> Result<Self> {
+        let mut points = parse_csv(text).context("parsing")?;
+        if let Some(keep) = &m.mixes {
+            let used = |p: &MixPoint| keep.iter().any(|k| *k == p.group || k == p.mix.trim());
+            for k in keep {
+                let have: Vec<&str> = points.iter().map(|p| p.group.as_str()).collect();
+                ensure!(
+                    points.iter().any(|p| *k == p.group || k == p.mix.trim()),
+                    "material.mixes: no mix {k:?} in the mix data (it has {})",
+                    have.join(", ")
+                );
+            }
+            points.retain(used);
+        }
+        let one = points.first().is_some_and(|a| points.iter().all(|p| p.group == a.group));
+        if m.strength_model == StrengthModel::TestedMixes && one {
+            ensure!(m.flex_over_split > 0.0, "flex_over_split must be > 0");
+            // Only `points` and `flex_over_split` are read to build the mix's own model.
+            let rows = StrengthFit {
+                points,
+                split_slope_psi_per_pcf: 0.0,
+                split_intercept_psi: 0.0,
+                rms_residual_psi: 0.0,
+                density_min_pcf: 0.0,
+                density_max_pcf: 0.0,
+                flex_over_split: m.flex_over_split,
+                flexural_fit: None,
+                compressive_fit: None,
+            };
+            let mix = rows.tested_mixes().remove(0);
+            return Ok(rows.for_mix(&mix));
+        }
+        Self::fit(points, m.flex_over_split).context("fitting")
+    }
 }
 
 /// Parse the mix CSV: `#` comment lines, one header line, then rows with
@@ -807,5 +855,52 @@ mod tests {
         // Parses back (serve / result.json), measured fits included.
         let back: StrengthFit = serde_json::from_str(&a).unwrap();
         assert!(back.flexural_fit.is_some() && back.compressive_fit.is_some());
+    }
+
+    fn material(model: StrengthModel, mixes: Option<&[&str]>) -> Material {
+        let mut m = crate::params::Params::load(Path::new("examples/canoe.toml")).unwrap().material;
+        m.strength_model = model;
+        m.mixes = mixes.map(|v| v.iter().map(|s| s.to_string()).collect());
+        m
+    }
+
+    #[test]
+    fn one_tested_mix_is_its_own_strength() {
+        let t = format!(
+            "{HDR}M4 A,65.35,313.3,1,,1423.8
+"
+        );
+        let f = StrengthFit::parse_for(&t, &material(StrengthModel::TestedMixes, None)).unwrap();
+        let m = f.tested_mixes();
+        assert_eq!(m.len(), 1);
+        assert_eq!((f.split_psi(65.35), f.fc_psi(65.35)), (313.3, 1423.8));
+        assert_eq!((f.density_min_pcf, f.density_max_pcf), (65.35, 65.35));
+        // A fitted line needs two densities.
+        assert!(StrengthFit::parse_for(&t, &material(StrengthModel::Fit, None)).is_err());
+    }
+
+    #[test]
+    fn mixes_selects_rows_without_deleting_them() {
+        let t = format!(
+            "{HDR}A,50,200,1,,
+B,55,240,1,,
+C,60,300,1,,
+C,60,280,1,,
+"
+        );
+        let tm = StrengthModel::TestedMixes;
+        let names = |f: StrengthFit| f.tested_mixes().into_iter().map(|m| m.name).collect::<Vec<_>>();
+        assert_eq!(names(StrengthFit::parse_for(&t, &material(tm, Some(&["B"]))).unwrap()), ["B"]);
+        // A repeated name selects every row with it; "name #k" one of them.
+        assert_eq!(
+            names(StrengthFit::parse_for(&t, &material(tm, Some(&["A", "C"]))).unwrap()),
+            ["A", "C #1", "C #2"]
+        );
+        assert_eq!(names(StrengthFit::parse_for(&t, &material(tm, Some(&["C #2"]))).unwrap()), ["C #2"]);
+        // Fit mode fits only the selected rows.
+        let f = StrengthFit::parse_for(&t, &material(StrengthModel::Fit, Some(&["A", "B"]))).unwrap();
+        assert_eq!((f.points.len(), f.density_max_pcf), (2, 55.0));
+        let e = StrengthFit::parse_for(&t, &material(tm, Some(&["Z"]))).unwrap_err();
+        assert!(format!("{e:#}").contains("no mix \"Z\""), "{e:#}");
     }
 }

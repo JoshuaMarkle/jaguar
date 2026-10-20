@@ -750,6 +750,7 @@ function fillForm(p, hulls) {
   if (p.hull.file && !hulls.some(h => h.file === p.hull.file)) sel.insertAdjacentHTML('afterbegin', `<option value="${esc(p.hull.file)}">${esc(p.hull.file)}</option>`);
   if (p.hull.file) sel.value = p.hull.file;
   $('material.mix_data').value = p.material.mix_data;
+  mixUse = p.material.mixes ? [...p.material.mixes] : null;
   $('objective.kind').value = p.objective.kind || 'drag';
   loadedRace = p.race || null;
   $('material.strength_model').value = p.material.strength_model || 'fit';
@@ -846,6 +847,7 @@ function formToml() {
     if (sec === 'material') out.push(`strength_model = ${tstr(g('material.strength_model'))}`);
     if (sec === 'material') out.push(`method = ${tstr(g('material.method'))}`);
     if (sec === 'material') out.push(`mix_data = ${tstr(g('material.mix_data'))}`);
+    if (sec === 'material' && mixUse) out.push(`mixes = [${mixUse.map(tstr).join(', ')}]`);
     if (sec === 'objective') out.push(`kind = ${tstr(g('objective.kind'))}`);
     for (const [k] of FIELDS[sec]) out.push(sec === 'search' ? `${k} = [${[0, 1, 2].map(n => fl(g(`search.${k}.${n}`))).join(', ')}]` : `${k} = ${fl(g(`${sec}.${k}`))}`);
     if (sec === 'stability' && g('stability.gm_empty_min_in').trim() !== '') out.push(`gm_empty_min_in = ${fl(g('stability.gm_empty_min_in'))}`);
@@ -2988,6 +2990,10 @@ async function loadHull(file) {
 // ---------- mix data: chart + editable lab table (saved via POST /api/mix) ----------
 // CSV kept as {pre: comment lines before the header, header: [...], rows: [[...]]}. Comments are preserved on save.
 let mixFit = null, mixCsv = null, mixDirty = false;
+// material.mixes: names of the lab rows a run uses (null = every row). Kept in the settings, not
+// the CSV, so a mix can be left out without deleting its row.
+let mixUse = null;
+const mixNames = c => { const i = c.header.indexOf('mix'); return i < 0 ? [] : [...new Set(c.rows.map(r => r[i].trim()))]; };
 function csvSplit(line) { const out = []; let cur = '', q = false; for (const ch of line) { if (ch === '"') q = !q; else if (ch === ',' && !q) { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; }
 const csvCell = v => /[",]/.test(v) ? '"' + v.replace(/"/g, '') + '"' : v;
 function parseCsv(text) {
@@ -3006,8 +3012,10 @@ function parseCsv(text) {
 const csvText = c => [...c.pre, c.header.join(','), ...c.rows.map(r => r.map(csvCell).join(','))].join('\n') + '\n';
 function mixTable() {
   const c = mixCsv;
-  return `<div style="overflow-x:auto"><table class="tbl mixedit"><tr>${c.header.map(h => `<th>${esc(h)}</th>`).join('')}<th></th></tr>
-    ${c.rows.map((r, i) => `<tr>${r.map((v, j) => `<td><input data-r="${i}" data-c="${j}" value="${esc(v)}"></td>`).join('')}<td><button type="button" class="btn soft" data-del="${i}" title="Delete this row">&times;</button></td></tr>`).join('')}</table></div>
+  const mi = c.header.indexOf('mix'), used = r => mixUse === null || (mi >= 0 && mixUse.includes(r[mi].trim()));
+  const useT = 'Use this mix in runs. Unticked rows stay in the file but are ignored (material.mixes in the settings). Rows with the same mix name go together.';
+  return `<div style="overflow-x:auto"><table class="tbl mixedit"><tr><th title="${esc(useT)}">use</th>${c.header.map(h => `<th>${esc(h)}</th>`).join('')}<th></th></tr>
+    ${c.rows.map((r, i) => `<tr><td><input type="checkbox" data-use="${i}" title="${esc(useT)}" ${used(r) ? 'checked' : ''} ${mi < 0 ? 'disabled' : ''}></td>${r.map((v, j) => `<td><input data-r="${i}" data-c="${j}" value="${esc(v)}"></td>`).join('')}<td><button type="button" class="btn soft" data-del="${i}" title="Delete this row">&times;</button></td></tr>`).join('')}</table></div>
     <div style="display:flex;gap:var(--s1);flex-wrap:wrap;margin-top:var(--s1)">
       <button type="button" class="btn soft" id="mixadd">Add row</button>
       <button type="button" class="btn soft" id="miximport" title="Replace the table with a CSV file (parsed here; nothing is saved until Save)">Import CSV</button>
@@ -3071,7 +3079,9 @@ function renderMix() {
   const meas = pf => `measured: ${eq(pf.slope_psi_per_pcf, pf.intercept_psi)} (${pf.n} tests, rms ${f(pf.rms_residual_psi, 1)} psi)`;
   $('mix').innerHTML = `<canvas id="mixplot" style="width:100%;height:200px;display:block" title="Dots = lab breaks scaled to final strength (circle split, square flexural, open circle f'c). Solid = fit through measured data; dashed = derived from split. Shaded = tested density range."></canvas>
     ${row('mixfc', "Show f'c", "Overlay compressive strength f'c on a right-hand axis: the fit through measured compressive_psi when there is one, else (split / 6.7)^2.", '<input type="checkbox" class="switch" id="mixfc">')}
-    ${m ? kv('Split tensile', eq(m.split_slope_psi_per_pcf, m.split_intercept_psi), 'Straight line through the final split tensile strengths.')
+    ${m ? (m.density_min_pcf === m.density_max_pcf
+        ? kv('Split tensile', `${f(m.split_intercept_psi, 1)} psi, one tested mix at ${f(m.density_min_pcf, 1)} pcf (no line)`, 'One tested mix in use: its own measured strength, nothing claimed at other densities.')
+        : kv('Split tensile', eq(m.split_slope_psi_per_pcf, m.split_intercept_psi), 'Straight line through the final split tensile strengths.'))
       + kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)
       + kv('Flexural', m.flexural_fit ? meas(m.flexural_fit) : `derived: ${f(m.flex_over_split, 2)} &times; split`, 'Bending tension capacity. Fitted from the flexural_psi column when it has data at 2 or more densities, else split x flex/split ratio.')
       + kv("f'c", m.compressive_fit ? meas(m.compressive_fit) : 'derived: (split / 6.7)&sup2;', 'Compression, shear and punching capacity. Fitted from the compressive_psi column when it has data at 2 or more densities, else from split (ACI).') : ''}
@@ -3081,6 +3091,14 @@ function renderMix() {
   if (!mixCsv) return;
   const dirty = () => { mixDirty = true; $('mixsave').disabled = false; $('mixnote').textContent = 'unsaved'; };
   for (const i of $('mix').querySelectorAll('input[data-r]')) i.oninput = () => { mixCsv.rows[+i.dataset.r][+i.dataset.c] = i.value; dirty(); };
+  for (const b of $('mix').querySelectorAll('input[data-use]')) b.onchange = async () => {
+    const names = mixNames(mixCsv), name = mixCsv.rows[+b.dataset.use][mixCsv.header.indexOf('mix')].trim();
+    const on = new Set(mixUse === null ? names : mixUse);
+    if (b.checked) on.add(name); else on.delete(name);
+    if (!on.size) { b.checked = true; $('mixnote').textContent = 'keep at least one mix'; return; }
+    mixUse = names.every(n => on.has(n)) ? null : names.filter(n => on.has(n));
+    await savePrefs(); loadMix();
+  };
   for (const b of $('mix').querySelectorAll('button[data-del]')) b.onclick = () => { mixCsv.rows.splice(+b.dataset.del, 1); mixDirty = true; renderMix(); };
   $('mixadd').onclick = () => { mixCsv.rows.push(mixCsv.header.map(h => h === 'fraction_of_final' ? '1' : '')); mixDirty = true; renderMix(); };
   $('miximport').onclick = () => $('mixfile').click();

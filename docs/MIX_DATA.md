@@ -59,7 +59,9 @@ optimizer choose only among the mixes actually tested:
 * the density axis is the list of mixes (ordered by density then name). `search.density_pcf` and
   `density_extrapolation_pcf` are ignored and there are no grid-edge/mix-edge flags for density;
 * flexural and f'c are the row's measured values when it has them, else derived from its split
-  strength as in fit mode (`m` after the value in `jaguar mix`).
+  strength as in fit mode (`m` after the value in `jaguar mix`);
+* `material.mixes = ["M4 A"]` runs only the listed mixes without deleting the other rows (web UI:
+  the use column of the lab table). One mix is enough: no line is fitted.
 
 The winner line reads e.g. `mix M2 A (56.4 pcf)`. `jaguar mix` prints the per-mix table. The
 "final target" row (60 pcf, 300 psi, final) is the team's target mix.
