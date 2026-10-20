@@ -2,6 +2,14 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.5
+* **Compare layouts (shop packet):** a new table compares all flat, all upright and flat +
+  upright keel (with slabs of each foam thickness you have, or two sheets glued) using your foam,
+  sheets and labor rates: hours of tracing, cutting, sanding and gluing, foam to sand, how close
+  the cut foam starts to the hull (deepest step), templates and hardboard area. Your layout is in
+  bold, so you can see at a glance whether another way would save shop time or match the hull
+  better.
+
 ## New in 0.5.4
 * **Flat + upright keel (Manufacture tab):** a new way to lay the foam. Flat layers build the
   sides, then upright slabs standing across the canoe build the bottom and keel, where flat
