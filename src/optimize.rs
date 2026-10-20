@@ -1239,7 +1239,7 @@ struct Searched {
     geoms: Vec<(f64, f64)>,
     grids: Vec<Grid>,
     pairs: Vec<(usize, usize)>,
-    plans: Vec<Result<Vec<CaseSeats>, String>>,
+    plans: Vec<Vec<Plan>>,
     candidates: Vec<Candidate>,
     zone_stats: Option<ZoneSearch>,
     /// The best passing grid candidate.
@@ -1287,7 +1287,7 @@ fn run_search(
                         .position(|a| a.0 == zl.dense_pcf && a.2 == c.dense_mix)
                         .ok_or_else(|| anyhow::anyhow!("winner dense mix not on the zones axis"))?;
                     let fits = [axis[ri].1.clone(), dense[di].1.clone()];
-                    let seats = plans[pi].as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
+                    let seats = plans[pi][ri].as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
                     let (t, zl) = (c.thickness_in, zl.clone());
                     Some(Box::new(move |g: &Grid| {
                         ZonedWall::new(params, g, t, zl.clone(), fits.clone(), seats)
@@ -1296,7 +1296,7 @@ fn run_search(
             };
             let (c, plan) = match &refined {
                 Some((rc, rp)) => (rc, rp),
-                None => (c, &plans[pi]),
+                None => (c, &plans[pi][ri]),
             };
             Some(finish_winner(params, &fit, &axis[ri].1, hull, c, plan, maker.as_deref(), on_progress)?)
         }
@@ -1367,20 +1367,23 @@ fn search_walls(
         .unzip();
     let pairs: Vec<(usize, usize)> =
         (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
-    // Seats per wall geometry (t, depth), solved at the middle density of the
-    // axis and shared by every density (src/seats.rs); verify reuses them.
-    let mid = &axis[axis.len() / 2];
-    let plans: Vec<Result<Vec<CaseSeats>, String>> = pairs
+    // Seats per wall (geometry, t) and density, [pi][ri] (src/seats.rs): auto seats depend on the
+    // wall's weight and strength, so each density gets its own; verify reuses them.
+    let plans: Vec<Vec<Plan>> = pairs
         .par_iter()
         .map(|&(gi, ti)| {
             let sec = sections(&grids[gi], ts[ti]);
-            plan_seats(params, &mid.1, &grids[gi], &sec, ts[ti], mid.0).map_err(|e| format!("{e:#}"))
+            axis.iter()
+                .map(|a| {
+                    plan_seats(params, &a.1, &grids[gi], &sec, ts[ti], a.0).map_err(|e| format!("{e:#}"))
+                })
+                .collect()
         })
         .collect();
     let mut candidates: Vec<(usize, usize, usize, Candidate)> = pairs
         .par_iter()
         .zip(&plans)
-        .flat_map_iter(|(&(gi, ti), plan)| {
+        .flat_map_iter(|(&(gi, ti), plan_rho)| {
             let grid = &grids[gi];
             let t = ts[ti];
             let sec = sections(grid, t);
@@ -1392,7 +1395,7 @@ fn search_walls(
                 .enumerate()
                 .filter(|_| !ctl.checkpoint())
                 .map(move |(ri, &rho)| {
-                    let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, plan, true);
+                    let mut c = evaluate(params, &axis[ri].1, grid, &sec, t, rho, &plan_rho[ri], true);
                     c.mix = axis[ri].2.clone();
                     c.flare_deg = flare;
                     if let Some(why) = why {
@@ -1475,6 +1478,9 @@ fn search_walls(
     })
 }
 
+/// Seats of every load case on one wall, or why they could not be resolved.
+type Plan = Result<Vec<CaseSeats>, String>;
+
 /// One analysis result from [`refine_wall`]: the candidate and the seats it was checked at.
 type WallTry = (Candidate, Result<Vec<CaseSeats>, String>);
 
@@ -1504,13 +1510,12 @@ fn refine_wall(
     let Some(ri) = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix) else {
         return (None, Vec::new());
     };
-    let mid = &axis[axis.len() / 2];
     let try_at = |d: f64, f: f64| -> WallTry {
         let top = Topsides { flare_deg: f, ..params.hull.topsides() };
         let (grid, why) = Grid::build_topsides(hull, d, params.hull.stations, top);
         let sec = sections(&grid, c.thickness_in);
-        let plan =
-            plan_seats(params, &mid.1, &grid, &sec, c.thickness_in, mid.0).map_err(|e| format!("{e:#}"));
+        let plan = plan_seats(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf)
+            .map_err(|e| format!("{e:#}"));
         let mut k = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, true);
         (k.mix, k.flare_deg) = (c.mix.clone(), f);
         if let Some(why) = why {
@@ -1597,7 +1602,7 @@ struct ClosestSpace<'a> {
     geoms: &'a [(f64, f64)],
     pairs: &'a [(usize, usize)],
     ts: &'a [f64],
-    plans: &'a [Result<Vec<CaseSeats>, String>],
+    plans: &'a [Vec<Plan>],
 }
 
 /// No design passed: the single-mix candidate that misses the gates by the least
@@ -1629,7 +1634,7 @@ fn closest_design(
             let pi = sp.pairs.iter().position(|&(gi, ti)| {
                 sp.geoms[gi] == (c.depth_in, c.flare_deg) && sp.ts[ti] == c.thickness_in
             })?;
-            sp.plans[pi].as_ref().ok()?;
+            sp.plans[pi][ri].as_ref().ok()?;
             let grid = &sp.grids[sp.pairs[pi].0];
             let sec = sections(grid, c.thickness_in);
             let mut f = evaluate(
@@ -1639,7 +1644,7 @@ fn closest_design(
                 &sec,
                 c.thickness_in,
                 c.density_pcf,
-                &sp.plans[pi],
+                &sp.plans[pi][ri],
                 false,
             );
             f.mix = c.mix.clone();
@@ -1657,7 +1662,7 @@ fn closest_design(
     else {
         return Ok(None);
     };
-    let design = finish_winner(params, fit, &sp.axis[ri].1, hull, &c, &sp.plans[pi], None, on_progress)?;
+    let design = finish_winner(params, fit, &sp.axis[ri].1, hull, &c, &sp.plans[pi][ri], None, on_progress)?;
     Ok(Some(Closest { fails: shortfalls(params, &c).1, design }))
 }
 
@@ -1669,7 +1674,7 @@ struct ZoneSpace<'a> {
     geoms: &'a [(f64, f64)],
     pairs: &'a [(usize, usize)],
     ts: &'a [f64],
-    plans: &'a [Result<Vec<CaseSeats>, String>],
+    plans: &'a [Vec<Plan>],
     /// (thickness, light mix, geometry) indices whose single-mix wall misses freeboard.
     fb_fails: &'a std::collections::HashSet<(usize, usize, usize)>,
 }
@@ -1810,7 +1815,8 @@ fn place_zones(
     const GROW_IN: f64 = 24.0;
     let (gi, ti) = sp.pairs[tr.pi];
     let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
-    let plan = &sp.plans[tr.pi];
+    // Seats planned for the all-light wall: the dense patches are placed after the seats.
+    let plan = &sp.plans[tr.pi][tr.ri];
     let Ok(seats) = plan.as_ref() else { return (None, Stopped::Other) };
     let (light, dense) = (&sp.axis[tr.ri], &sp.dense[tr.di]);
     let (gate, inc) = (params.gates.dc_search, z.increment_in);
@@ -1975,12 +1981,15 @@ fn zoned_search(
     };
     let mut tries = Vec::new();
     for (pi, &(gi, ti)) in sp.pairs.iter().enumerate() {
-        if unbuildable[gi].is_some() || sp.plans[pi].is_err() {
+        if unbuildable[gi].is_some() {
             continue;
         }
         let (grid, t) = (&sp.grids[gi], sp.ts[ti]);
         let light_v = hull_weight(grid, &sections(grid, t), 1.0);
         for (ri, l) in sp.axis.iter().enumerate() {
+            if sp.plans[pi][ri].is_err() {
+                continue;
+            }
             for (di, d) in sp.dense.iter().enumerate().filter(|(_, d)| d.0 > l.0) {
                 stats.walls += 1;
                 // Dense concrete only adds weight: no two-mix wall here makes freeboard.
@@ -2068,11 +2077,11 @@ pub fn candidate_drag(params: &Params, hull: &Hull, c: &Candidate) -> Option<f64
     }
     let fit = strength(params).ok()?;
     let axis = density_axis(params, &fit).ok()?;
-    let (rho_fit, mid) =
-        (axis.iter().find(|a| a.0 == c.density_pcf && a.2 == c.mix)?.1.clone(), &axis[axis.len() / 2]);
+    let rho_fit = axis.iter().find(|a| a.0 == c.density_pcf && a.2 == c.mix)?.1.clone();
     let grid = Grid::build_topsides(hull, c.depth_in, params.hull.stations, candidate_topsides(params, c)).0;
     let sec = sections(&grid, c.thickness_in);
-    let plan = plan_seats(params, &mid.1, &grid, &sec, c.thickness_in, mid.0).map_err(|e| format!("{e:#}"));
+    let plan = plan_seats(params, &rho_fit, &grid, &sec, c.thickness_in, c.density_pcf)
+        .map_err(|e| format!("{e:#}"));
     let wall = Wall::Uniform(c.density_pcf);
     evaluate_wall(params, &rho_fit, &grid, &sec, c.thickness_in, wall, &plan, false, true).drag_n
 }
@@ -2254,6 +2263,7 @@ fn case_calcs_on(params: &Params, strength: &StrengthFit, hull: &Hull, w: &mut W
                 seats_in: k.seats_in.clone(),
                 crew_order: k.crew_order.clone(),
                 source: k.seat_source.unwrap_or(SeatSource::Given),
+                planned_rho_pcf: None,
             };
             calc_trace(&wp, &fit, &grid, &sec, c.thickness_in, c.density_pcf, &lc.name, &seats)
         })
@@ -3409,6 +3419,17 @@ fn evaluate_wall(
             return c;
         }
     };
+    // Auto seats are planned for one wall density (its weight and strength); a wall of another
+    // density must not reuse them. Guards every caller, not one call site.
+    if let Some((case, r)) = params
+        .load_cases
+        .iter()
+        .zip(plan)
+        .find_map(|(case, s)| s.planned_rho_pcf.filter(|&r| r != rho).map(|r| (case, r)))
+    {
+        c.error = Some(format!("seats: {} planned at {r} pcf, used on a {rho} pcf wall", case.name));
+        return c;
+    }
     // The empty canoe: GM always reported; an error only fails the candidate when it is gated.
     let (patch, cg) = (params.material.knee_patch_in, params.stability.crew_cg_in);
     match wall.solve(grid, sec, 1.0, &[], patch, cg) {
@@ -3507,4 +3528,28 @@ fn evaluate_wall(
         c.error = Some("no load cases".into());
     }
     c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Auto seats planned for one wall density must never be used on a wall of another: the
+    /// candidate fails with the reason instead of silently using the wrong seats.
+    #[test]
+    fn seats_planned_at_another_density_fail_the_candidate() {
+        let mut p = Params::load(std::path::Path::new("examples/canoe.toml")).unwrap();
+        p.objective.kind = ObjectiveKind::Weight;
+        let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
+        let fit = strength(&p).unwrap();
+        let grid = Grid::build_topsides(&h, 12.0, p.hull.stations, p.hull.topsides()).0;
+        let sec = sections(&grid, 0.375);
+        let plan = plan_seats(&p, &fit, &grid, &sec, 0.375, 56.0).map_err(|e| format!("{e:#}"));
+        assert!(plan.as_ref().unwrap().iter().all(|s| s.planned_rho_pcf == Some(56.0)));
+        let ok = evaluate(&p, &fit, &grid, &sec, 0.375, 56.0, &plan, false);
+        assert!(ok.error.is_none(), "{:?}", ok.error);
+        let bad = evaluate(&p, &fit, &grid, &sec, 0.375, 58.0, &plan, false);
+        assert!(!bad.passes);
+        assert!(bad.error.as_deref().is_some_and(|e| e.contains("planned at 56 pcf, used on a 58 pcf wall")));
+    }
 }

@@ -163,8 +163,10 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    positions and crew order (every distinct order, <= 4 unpinned paddlers) minimizing the highest
    seat-dependent utilization max(D/C without punching / dc_search, 1 - (fb - fb_min)/s,
    1 - (GM - gm_min)/s), s = max(min, 1 in); knees >= `spacing_min_in` apart within
-   [`bow_clear_in`, L - `stern_clear_in`]. Solved once per (t, depth) at the middle density of the
-   axis and reused for every density and for verify. `auto = false`: evenly spaced L(i+1)/(k+1).
+   [`bow_clear_in`, L - `stern_clear_in`]. Solved once per (t, depth, flare) and density, at
+   that density (its weight and strength; until 2026-10-20 at the middle density of the axis for
+   every density), and reused for verify; a plan is never used on a wall of another density (the
+   candidate fails with the reason). Two-mix walls use their light mix's seats. `auto = false`: evenly spaced L(i+1)/(k+1).
    `positions` (per paddler, `weights_lb` order; not with `seats_in`): seat number 1 = bow ... k =
    stern pins that paddler there, 0 = free. Auto tries only orders that keep the pins (and even
    spacing in the entered order first); evenly spaced seats fill the free seats with the free

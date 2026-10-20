@@ -58,6 +58,11 @@ pub struct CaseSeats {
     /// Paddler indices (into `weights_lb`) bow to stern.
     pub crew_order: Vec<usize>,
     pub source: SeatSource,
+    /// Wall density the seats were planned at, pcf (auto seats: they depend on the wall's weight
+    /// and strength). A wall of another density must not use them (`optimize::evaluate_wall`
+    /// fails it). None = given or even seats, which do not depend on the wall.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planned_rho_pcf: Option<f64>,
 }
 
 /// Evenly spaced knees: x0 + L (i+1)/(k+1).
@@ -107,7 +112,7 @@ pub fn fixed(params: &Params, case: &LoadCase, grid: &Grid) -> Option<CaseSeats>
         None if !params.seats.auto => (even_placed(case, grid), SeatSource::Even),
         None => return None,
     };
-    Some(CaseSeats { crew_order: order_of(&seats_in), seats_in, source })
+    Some(CaseSeats { crew_order: order_of(&seats_in), seats_in, source, planned_rho_pcf: None })
 }
 
 /// Seat sets a case is checked at: the nominal seats first, then (v > 0) the
@@ -472,7 +477,12 @@ pub fn auto(
         }
     }
     match pick {
-        Some((_, s)) => Ok(CaseSeats { crew_order: order_of(&s), seats_in: s, source: SeatSource::Auto }),
+        Some((_, s)) => Ok(CaseSeats {
+            crew_order: order_of(&s),
+            seats_in: s,
+            source: SeatSource::Auto,
+            planned_rho_pcf: Some(rho),
+        }),
         None => Err(first_err.unwrap_or_else(|| anyhow::anyhow!("auto seats: nothing to evaluate"))),
     }
 }

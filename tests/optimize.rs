@@ -655,7 +655,8 @@ fn fine_depth_tol_winner_verifies() {
     assert_eq!(fails, 0);
 }
 
-/// The wide generated hull with the team's crew and gates (tests/fixtures), whose loaded GM binds.
+/// A wide generated hull (27.75 in waterline beam) with the team's crew and gates
+/// (tests/fixtures), on the edge of the loaded-GM gate: 27.7 in passes at no flare in 3-5 deg.
 fn team_wide_hull() -> (Params, Hull) {
     use jaguar::hullgen::{ShapeParams, generate};
     let text = std::fs::read_to_string("tests/fixtures/team_canoe.toml").unwrap();
@@ -666,7 +667,7 @@ fn team_wide_hull() -> (Params, Hull) {
     (p.search.flare_deg, p.search.depth_in) = (Some([3.0, 5.0, 0.5]), [10.375, 18.375, 0.5]);
     let shape = ShapeParams {
         length_in: 216.0,
-        beam_in: 27.8,
+        beam_in: 27.75,
         draft_in: 7.5,
         fore_wp: 0.74,
         section: 0.9,
@@ -702,24 +703,23 @@ fn gate_slack_table_sorts_the_binding_gate_first() {
     assert!(w.verified && w.gates.iter().all(|x| x.slack >= 0.0), "{:#?}", w.gates);
 }
 
-/// search.flare_tol_deg: on a wide hull where loaded GM binds (the team's crew and gates, seats
-/// planned at a heavy middle mix), the grid winner (4.5 deg) fails verification; refined, the
-/// flare lands between grid values (just above 4.0, which fails) with a shallower mold, lighter
-/// and verified. Without flare_tol_deg the flare stays on the grid.
+/// search.flare_tol_deg: on the wide hull, where loaded GM binds, the grid winner (5 deg) fails
+/// verification; refined, the flare lands between grid values (just above 4.5, which fails) with
+/// a shallower mold, lighter and verified. Without flare_tol_deg the flare stays on the grid.
 #[test]
 fn flare_tol_refines_flare_between_grid_values() {
     let (mut p, h) = team_wide_hull();
     let grid = optimize::run(&p, &h).unwrap().winner.unwrap();
-    assert_eq!((grid.candidate.flare_deg, grid.verified), (4.5, false));
+    assert_eq!((grid.candidate.flare_deg, grid.verified), (5.0, false));
     p.search.depth_tol_in = Some(0.01);
     let depth_only = optimize::run(&p, &h).unwrap().winner.unwrap().candidate;
-    assert_eq!(depth_only.flare_deg, 4.5);
+    assert_eq!(depth_only.flare_deg, 5.0);
     p.search.flare_tol_deg = Some(0.01);
     let r = optimize::run(&p, &h).unwrap();
     let w = r.winner.as_ref().unwrap();
     let c = &w.candidate;
     assert!(w.verified, "{:?}", w.verify_failure);
-    assert!(c.flare_deg > 4.0 && c.flare_deg < 4.5, "{}", c.flare_deg);
+    assert!(c.flare_deg > 4.5 && c.flare_deg < 5.0, "{}", c.flare_deg);
     assert!(c.depth_in < grid.candidate.depth_in);
     assert!(c.hull_weight_lb < depth_only.hull_weight_lb.min(grid.candidate.hull_weight_lb));
     // The 0.01 deg less flare was tried and failed.
@@ -748,5 +748,24 @@ fn extrapolated_winner_density_is_warned() {
             .any(|w| w.contains(&format!("density {rho:.1} pcf is {:.1} pcf outside", rho - 60.0))),
         "{:?}",
         r.data_warnings
+    );
+}
+
+/// Seats are planned at the candidate's own density. The team fixture lists its mix (M4 A,
+/// 65.35 pcf) and a heavy 80 pcf one: until 2026-10-20 every density used seats planned at the
+/// middle of that list (80 pcf), as in run opt-3215, so the M4 A winner's seats differed from a
+/// run with M4 A alone. Now they are the same seats and the same design.
+#[test]
+fn winner_seats_are_planned_at_its_own_density() {
+    let (mut p, h) = team_wide_hull();
+    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
+    assert_eq!(w.candidate.mix.as_deref(), Some("M4 A"));
+    p.material.mixes = Some(vec!["M4 A".into()]);
+    let alone = optimize::run(&p, &h).unwrap().winner.unwrap();
+    let seats = |w: &optimize::Winner| w.cases.iter().map(|k| k.seats_in.clone()).collect::<Vec<_>>();
+    assert_eq!(seats(&w), seats(&alone));
+    assert_eq!(
+        (w.candidate.depth_in, w.candidate.hull_weight_lb),
+        (alone.candidate.depth_in, alone.candidate.hull_weight_lb)
     );
 }
