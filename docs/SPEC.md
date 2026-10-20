@@ -228,7 +228,7 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
      as factored) is reacted by a uniform lateral pressure p = k W / A_lat on one side's underwater
      profile (h = local waterline - keel), each side a cantilever from the keel:
      sigma_y = 3 p h^2 / t^2 (`check::hoop_psi`). Absent = sigma_y 0
-6. **Gates**: a candidate passes iff D/C <= `dc_search`, gated freeboard (step 3) >= `freeboard_min_in` + `freeboard_margin_in` and
+6. **Gates** (each plus its one-sided search margin, see "One gate list" below): a candidate passes iff D/C <= `dc_search`, gated freeboard (step 3) >= `freeboard_min_in` + `freeboard_margin_in` and
    GM_T >= `gm_min_in` for every load case (and seat sample), the empty canoe (no crew) has GM_T >=
    `stability.gm_empty_min_in` when that is given (optional; always computed: candidate `gm_empty_in`,
    per-case `gm_cases_in`, winner `empty.gm_in`), and, with `[flotation]`, the canoe floats swamped
@@ -236,14 +236,25 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    tip, full hull interior up to D = enclosed area minus wall area) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
    by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are
    never tried.
+   **One gate list** (`optimize::Gate`: D/C, freeboard, loaded GM, empty GM, air pocket, and with
+   `[shape_search]` the overall beam): each has a verification limit and a search limit. The search
+   gates at the search limit: D/C at `dc_search`; freeboard, loaded and empty GM at the gate plus
+   `gates.freeboard_search_margin_in` / `gm_search_margin_in` / `gm_empty_search_margin_in`
+   (defaults 0.01, 0.01, 0.05 in); the air pocket at its maximum less
+   `gates.air_pocket_search_margin_in` (0.5 in); the beam at its cap (no margin). Values at the
+   search resolution drift toward failing at finer stations (measured n -> 2n-1 at n = 61: loaded GM
+   -0.003, freeboard -0.002 to -0.004, D/C +0.004, air pocket +0.13 in; empty GM noisy, +/-0.016;
+   beam 0; about 1/n); the margins are about 3x that. The best candidate is then **re-checked at
+   2n-1 stations** against every gate at its verification limit (D/C at `dc_verify`); one that
+   fails is failed with the reason and the next best taken (`result.recheck` {checked, failed},
+   summed over a shape search). Two-mix walls are re-checked by verification only.
    **Continuous depth and flare** (optional `search.depth_tol_in` = s > 0; `search.flare_tol_deg`,
    which needs `search.flare_deg`): after the grid, a single-mix winner at grid depth D (not the
    lowest) is bisected over D - j s, j >= 1, above the next shallower grid depth (same wall and
    mix; seats re-solved at each point), assuming pass/fail is monotone over that one step; flare
    likewise below the winner's grid flare. With both, flare-then-depth and depth-then-flare are
-   run and the lighter end point kept. A point passes only if its freeboard and loaded GM also
-   pass at the 2n-1 verify stations (bisection lands on those gates, which have no search
-   margin). The refined point replaces the winner when it beats it under the objective; every
+   run and the lighter end point kept. A point passes only if every gate also
+   holds at the 2n-1 verify stations at its verification limit (bisection lands on the gates). The refined point replaces the winner when it beats it under the objective; every
    point tried is appended to `candidates`. Two-mix winners keep their grid point. Absent = grid
    values only.
 7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
@@ -270,9 +281,9 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    series stays below it even at max + 2 x its largest step; then VERIFIED iff
    max(dc_extrapolated, D/C at 4n-3) <= `dc_verify` (never below a computed value). Otherwise
    `dc_extrapolated` is null, `convergence.note` says which series, and VERIFIED iff the 2n-1 D/C
-   <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin. The floating gates
-   are re-checked at 2n-1 stations too: VERIFIED also needs freeboard >= `freeboard_min_in` + `freeboard_margin_in` and
-   loaded GM >= `gm_min_in` there (a design the search passed by a hair can miss them).
+   <= `dc_verify`. The search gate `dc_search` < `dc_verify` keeps its margin. Every other gate of
+   the list is re-checked at 2n-1 stations at its verification limit too (freeboard, loaded and
+   empty GM, air pocket, overall beam).
    `verify_failure` says why when not verified.
 8b. **Stands** (optional `[stands]`, `src/stands.rs`; `optimize::verify_stands`, called once by
    `jaguar::run` after either search, never a search gate): the winner at 2n-1 stations, empty,
@@ -343,11 +354,11 @@ beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, cap
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
 gunwale_immersion_deg}]}, gates [{name, at, value, limit, at_least, slack, relative, stations}]}
-| null, closest, zones, ended_early, data_warnings}`.
+| null, closest, zones, ended_early, data_warnings, recheck {checked, failed}}`.
 `winner.gates`: every gate of the design with its signed slack (>= 0 passes; value - limit for a
 minimum, limit - value for a maximum), sorted by `relative` = slack / max(|limit|, 1): verified D/C
-(extrapolated, else 2n-1) vs `dc_verify`; each check's search D/C vs `dc_search`; freeboard, loaded
-and empty GM at 2n-1; air pocket and (shape search) overall beam at n. The terminal prints the
+(extrapolated, else 2n-1) vs `dc_verify`; each check's search D/C vs `dc_search`; then every other
+gate of the list (freeboard, loaded GM, empty GM, air pocket, overall beam) at 2n-1. The terminal prints the
 four closest as `binding`; the PDF report has the whole table.
 `data_warnings` (absent when empty): lab-data warnings, most serious first: rows that look like
 placeholders (name dummy / placeholder / fake / tbd / todo / xxx, final split outside 100-1000 psi,

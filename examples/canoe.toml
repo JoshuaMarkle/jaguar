@@ -93,6 +93,12 @@ freeboard_min_in = 6.0
 # freeboard_margin_in = 0.0       # added to freeboard_min_in for how judges stage the crew
 # freeboard_seat_shift_in = 0.0   # gate freeboard with the crew moved +/- this, in (0 = marked seats)
 thickness_min_buildable_in = 0.375   # thinnest wall the team can cast
+# One-sided search margins (defaults below): the search gates at the gate plus these, the best
+# candidate is re-checked at 2n-1 stations without them (search values drift toward failing).
+# freeboard_search_margin_in = 0.01
+# gm_search_margin_in = 0.01
+# gm_empty_search_margin_in = 0.05
+# air_pocket_search_margin_in = 0.5
 
 # Freeboard is gated where the hull lettering sits (absent = lowest point of the whole hull).
 # [lettering]

@@ -96,6 +96,122 @@ pub struct Candidate {
     pub dense_mix: Option<String>,
 }
 
+/// `gate`'s search limit (gated or not: callers check [`Gate::limits`] first when it matters).
+fn search_limit(p: &Params, gate: Gate) -> f64 {
+    gate.limits(p).map_or(f64::NAN, |l| l.2)
+}
+
+/// ", search margin on X in" when `gate`'s search limit differs from its verification limit.
+fn margin_note(p: &Params, gate: Gate) -> String {
+    match gate.limits(p) {
+        Some((v, _, s)) if s != v => format!(", search margin on {v} in"),
+        _ => String::new(),
+    }
+}
+
+/// The design gates. The search's pass test (search limits: the verification limit moved by the
+/// one-sided search margin), the in-search re-check of the best candidate at 2n-1 stations
+/// ([`fine_misses`]) and verification all go through this list, so no gate can be applied at
+/// one resolution and not the other (tests: every gate is re-checked; every gate but the
+/// overall beam, measured not to drift, has a search margin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gate {
+    Dc,
+    Freeboard,
+    LoadedGm,
+    EmptyGm,
+    AirPocket,
+    Beam,
+}
+
+impl Gate {
+    pub const ALL: [Gate; 6] =
+        [Gate::Dc, Gate::Freeboard, Gate::LoadedGm, Gate::EmptyGm, Gate::AirPocket, Gate::Beam];
+
+    /// Name in messages and the binding-constraint table.
+    pub fn label(self) -> &'static str {
+        match self {
+            Gate::Dc => "D/C",
+            Gate::Freeboard => "freeboard",
+            Gate::LoadedGm => "loaded GM",
+            Gate::EmptyGm => "empty GM",
+            Gate::AirPocket => "air pocket",
+            Gate::Beam => "overall beam",
+        }
+    }
+
+    /// (limit at verification, true = the value must be at least it, limit in the search);
+    /// None = not gated in this run. D/C: `dc_verify` / `dc_search`; the others move by their
+    /// `gates.*_search_margin_in`; the overall beam (`shape_search.beam_in` max) has none.
+    pub fn limits(self, p: &Params) -> Option<(f64, bool, f64)> {
+        let g = &p.gates;
+        match self {
+            Gate::Dc => Some((g.dc_verify, false, g.dc_search)),
+            Gate::Freeboard => {
+                let r = g.freeboard_required_in();
+                Some((r, true, r + g.freeboard_search_margin_in))
+            }
+            Gate::LoadedGm => {
+                let m = p.stability.gm_min_in;
+                Some((m, true, m + g.gm_search_margin_in))
+            }
+            Gate::EmptyGm => p.stability.gm_empty_min_in.map(|m| (m, true, m + g.gm_empty_search_margin_in)),
+            Gate::AirPocket => p
+                .flotation
+                .as_ref()
+                .map(|f| (f.air_pocket_max_in, false, f.air_pocket_max_in - g.air_pocket_search_margin_in)),
+            Gate::Beam => p.shape_search.as_ref().map(|s| (s.beam_in[1], false, s.beam_in[1])),
+        }
+    }
+
+    /// `c`'s value; None = not computed (fails the gate).
+    pub fn value(self, c: &Candidate) -> Option<f64> {
+        match self {
+            Gate::Dc => c.verdict.as_ref().map(|v| v.dc),
+            Gate::Freeboard => c.verdict.as_ref().map(|v| v.freeboard_in),
+            Gate::LoadedGm => c.gm_in,
+            Gate::EmptyGm => c.gm_empty_in,
+            Gate::AirPocket => c.air_pocket_in,
+            Gate::Beam => Some(c.beam_in),
+        }
+    }
+
+    /// Why `c` misses this gate, None = passes (or not gated): against the search limit when
+    /// `search`, else the verification limit; `stations` names the resolution in the message.
+    pub fn miss(self, p: &Params, c: &Candidate, search: bool, stations: usize) -> Option<String> {
+        let (verify, at_least, search_lim) = self.limits(p)?;
+        let lim = if search { search_lim } else { verify };
+        let unit = if self == Gate::Dc { "" } else { " in" };
+        match self.value(c) {
+            Some(v) if (at_least && v >= lim) || (!at_least && v <= lim) => None,
+            Some(v) => {
+                let op = if at_least { "<" } else { ">" };
+                let margin = if search && lim != verify {
+                    format!(" (search margin on {verify}{unit})")
+                } else {
+                    String::new()
+                };
+                Some(format!("{} at {stations} stations {v:.4}{unit} {op} {lim}{unit}{margin}", self.label()))
+            }
+            None => Some(format!("{} not computed at {stations} stations", self.label())),
+        }
+    }
+}
+
+/// Every gate `c` misses at `stations` (search limits when `search`), in [`Gate::ALL`] order.
+pub fn gate_misses(p: &Params, c: &Candidate, search: bool, stations: usize) -> Vec<String> {
+    Gate::ALL.iter().filter_map(|g| g.miss(p, c, search, stations)).collect()
+}
+
+/// In-search re-checks of the best candidate at 2n-1 stations (`RunResult::recheck`).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Recheck {
+    /// Best candidates re-checked at 2n-1 stations.
+    pub checked: usize,
+    /// Of those, failed there (each was failed with the reason and the next best taken).
+    pub failed: usize,
+}
+
 /// The candidate that comes closest when nothing passes ([`RunResult::closest`]): re-checked
 /// with every load case and gate (no early exit) and analysed like a winner ([`finish_winner`]:
 /// verification, every case, empty float, stands, curves, worked proof).
@@ -108,7 +224,9 @@ pub struct Closest {
 
 /// The gates `c` misses, worst first, each with its numbers, and its score: the largest relative
 /// miss over the gates ((demand - limit) / limit, or (limit - value) / limit; <= 0 when it passes
-/// them all, infinite for an analysis error). Ranks candidates for [`Closest`].
+/// them all, infinite for an analysis error). Ranks candidates for [`Closest`]. The limits are the
+/// search's ([`Gate::limits`]: with the search margins), so a candidate the search failed inside
+/// a margin is listed with that miss.
 pub fn shortfalls(params: &Params, c: &Candidate) -> (f64, Vec<String>) {
     let mut miss: Vec<(f64, String)> = Vec::new();
     if let Some(e) = &c.error {
@@ -123,13 +241,14 @@ pub fn shortfalls(params: &Params, c: &Candidate) -> (f64, Vec<String>) {
                 v.dc / g.dc_search - 1.0,
                 format!("strength: D/C {:.3} ({}, {case}) > {}", v.dc, v.governing_check, g.dc_search),
             ));
+            let fb = search_limit(params, Gate::Freeboard);
             miss.push((
-                (g.freeboard_required_in() - v.freeboard_in) / g.freeboard_required_in().abs().max(1.0),
+                (fb - v.freeboard_in) / fb.abs().max(1.0),
                 format!(
-                    "freeboard{}: {:.2} in < {} in (lowest load case)",
+                    "freeboard{}: {:.2} in < {fb} in (lowest load case{})",
                     if params.lettering.is_some() { " at the lettering" } else { "" },
                     v.freeboard_in,
-                    g.freeboard_required_in()
+                    margin_note(params, Gate::Freeboard)
                 ),
             ));
         }
@@ -144,19 +263,25 @@ pub fn shortfalls(params: &Params, c: &Candidate) -> (f64, Vec<String>) {
                 .min_by(|a, b| a.1.total_cmp(b.1))
                 .and_then(|(i, _)| params.load_cases.get(i))
                 .map_or(String::new(), |lc| format!(", {}", lc.name));
+            let m = search_limit(params, Gate::LoadedGm);
             miss.push((
-                (st.gm_min_in - gm) / st.gm_min_in.abs().max(1.0),
-                format!("stability: loaded GM {gm:.2} in < {} in{worst}", st.gm_min_in),
+                (m - gm) / m.abs().max(1.0),
+                format!(
+                    "stability: loaded GM {gm:.2} in < {m} in{worst}{}",
+                    margin_note(params, Gate::LoadedGm)
+                ),
             ));
         }
         None if c.verdict.is_some() => miss.push((f64::INFINITY, "stability: loaded GM not computed".into())),
         None => {}
     }
-    if let Some(m) = st.gm_empty_min_in {
+    if st.gm_empty_min_in.is_some() {
+        let m = search_limit(params, Gate::EmptyGm);
         match c.gm_empty_in {
-            Some(g) => {
-                miss.push(((m - g) / m.abs().max(1.0), format!("stability: empty GM {g:.2} in < {m} in")))
-            }
+            Some(g) => miss.push((
+                (m - g) / m.abs().max(1.0),
+                format!("stability: empty GM {g:.2} in < {m} in{}", margin_note(params, Gate::EmptyGm)),
+            )),
             None => miss.push((f64::INFINITY, "stability: empty GM not computed".into())),
         }
     }
@@ -247,16 +372,14 @@ pub struct GateSlack {
     pub stations: usize,
 }
 
-/// The gates of design `c` (search values) with its verification `v` (2n-1 stations), `cases`
-/// and `empty` (2n-1) and station convergence `conv`, sorted by relative slack: verified D/C,
-/// each check's search D/C, freeboard, loaded and empty GM, and when gated the air pocket and the
-/// overall beam. Values are at verification resolution where it re-computes them.
+/// The gates of design `c` (search values) with its verification `v` and `cases` (2n-1
+/// stations) and station convergence `conv`, sorted by relative slack: verified D/C, each check's
+/// search D/C, then every other gate of the shared list ([`Gate`]) at 2n-1.
 fn gate_slack(
     params: &Params,
     c: &Candidate,
     v: &Candidate,
     cases: &[CaseDiagrams],
-    empty: &EmptyFloat,
     conv: &Convergence,
 ) -> Vec<GateSlack> {
     let n = params.hull.stations;
@@ -297,27 +420,15 @@ fn gate_slack(
             gate(format!("D/C {}", k.name), at, k.dc, g.dc_search, false, n);
         }
     }
-    if let Some(vv) = &v.verdict {
-        gate(
-            "freeboard".into(),
-            case(|k| k.freeboard_in),
-            vv.freeboard_in,
-            g.freeboard_required_in(),
-            true,
-            fine,
-        );
-    }
-    if let Some(gm) = v.gm_in {
-        gate("loaded GM".into(), case(|k| k.gm_in), gm, params.stability.gm_min_in, true, fine);
-    }
-    if let (Some(m), Some(gm)) = (params.stability.gm_empty_min_in, empty.gm_in) {
-        gate("empty GM".into(), "", gm, m, true, fine);
-    }
-    if let (Some(fp), Some(l)) = (&params.flotation, c.air_pocket_in) {
-        gate("air pocket each end, in".into(), "", l, fp.air_pocket_max_in, false, n);
-    }
-    if let Some(ss) = &params.shape_search {
-        gate("overall beam, in".into(), "", c.beam_in, ss.beam_in[1], false, n);
+    // The other gates of the shared list, at the verification stations and limits.
+    for &gt in &Gate::ALL[1..] {
+        let (Some((limit, at_least, _)), Some(value)) = (gt.limits(params), gt.value(v)) else { continue };
+        let at = match gt {
+            Gate::Freeboard => case(|k| k.freeboard_in),
+            Gate::LoadedGm => case(|k| k.gm_in),
+            _ => "",
+        };
+        gate(gt.label().into(), at, value, limit, at_least, fine);
     }
     out.sort_by(|a, b| a.relative.total_cmp(&b.relative));
     out
@@ -991,6 +1102,9 @@ pub struct RunResult {
     /// extrapolated ([`extrapolation_warning`]). Empty = none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_warnings: Vec<String>,
+    /// The in-search re-check at 2n-1 stations ([`fine_misses`]); a shape search sums every
+    /// shape's inner search and the final re-run.
+    pub recheck: Recheck,
 }
 
 /// WARNING when `c`'s density (fit mode; and its dense zone mix) lies outside the densities the
@@ -1215,6 +1329,7 @@ pub struct Inner {
     pub best: Option<Candidate>,
     /// Every candidate tried, as [`run`] reports them.
     pub candidates: Vec<Candidate>,
+    pub recheck: Recheck,
 }
 
 /// The shape search's inner loop: [`run`]'s wall search without the winner analysis
@@ -1226,7 +1341,7 @@ pub fn run_inner(params: &Params, hull: &Hull) -> Result<Inner> {
     let best = s.refined.map(|r| r.0).or(s.best);
     let mut candidates = s.candidates;
     candidates.extend(s.refine_tries);
-    Ok(Inner { best, candidates })
+    Ok(Inner { best, candidates, recheck: s.recheck })
 }
 
 /// The wall search up to the winner's candidate: [`search_walls`]'s output, kept for the
@@ -1248,6 +1363,7 @@ struct Searched {
     refined: Option<WallTry>,
     /// Every point [`refine_wall`] tried (not yet in `candidates`).
     refine_tries: Vec<Candidate>,
+    recheck: Recheck,
 }
 
 fn run_search(
@@ -1270,6 +1386,7 @@ fn run_search(
         best,
         refined,
         refine_tries,
+        recheck,
     } = search_walls(params, hull, on_progress, ctl)?;
     let winner = match &best {
         None => None,
@@ -1336,6 +1453,7 @@ fn run_search(
         zones: zone_stats,
         ended_early: None,
         data_warnings,
+        recheck,
     })
 }
 
@@ -1450,16 +1568,60 @@ fn search_walls(
         }
     }
 
-    let best = candidates
-        .iter()
-        .filter(|c| c.passes)
-        .reduce(|a, b| if better(params, b, a) { b } else { a })
-        .cloned();
-    // Continuous depth and flare (search.depth_tol_in, flare_tol_deg): a single-mix winner moves
-    // to the lightest passing point below its grid one, with seats solved there.
-    let (refined, refine_tries) = match &best {
-        Some(c) if c.zones.is_none() => refine_wall(params, hull, &axis, (&ds, &fs), c),
-        _ => (None, Vec::new()),
+    // The best candidate, re-checked at 2n-1 stations against every gate without the search
+    // margins; one that fails there is failed with the reason and the next best taken. Continuous
+    // depth and flare (search.depth_tol_in, flare_tol_deg): a single-mix best moves to the lightest
+    // passing point below its grid one (each point re-checked the same way, seats solved there).
+    let mut recheck = Recheck::default();
+    let mut refine_tries = Vec::new();
+    let (best, refined) = loop {
+        let Some(b) = candidates
+            .iter()
+            .filter(|c| c.passes)
+            .reduce(|a, b| if better(params, b, a) { b } else { a })
+            .cloned()
+        else {
+            break (None, None);
+        };
+        // Two-mix walls: their zones are checked at 2n-1 by verification only.
+        if b.zones.is_some() {
+            break (Some(b), None);
+        }
+        let (refined, tries) = refine_wall(params, hull, &axis, (&ds, &fs), &b);
+        refine_tries.extend(tries);
+        if refined.is_some() {
+            break (Some(b), refined);
+        }
+        let ri = axis.iter().position(|a| a.0 == b.density_pcf && a.2 == b.mix);
+        let pi = pairs
+            .iter()
+            .position(|&(gi, ti)| geoms[gi] == (b.depth_in, b.flare_deg) && ts[ti] == b.thickness_in);
+        let (Some(ri), Some(pi)) = (ri, pi) else { break (Some(b), None) };
+        recheck.checked += 1;
+        let top = candidate_topsides(params, &b);
+        let miss = fine_misses(
+            params,
+            hull,
+            &axis[ri].1,
+            (b.depth_in, top),
+            b.thickness_in,
+            b.density_pcf,
+            &plans[pi][ri],
+        );
+        if miss.is_empty() {
+            break (Some(b), None);
+        }
+        recheck.failed += 1;
+        let same = |c: &Candidate| {
+            c.zones.is_none()
+                && (c.thickness_in, c.density_pcf, c.depth_in, c.flare_deg)
+                    == (b.thickness_in, b.density_pcf, b.depth_in, b.flare_deg)
+                && c.mix == b.mix
+        };
+        if let Some(c) = candidates.iter_mut().find(|c| same(c)) {
+            c.passes = false;
+            c.error = Some(miss.join("; "));
+        }
     };
     Ok(Searched {
         fit,
@@ -1475,11 +1637,38 @@ fn search_walls(
         best,
         refined,
         refine_tries,
+        recheck,
     })
 }
 
 /// Seats of every load case on one wall, or why they could not be resolved.
 type Plan = Result<Vec<CaseSeats>, String>;
+
+/// Every gate a single-mix wall (`depth`, topsides `top`, thickness `t`, mix `rho` with strength
+/// `fit`, seats `plan`) misses at the 2n-1 verification stations, at the verification limits
+/// (no search margin). Empty = passes there.
+#[allow(clippy::too_many_arguments)]
+fn fine_misses(
+    params: &Params,
+    hull: &Hull,
+    fit: &StrengthFit,
+    (depth, top): (f64, Topsides),
+    t: f64,
+    rho: f64,
+    plan: &Plan,
+) -> Vec<String> {
+    let fine = 2 * params.hull.stations - 1;
+    let (grid, why) = Grid::build_topsides(hull, depth, fine, top);
+    if let Some(why) = why {
+        return vec![format!("at {fine} stations: {why}")];
+    }
+    let sec = sections(&grid, t);
+    let v = evaluate(params, fit, &grid, &sec, t, rho, plan, false);
+    match &v.error {
+        Some(e) => vec![format!("at {fine} stations: {e}")],
+        None => gate_misses(params, &v, false, fine),
+    }
+}
 
 /// One analysis result from [`refine_wall`]: the candidate and the seats it was checked at.
 type WallTry = (Candidate, Result<Vec<CaseSeats>, String>);
@@ -1522,23 +1711,13 @@ fn refine_wall(
             k.passes = false;
             k.error = Some(why);
         }
-        // Bisection drives the wall onto the freeboard (or GM) gate, which has no search margin:
-        // a point passes only if those gates also hold at the 2n-1 verification stations.
+        // Bisection drives the wall onto a gate: a point passes only if every gate also holds
+        // at the 2n-1 verification stations.
         if k.passes {
-            let fine = 2 * params.hull.stations - 1;
-            let grid = Grid::build_topsides(hull, d, fine, top).0;
-            let sec = sections(&grid, c.thickness_in);
-            let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, false);
-            let (fb, gm) = (v.verdict.as_ref().map(|v| v.freeboard_in), v.gm_in);
-            let (fb_min, gm_min) = (params.gates.freeboard_required_in(), params.stability.gm_min_in);
-            if !(fb.is_some_and(|f| f >= fb_min) && gm.is_some_and(|g| g >= gm_min)) {
+            let miss = fine_misses(params, hull, &axis[ri].1, (d, top), c.thickness_in, c.density_pcf, &plan);
+            if !miss.is_empty() {
                 k.passes = false;
-                k.error = Some(match (fb, gm) {
-                    (Some(f), Some(g)) => format!(
-                        "at {fine} stations: freeboard {f:.4} in (gate {fb_min}), loaded GM {g:.4} in (gate {gm_min})"
-                    ),
-                    _ => format!("no verdict at {fine} stations"),
-                });
+                k.error = Some(miss.join("; "));
             }
         }
         (k, plan)
@@ -2137,12 +2316,13 @@ fn finish_winner(
             Some(x) => x.max(conv.dc[2]) <= params.gates.dc_verify,
             None => verify_dc <= params.gates.dc_verify,
         };
-    // The floating gates (freeboard, loaded GM) are re-checked at the finer stations too: a
-    // design the search passed by a hair can miss them there.
-    let fb = v.verdict.as_ref().map(|v| v.freeboard_in);
-    let fb_ok = fb.is_some_and(|f| f >= params.gates.freeboard_required_in());
-    let gm_ok = v.gm_in.is_some_and(|g| g >= params.stability.gm_min_in);
-    let verified = dc_ok && fb_ok && gm_ok;
+    // Every other gate at the verification limit at the finer stations (the shared list): a
+    // design the search passed by a hair can miss it there.
+    let others: Vec<String> = match v.verdict {
+        Some(_) => Gate::ALL[1..].iter().filter_map(|g| g.miss(params, &v, false, stations)).collect(),
+        None => Vec::new(),
+    };
+    let verified = dc_ok && others.is_empty();
     let verify_failure = (!verified).then(|| {
         let mut why = Vec::new();
         match (v.verdict.is_some(), conv.extrapolated) {
@@ -2158,21 +2338,10 @@ fn finish_winner(
                 params.gates.dc_verify
             )),
         }
-        if let Some(f) = fb.filter(|_| !fb_ok) {
-            why.push(format!(
-                "freeboard at {stations} stations {f:.4} in < {} in",
-                params.gates.freeboard_required_in()
-            ));
-        }
-        if let Some(g) = v.gm_in.filter(|_| v.verdict.is_some() && !gm_ok) {
-            why.push(format!(
-                "loaded GM at {stations} stations {g:.4} in < {} in",
-                params.stability.gm_min_in
-            ));
-        }
+        why.extend(others.iter().cloned());
         why.join("; ")
     });
-    let gates = gate_slack(params, c, &v, &cases, &empty, &conv);
+    let gates = gate_slack(params, c, &v, &cases, &conv);
     let search_space = search_space(params, fit, c)?;
     let walls = &search_space[..3];
     let mut candidate = c.clone();
@@ -3513,17 +3682,10 @@ fn evaluate_wall(
                 }
             }
         }
-        let empty_ok = match (params.stability.gm_empty_min_in, c.gm_empty_in) {
-            (None, _) => true,
-            (Some(m), Some(g)) => g >= m,
-            (Some(_), None) => false,
-        };
-        c.passes = v.dc <= params.gates.dc_search
-            && v.freeboard_in >= params.gates.freeboard_required_in()
-            && gm >= params.stability.gm_min_in
-            && empty_ok;
         c.verdict = Some(v);
         c.governing_case = Some(name);
+        // Every gate at its search limit (the shared list: see [`Gate`]).
+        c.passes = Gate::ALL.iter().all(|g| g.miss(params, &c, true, params.hull.stations).is_none());
     } else {
         c.error = Some("no load cases".into());
     }
@@ -3551,5 +3713,48 @@ mod tests {
         let bad = evaluate(&p, &fit, &grid, &sec, 0.375, 58.0, &plan, false);
         assert!(!bad.passes);
         assert!(bad.error.as_deref().is_some_and(|e| e.contains("planned at 56 pcf, used on a 58 pcf wall")));
+    }
+
+    /// Every gate is applied by the search (with its one-sided margin) and by the re-check at
+    /// 2n-1 (without): a value exactly at the verification limit passes the re-check and fails
+    /// the search, except the overall beam (no drift measured, no margin), and a value just past
+    /// it fails both. The match is exhaustive: a new gate must be added here.
+    #[test]
+    fn every_gate_is_rechecked_and_drifting_gates_have_a_margin() {
+        let mut p = Params::load(std::path::Path::new("examples/canoe.toml")).unwrap();
+        let sp = Params::load(std::path::Path::new("examples/shape_opt.toml")).unwrap();
+        p.shape_search = sp.shape_search.clone();
+        p.stability.gm_empty_min_in = Some(1.0);
+        p.flotation = Some(crate::params::FlotationParams { air_pocket_max_in: 36.0, swamp_factor: 1.1 });
+        let h = Hull::load(p.hull.file.as_ref().unwrap()).unwrap();
+        let fit = strength(&p).unwrap();
+        let grid = Grid::build_topsides(&h, 12.0, p.hull.stations, p.hull.topsides()).0;
+        let sec = sections(&grid, 0.375);
+        let plan = plan_seats(&p, &fit, &grid, &sec, 0.375, 58.0).map_err(|e| format!("{e:#}"));
+        let c0 = evaluate(&p, &fit, &grid, &sec, 0.375, 58.0, &plan, false);
+        let set = |c: &mut Candidate, g: Gate, x: f64| match g {
+            Gate::Dc => c.verdict.as_mut().unwrap().dc = x,
+            Gate::Freeboard => c.verdict.as_mut().unwrap().freeboard_in = x,
+            Gate::LoadedGm => c.gm_in = Some(x),
+            Gate::EmptyGm => c.gm_empty_in = Some(x),
+            Gate::AirPocket => c.air_pocket_in = Some(x),
+            Gate::Beam => c.beam_in = x,
+        };
+        for g in Gate::ALL {
+            let (verify, at_least, search) = g.limits(&p).unwrap_or_else(|| panic!("{g:?} not gated"));
+            if g != Gate::Beam {
+                assert!(
+                    if at_least { search > verify } else { search < verify },
+                    "{g:?} has no search margin"
+                );
+            }
+            let mut c = c0.clone();
+            set(&mut c, g, verify);
+            assert!(g.miss(&p, &c, false, 0).is_none(), "{g:?} at its limit fails the re-check");
+            assert_eq!(g.miss(&p, &c, true, 0).is_some(), g != Gate::Beam, "{g:?} search margin");
+            set(&mut c, g, if at_least { verify - 1e-6 } else { verify + 1e-6 });
+            assert!(g.miss(&p, &c, false, 0).is_some() && g.miss(&p, &c, true, 0).is_some(), "{g:?}");
+            assert!(gate_misses(&p, &c, false, 0).iter().any(|m| m.starts_with(g.label())), "{g:?}");
+        }
     }
 }

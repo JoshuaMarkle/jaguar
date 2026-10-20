@@ -971,6 +971,7 @@ mod tests {
             zones: None,
             ended_early: None,
             data_warnings: Vec::new(),
+            recheck: Default::default(),
         }
     }
 

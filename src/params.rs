@@ -1049,6 +1049,32 @@ pub struct Gates {
     /// this are never generated, and a winner AT this floor is not flagged as
     /// a grid-edge result (it is a real constraint, not a too-narrow range).
     pub thickness_min_buildable_in: f64,
+    /// One-sided search margins, in: the search gates freeboard, loaded GM and empty GM at the
+    /// gate plus this and the air pocket at its maximum less this; the best candidate is then
+    /// re-checked at 2n-1 stations without them (`optimize::Gate`). Values at the search
+    /// resolution drift toward failing as the stations get finer; the defaults are about 3x the
+    /// drift measured at 61 stations (docs/SPEC.md "Gates"). D/C keeps `dc_search` / `dc_verify`.
+    #[serde(default = "freeboard_search_margin")]
+    pub freeboard_search_margin_in: f64,
+    #[serde(default = "gm_search_margin")]
+    pub gm_search_margin_in: f64,
+    #[serde(default = "gm_empty_search_margin")]
+    pub gm_empty_search_margin_in: f64,
+    #[serde(default = "air_pocket_search_margin")]
+    pub air_pocket_search_margin_in: f64,
+}
+
+fn freeboard_search_margin() -> f64 {
+    0.01
+}
+fn gm_search_margin() -> f64 {
+    0.01
+}
+fn gm_empty_search_margin() -> f64 {
+    0.05
+}
+fn air_pocket_search_margin() -> f64 {
+    0.5
 }
 
 impl Gates {
@@ -1221,6 +1247,17 @@ impl Params {
             }
             (Some(_), None) => bail!("search.flare_tol_deg needs a searched flare range (search.flare_deg)"),
             _ => {}
+        }
+        let g = &self.gates;
+        for (name, m) in [
+            ("freeboard_search_margin_in", g.freeboard_search_margin_in),
+            ("gm_search_margin_in", g.gm_search_margin_in),
+            ("gm_empty_search_margin_in", g.gm_empty_search_margin_in),
+            ("air_pocket_search_margin_in", g.air_pocket_search_margin_in),
+        ] {
+            if !(m.is_finite() && m >= 0.0) {
+                bail!("gates.{name} must be >= 0, got {m}");
+            }
         }
         if self.gates.thickness_min_buildable_in > self.search.thickness_in[1] {
             bail!("gates.thickness_min_buildable_in is above search.thickness_in max");

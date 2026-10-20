@@ -222,6 +222,8 @@ fn lhs(ss: &ShapeSearch, n: usize) -> Vec<[f64; SHAPE_DIMS]> {
 struct Eval {
     score: f64,
     rep: Candidate,
+    /// The inner search's re-checks at 2n-1 stations.
+    recheck: crate::optimize::Recheck,
 }
 
 /// Normalizers for the straight/turning blend: straight drag and steady-turn
@@ -385,7 +387,7 @@ fn eval_shape(
     }
     shape.metrics = Some(m);
     rep.shape = Some(shape);
-    Ok(Eval { score, rep })
+    Ok(Eval { score, rep, recheck: r.recheck })
 }
 
 /// `f(0..n)` spread over `rayon::current_num_threads()` plain threads, each
@@ -563,6 +565,10 @@ pub fn run_controlled(
     let mut r = run_with_progress(&winner_params, &hull, &forward)?;
     // The record keeps the input params; the winner's radius is in its shape.
     r.params = params.clone();
+    for e in &evals {
+        r.recheck.checked += e.recheck.checked;
+        r.recheck.failed += e.recheck.failed;
+    }
     if let Some(why) = shape.metrics.as_ref().and_then(|m| m.rejected.clone()) {
         // Every shape broke a [shape_search] constraint: no winner, never a rejected one. Its
         // design is shown as the closest, failing that constraint.

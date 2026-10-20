@@ -655,8 +655,9 @@ fn fine_depth_tol_winner_verifies() {
     assert_eq!(fails, 0);
 }
 
-/// A wide generated hull (27.75 in waterline beam) with the team's crew and gates
-/// (tests/fixtures), on the edge of the loaded-GM gate: 27.7 in passes at no flare in 3-5 deg.
+/// A wide generated hull (27.77 in waterline beam) with the team's crew and gates
+/// (tests/fixtures), on the edge of the loaded-GM gate: 3 deg flare misses it, 4.5 deg passes;
+/// 27.76 in passes at no flare in 3-5 deg with the default search margins.
 fn team_wide_hull() -> (Params, Hull) {
     use jaguar::hullgen::{ShapeParams, generate};
     let text = std::fs::read_to_string("tests/fixtures/team_canoe.toml").unwrap();
@@ -667,7 +668,7 @@ fn team_wide_hull() -> (Params, Hull) {
     (p.search.flare_deg, p.search.depth_in) = (Some([3.0, 5.0, 0.5]), [10.375, 18.375, 0.5]);
     let shape = ShapeParams {
         length_in: 216.0,
-        beam_in: 27.75,
+        beam_in: 27.77,
         draft_in: 7.5,
         fore_wp: 0.74,
         section: 0.9,
@@ -683,43 +684,68 @@ fn team_wide_hull() -> (Params, Hull) {
     (p, h)
 }
 
-/// The binding-constraint table: every gate, sorted by relative slack, negative = fails. The
-/// wide hull's grid winner fails verification on loaded GM, so that gate is first and negative;
-/// a verified example winner has no negative slack.
+/// The binding-constraint table: every gate, sorted by relative slack. On the wide hull loaded
+/// GM binds: it is first, at the verification stations, and (verified) not negative.
 #[test]
 fn gate_slack_table_sorts_the_binding_gate_first() {
     let (p, h) = team_wide_hull();
     let w = optimize::run(&p, &h).unwrap().winner.unwrap();
-    assert!(!w.verified);
+    assert!(w.verified, "{:?}", w.verify_failure);
     let g = &w.gates;
     assert!(g.windows(2).all(|x| x[0].relative <= x[1].relative));
     assert_eq!((g[0].name.as_str(), g[0].stations), ("loaded GM", 2 * p.hull.stations - 1));
-    assert!(g[0].slack < 0.0 && g[0].at_least && (g[0].slack - (g[0].value - g[0].limit)).abs() < 1e-12);
-    for name in ["D/C verified", "D/C punching", "freeboard", "empty GM", "air pocket each end, in"] {
+    assert!(g[0].slack >= 0.0 && g[0].at_least && (g[0].slack - (g[0].value - g[0].limit)).abs() < 1e-12);
+    for name in ["D/C verified", "D/C punching", "freeboard", "empty GM", "air pocket"] {
         assert!(g.iter().any(|x| x.name == name), "{name} missing: {g:#?}");
     }
-    let (p, h) = example_gm0();
-    let w = optimize::run(&p, &h).unwrap().winner.unwrap();
-    assert!(w.verified && w.gates.iter().all(|x| x.slack >= 0.0), "{:#?}", w.gates);
+    assert!(g.iter().all(|x| x.slack >= 0.0), "{g:#?}");
 }
 
-/// search.flare_tol_deg: on the wide hull, where loaded GM binds, the grid winner (5 deg) fails
-/// verification; refined, the flare lands between grid values (just above 4.5, which fails) with
-/// a shallower mold, lighter and verified. Without flare_tol_deg the flare stays on the grid.
+/// The in-search re-check at 2n-1 (Task 7): without search margins the wide hull's best
+/// candidate passes the search by a hair and fails at 2n-1, so it is failed with the reason and
+/// the next best taken (verified); with the default margins no best candidate fails there.
+#[test]
+fn best_candidate_is_rechecked_at_2n_minus_1() {
+    let (mut p, h) = team_wide_hull();
+    let r = optimize::run(&p, &h).unwrap();
+    assert_eq!((r.recheck.checked, r.recheck.failed), (1, 0));
+    let with_margin = r.winner.unwrap().candidate;
+    let g = &mut p.gates;
+    (
+        g.gm_search_margin_in,
+        g.freeboard_search_margin_in,
+        g.gm_empty_search_margin_in,
+        g.air_pocket_search_margin_in,
+    ) = (0.0, 0.0, 0.0, 0.0);
+    let r = optimize::run(&p, &h).unwrap();
+    assert_eq!((r.recheck.checked, r.recheck.failed), (2, 1));
+    let failed = r
+        .candidates
+        .iter()
+        .find(|c| c.error.as_deref().is_some_and(|e| e.starts_with("loaded GM at 81 stations")));
+    assert!(failed.is_some_and(|c| !c.passes), "the re-checked best is failed with its reason");
+    let w = r.winner.unwrap();
+    assert!(w.verified);
+    assert_eq!(w.candidate.hull_weight_lb, with_margin.hull_weight_lb);
+}
+
+/// search.flare_tol_deg: on the wide hull, where loaded GM binds, the grid winner is 4.5 deg;
+/// refined, the flare lands between grid values (just above 4.0, which fails) with a shallower
+/// mold, lighter and verified. Without flare_tol_deg the flare stays on the grid.
 #[test]
 fn flare_tol_refines_flare_between_grid_values() {
     let (mut p, h) = team_wide_hull();
     let grid = optimize::run(&p, &h).unwrap().winner.unwrap();
-    assert_eq!((grid.candidate.flare_deg, grid.verified), (5.0, false));
+    assert_eq!((grid.candidate.flare_deg, grid.verified), (4.5, true));
     p.search.depth_tol_in = Some(0.01);
     let depth_only = optimize::run(&p, &h).unwrap().winner.unwrap().candidate;
-    assert_eq!(depth_only.flare_deg, 5.0);
+    assert_eq!(depth_only.flare_deg, 4.5);
     p.search.flare_tol_deg = Some(0.01);
     let r = optimize::run(&p, &h).unwrap();
     let w = r.winner.as_ref().unwrap();
     let c = &w.candidate;
     assert!(w.verified, "{:?}", w.verify_failure);
-    assert!(c.flare_deg > 4.5 && c.flare_deg < 5.0, "{}", c.flare_deg);
+    assert!(c.flare_deg > 4.0 && c.flare_deg < 4.5, "{}", c.flare_deg);
     assert!(c.depth_in < grid.candidate.depth_in);
     assert!(c.hull_weight_lb < depth_only.hull_weight_lb.min(grid.candidate.hull_weight_lb));
     // The 0.01 deg less flare was tried and failed.
