@@ -700,3 +700,27 @@ fn flare_tol_refines_flare_between_grid_values() {
     let less = r.candidates.iter().find(|k| (k.flare_deg - (c.flare_deg - 0.01)).abs() < 1e-9);
     assert!(less.is_some_and(|k| !k.passes));
 }
+
+/// A fit-mode winner outside the tested densities (here forced by searching only above them)
+/// carries a WARNING saying how far its strength is extrapolated; one inside does not.
+#[test]
+fn extrapolated_winner_density_is_warned() {
+    let (mut p, h) = example_gm0();
+    let r = optimize::run(&p, &h).unwrap();
+    assert!(
+        r.data_warnings.iter().all(|w| !w.contains("outside the tested densities")),
+        "{:?}",
+        r.data_warnings
+    );
+    p.search.density_pcf = [61.0, 64.0, 1.0];
+    let r = optimize::run(&p, &h).unwrap();
+    let rho = r.winner.as_ref().expect("winner above the tested 54.9-60 pcf").candidate.density_pcf;
+    assert!(rho > 60.0);
+    assert!(
+        r.data_warnings
+            .iter()
+            .any(|w| w.contains(&format!("density {rho:.1} pcf is {:.1} pcf outside", rho - 60.0))),
+        "{:?}",
+        r.data_warnings
+    );
+}

@@ -2578,6 +2578,7 @@ function reportHtml(canoeImg, charts) {
     failing ? `<b>No design passes.</b> This report is the closest design, analysed in full. It FAILS: ${failing.fails.map(esc).join('; ')}. Do not build it as is.` : '',
     !failing && !win.verified ? `Winner did not pass verification: ${esc(win.verify_failure || 'D/C over dc_verify at the finer station count')}.` : '',
     s0 && !s0.flexural_fit ? `Assumption: flexural strength = ${f(s0.flex_over_split, 2)} &times; split tensile (no flexural lab data).` : '',
+    ...(result.data_warnings || []).map(esc),
   ].filter(Boolean).map(t => `<div class="note">${t}</div>`).join('');
 
   // Inputs: every params section, scalars as key/value rows, arrays of tables (load cases) as tables.
@@ -2614,9 +2615,15 @@ function reportHtml(canoeImg, charts) {
   const ks = win.knee_split_sensitivity || [];
   const splitSec = ks.length ? `<h3>Knee punching by knee split</h3>` + table(['knee_split', 'load on one knee lb', 'demand psi', 'capacity psi', 'D/C'], ks.map(q =>
     `<tr class="${p.punching && q.knee_split === p.punching.knee_split ? 'gov' : ''}"><td>${f(q.knee_split, 1)}${q.knee_split === 1 ? ' (one knee)' : ''}</td><td>${f(q.load_lb, 1)}</td><td>${f(q.demand_psi, 1)}</td><td>${f(q.capacity_psi, 1)}</td><td>${f(q.dc, 3)}</td></tr>`)) : '';
-  const s = result.strength;
-  const mix = s ? `<div class="cols">${kvr('Split tensile fit', `${f(s.split_slope_psi_per_pcf, 2)} &times; density ${s.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(s.split_intercept_psi), 1)} psi`)}
-      ${kvr('RMS error', `${f(s.rms_residual_psi, 1)} psi`)}${kvr('Tested densities', `${f(s.density_min_pcf, 1)} to ${f(s.density_max_pcf, 1)} pcf`)}
+  const s = result.strength, tested = p.material && p.material.strength_model === 'tested_mixes';
+  const np = s ? (s.points || []).length : 0;
+  // A line through 2 points is exact by construction (rms 0): no line or error is shown for it.
+  const fitTxt = !s ? '' : np < 3 ? `no line: ${np} lab point${np === 1 ? '' : 's'}${tested ? '' : ' (the run uses the line through them; no error estimate)'}`
+    : `${f(s.split_slope_psi_per_pcf, 2)} &times; density ${s.split_intercept_psi < 0 ? '&minus;' : '+'} ${f(Math.abs(s.split_intercept_psi), 1)} psi${tested ? ' <span class="muted">(reference only: tested_mixes uses each mix&rsquo;s own strength)</span>' : ''}`;
+  const groups = s ? [...new Set((s.points || []).map(q => q.group))].map(g => [g, (s.points || []).filter(q => q.group === g).length]) : [];
+  const mix = s ? `<div class="cols">${kvr('Split tensile fit', fitTxt)}
+      ${kvr('RMS error', np < 3 ? 'n/a (fewer than 3 points)' : `${f(s.rms_residual_psi, 1)} psi`)}${kvr('Tested densities', `${f(s.density_min_pcf, 1)} to ${f(s.density_max_pcf, 1)} pcf`)}
+      ${kvr('Breaks per mix', groups.map(([g, n]) => `${esc(g)}: ${n}${g === c.mix ? ' (winner)' : ''}`).join(', '))}
       ${kvr('Flexural', s.flexural_fit ? `measured, ${s.flexural_fit.n} tests` : `derived: ${f(s.flex_over_split, 2)} &times; split`)}
       ${kvr("f'c", s.compressive_fit ? `measured, ${s.compressive_fit.n} tests` : 'derived: (split / 6.7)&sup2;')}</div>`
     + table(['lab point', 'mix', 'density pcf', 'measured psi', 'fraction of final', 'final psi', 'flexural psi', "f'c psi"], (s.points || []).map(q =>
@@ -3076,13 +3083,15 @@ function plotMix(ctx, W, H) {
   ctx.fillStyle = 'rgba(20,20,20,0.04)'; ctx.fillRect(px(m.density_min_pcf), r.t, px(m.density_max_pcf) - px(m.density_min_pcf), r.h);
   const line = (f, col, dash, py2 = py) => { ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash(dash); ctx.beginPath();
     for (let i = 0; i <= 60; i++) { const x = xr[0] + (xr[1] - xr[0]) * i / 60; i ? ctx.lineTo(px(x), py2(f(x))) : ctx.moveTo(px(x), py2(f(x))); } ctx.stroke(); ctx.setLineDash([]); };
-  line(split, C.ink, []);
-  if (showFlex) line(flex, C.muted, ff ? [] : [5, 3]);
+  // Fewer than 3 points: no line (2 points fit exactly, which would look authoritative).
+  const lines = pts.length >= 3;
+  if (lines) line(split, C.ink, []);
+  if (lines && showFlex) line(flex, C.muted, ff ? [] : [5, 3]);
   let fy = null;
   if (showFc) {
     const fr = range2([0, fc(xr[0]), fc(xr[1]), ...cpts.map(p => p[1])]);
     fy = y => r.t + r.h - (y - fr[0]) / (fr[1] - fr[0] || 1) * r.h;
-    line(fc, C.faint, cf ? [] : [2, 3], fy);
+    if (lines) line(fc, C.faint, cf ? [] : [2, 3], fy);
     ctx.restore(); ctx.save();
     ctx.font = font(11); ctx.fillStyle = C.muted; ctx.textAlign = 'left';
     for (const v of niceTicks(fr[0], fr[1], 4)) ctx.fillText(fmt(v), r.l + r.w + 6, fy(v) + 4);
@@ -3093,7 +3102,7 @@ function plotMix(ctx, W, H) {
   for (const [x, y] of pts) { ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(px(x), py(y), 3, 0, 2 * Math.PI); ctx.fill(); }
   for (const [x, y] of fpts) { ctx.fillStyle = C.muted; ctx.fillRect(px(x) - 3, py(y) - 3, 6, 6); }
   if (showFc) for (const [x, y] of cpts) { ctx.strokeStyle = C.muted; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(px(x), fy(y), 3.5, 0, 2 * Math.PI); ctx.stroke(); ctx.lineWidth = 1; }
-  const items = [[C.ink, 'split fit'], ...(showFlex ? [[C.muted, ff ? 'flexural fit' : 'flexural (derived)', ff ? [] : [5, 3]]] : []),
+  const items = !lines ? [[C.ink, 'lab points only: fewer than 3, no fit line']] : [[C.ink, 'split fit'], ...(showFlex ? [[C.muted, ff ? 'flexural fit' : 'flexural (derived)', ff ? [] : [5, 3]]] : []),
     ...(showFc ? [[C.faint, cf ? "f'c fit (right)" : "f'c derived (right)", cf ? [] : [2, 3]]] : [])];
   legend(ctx, r.l + 6, 14, items);
 }
@@ -3105,8 +3114,9 @@ function renderMix() {
     ${row('mixfc', "Show f'c", "Overlay compressive strength f'c on a right-hand axis: the fit through measured compressive_psi when there is one, else (split / 6.7)^2.", '<input type="checkbox" class="switch" id="mixfc">')}
     ${m ? (m.density_min_pcf === m.density_max_pcf
         ? kv('Split tensile', `${f(m.split_intercept_psi, 1)} psi, one tested mix at ${f(m.density_min_pcf, 1)} pcf (no line)`, 'One tested mix in use: its own measured strength, nothing claimed at other densities.')
+        : m.points.length < 3 ? kv('Split tensile', `no line: ${m.points.length} lab points`, 'A line through 2 points is exact by construction, so it has no error estimate. Fit mode still runs on it; add lab tests.')
         : kv('Split tensile', eq(m.split_slope_psi_per_pcf, m.split_intercept_psi), 'Straight line through the final split tensile strengths.'))
-      + kv('RMS error', `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)
+      + kv('RMS error', m.points.length < 3 ? 'n/a (fewer than 3 points)' : `${f(m.rms_residual_psi, 1)} psi`) + kv('Tested densities', `${f(m.density_min_pcf, 1)} to ${f(m.density_max_pcf, 1)} pcf`)
       + kv('Flexural', m.flexural_fit ? meas(m.flexural_fit) : `derived: ${f(m.flex_over_split, 2)} &times; split`, 'Bending tension capacity. Fitted from the flexural_psi column when it has data at 2 or more densities, else split x flex/split ratio.')
       + kv("f'c", m.compressive_fit ? meas(m.compressive_fit) : 'derived: (split / 6.7)&sup2;', 'Compression, shear and punching capacity. Fitted from the compressive_psi column when it has data at 2 or more densities, else from split (ACI).') : ''}
     ${mixCsv ? mixTable() : ''}`;

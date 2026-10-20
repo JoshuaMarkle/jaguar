@@ -44,6 +44,10 @@ Check the fit any time with `jaguar mix` (or `jaguar mix path/to.csv`): it print
 (measured, fraction, final, fitted) and the line, then one line per property saying whether it is
 measured or derived (and why). `jaguar check` prints the same source lines and warns, per fitted
 property, when the fit is weak (fewer than 5 points, or rms scatter above 15% of the mean).
+Every run carries these and more in result.json `data_warnings` (terminal, web and PDF report):
+placeholder-looking rows, falling lines, lines through only 2 points (exact by construction: no
+line or rms is shown for them), mixes on fewer than 3 breaks, and a fit-mode winner outside the
+tested densities (docs/SPEC.md).
 result.json's `strength` block has `flexural_fit` / `compressive_fit` only for measured properties.
 The web mix panel plots each measured property with its fit line (solid) and derived curves dashed.
 

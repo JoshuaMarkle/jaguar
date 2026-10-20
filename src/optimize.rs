@@ -884,6 +884,36 @@ pub struct RunResult {
     /// is the best of the shapes checked, verified as usual.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_early: Option<String>,
+    /// Lab-data warnings ([`StrengthFit::data_warnings`]) and, when the winner's (or the
+    /// closest design's) density lies outside the tested densities, how far its strength is
+    /// extrapolated ([`extrapolation_warning`]). Empty = none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub data_warnings: Vec<String>,
+}
+
+/// WARNING when `c`'s density (fit mode; and its dense zone mix) lies outside the densities the
+/// lab tested, so its strength comes from the line extended past the data (allowed up to
+/// `density_extrapolation_pcf` by [`densities`]). None inside, and under tested_mixes.
+pub fn extrapolation_warning(params: &Params, fit: &StrengthFit, c: &Candidate) -> Option<String> {
+    if params.material.strength_model == StrengthModel::TestedMixes {
+        return None;
+    }
+    let (lo, hi) = fit.tested_range();
+    let rhos = std::iter::once(("density", c.density_pcf))
+        .chain(c.zones.as_ref().map(|z| ("dense mix", z.dense_pcf)));
+    let out: Vec<String> = rhos
+        .filter_map(|(what, rho)| {
+            let past = (lo - rho).max(rho - hi);
+            (past > 1e-9).then(|| format!("{what} {rho:.1} pcf is {past:.1} pcf"))
+        })
+        .collect();
+    (!out.is_empty()).then(|| {
+        format!(
+            "WARNING {} outside the tested densities {lo:.1}-{hi:.1} pcf: strength extrapolated from the line (limit density_extrapolation_pcf = {})",
+            out.join(", "),
+            params.material.density_extrapolation_pcf
+        )
+    })
 }
 
 /// Pause and stop requests for a running search (the web UI's Pause and End buttons; the CLI
@@ -1189,6 +1219,9 @@ fn run_search(
         }
     };
     let winner_hull = (winner.is_some() || closest.is_some()).then(|| hull.clone());
+    let mut data_warnings = fit.data_warnings(params.material.strength_model);
+    let design = winner.as_ref().or(closest.as_ref().map(|c| &c.design));
+    data_warnings.extend(design.and_then(|w| extrapolation_warning(params, &fit, &w.candidate)));
     Ok(RunResult {
         format: RESULT_FORMAT,
         params: params.clone(),
@@ -1200,6 +1233,7 @@ fn run_search(
         race: None,
         zones: zone_stats,
         ended_early: None,
+        data_warnings,
     })
 }
 

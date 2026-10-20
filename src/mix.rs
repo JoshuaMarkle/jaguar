@@ -370,6 +370,57 @@ impl StrengthFit {
         out
     }
 
+    /// Every lab-data warning a run carries (`RunResult::data_warnings`), most serious first: rows
+    /// that look like placeholders ([`placeholder`]); the negative-slope and weak-fit warnings
+    /// ([`Self::weak_fit_warnings`]); a line through only 2 points
+    /// (exact by construction, so its rms of 0 says nothing about accuracy); and under
+    /// tested_mixes the mixes resting on fewer than 3
+    /// breaks, plus a note that the fitted line is then not used for strength.
+    pub fn data_warnings(&self, model: StrengthModel) -> Vec<String> {
+        // Most serious first: placeholder rows, then falling lines, then thin data.
+        let mut out: Vec<String> = self
+            .points
+            .iter()
+            .filter_map(|p| {
+                placeholder(p).map(|why| {
+                    format!(
+                        "WARNING lab row {:?} looks like a placeholder ({why}); delete it or leave it out with material.mixes",
+                        p.group
+                    )
+                })
+            })
+            .collect();
+        out.extend(self.weak_fit_warnings());
+        for (name, f) in self.active_fits() {
+            if f.n == 2 {
+                out.push(format!(
+                    "WARNING {name} line runs through only 2 lab points: exact by construction, so its rms of 0 says nothing about accuracy; add lab tests"
+                ));
+            }
+        }
+        if model == StrengthModel::TestedMixes {
+            let thin: Vec<String> = self
+                .tested_mixes()
+                .iter()
+                .filter(|m| m.n < 3)
+                .map(|m| format!("{} n={}", m.name, m.n))
+                .collect();
+            if !thin.is_empty() {
+                out.push(format!(
+                    "NOTE tested mixes on fewer than 3 breaks (design strength = their mean, no scatter estimate): {}",
+                    thin.join(", ")
+                ));
+            }
+            if !out.is_empty() {
+                out.push(
+                    "NOTE strength_model = tested_mixes: each mix uses its own measured strength; the fitted line is for reference only"
+                        .into(),
+                );
+            }
+        }
+        out
+    }
+
     /// Tested mixes, one per lab row ([`MixPoint::group`] names it), ordered by
     /// density then name. Design strength of a mix = mean final split strength;
     /// flexural / compressive means are over the rows that measured them.
@@ -548,6 +599,38 @@ impl StrengthFit {
         }
         Self::fit(points, m.flex_over_split).context("fitting")
     }
+}
+
+/// Plausible range of a FINAL split tensile strength, psi: canoe concretes break at roughly
+/// 200-700 psi; outside this a row is more likely a placeholder or a typo than a cylinder.
+const SPLIT_PLAUSIBLE_PSI: (f64, f64) = (100.0, 1000.0);
+/// Plausible density range, pcf (very light foamed mixes to normal weight).
+const DENSITY_PLAUSIBLE_PCF: (f64, f64) = (30.0, 150.0);
+/// Lowest plausible FINAL compressive strength, psi.
+const FC_PLAUSIBLE_MIN_PSI: f64 = 500.0;
+/// Names that mark a row as not a real break.
+const PLACEHOLDER_NAMES: [&str; 6] = ["dummy", "placeholder", "fake", "tbd", "todo", "xxx"];
+
+/// Why a lab row looks like a placeholder rather than a cylinder break (its name, or values
+/// outside the plausible ranges above), if it does. A warning only: the thresholds are judgment.
+fn placeholder(p: &MixPoint) -> Option<String> {
+    let name = p.mix.to_ascii_lowercase();
+    let mut why: Vec<String> = PLACEHOLDER_NAMES
+        .iter()
+        .filter(|w| name.contains(*w))
+        .map(|w| format!("name contains {w:?}"))
+        .collect();
+    let ((slo, shi), (dlo, dhi)) = (SPLIT_PLAUSIBLE_PSI, DENSITY_PLAUSIBLE_PCF);
+    if !(slo..=shi).contains(&p.final_psi) {
+        why.push(format!("final split {:.0} psi outside {slo:.0}-{shi:.0}", p.final_psi));
+    }
+    if !(dlo..=dhi).contains(&p.density_pcf) {
+        why.push(format!("density {:.1} pcf outside {dlo:.0}-{dhi:.0}", p.density_pcf));
+    }
+    if let Some(fc) = p.compressive_final_psi().filter(|&fc| fc < FC_PLAUSIBLE_MIN_PSI) {
+        why.push(format!("f'c {fc:.0} psi < {FC_PLAUSIBLE_MIN_PSI:.0}"));
+    }
+    (!why.is_empty()).then(|| why.join(", "))
 }
 
 /// Parse the mix CSV: `#` comment lines, one header line, then rows with
@@ -902,5 +985,42 @@ C,60,280,1,,
         assert_eq!((f.points.len(), f.density_max_pcf), (2, 55.0));
         let e = StrengthFit::parse_for(&t, &material(tm, Some(&["Z"]))).unwrap_err();
         assert!(format!("{e:#}").contains("no mix \"Z\""), "{e:#}");
+    }
+
+    /// The lab rows behind run opt-3215 (2026-10-20): the team's mix and a placeholder row. The
+    /// line through them falls with density and fits exactly; every data warning must say so.
+    #[test]
+    fn data_warnings_catch_the_placeholder_run() {
+        let t = format!(
+            "{HDR}M4 A,65.35031847,313.3333333,1,,1423.786667
+dummy,80,50,1,,100
+"
+        );
+        let f = StrengthFit::parse_for(&t, &material(StrengthModel::TestedMixes, None)).unwrap();
+        let w = f.data_warnings(StrengthModel::TestedMixes);
+        let has = |s: &str| w.iter().any(|l| l.contains(s));
+        assert!(has("strength fit has a negative slope"), "{w:#?}");
+        assert!(has("strength line runs through only 2 lab points"), "{w:#?}");
+        assert!(
+            has("\"dummy\" looks like a placeholder (name contains \"dummy\", final split 50 psi"),
+            "{w:#?}"
+        );
+        assert!(!has("\"M4 A\" looks like a placeholder"), "{w:#?}");
+        assert!(has("NOTE tested mixes on fewer than 3 breaks") && has("for reference only"), "{w:#?}");
+        assert!(w.iter().all(|l| !l.contains("  ")), "a wrapped string kept its indentation: {w:#?}");
+        // The team's three real mixes: thin data, but nothing implausible and no falling line.
+        let t = format!(
+            "{HDR}M4 A,65.35,313.33,1,,1423.79
+M5,58.18,224.44,1,,1019.88
+M2 Avg,58.31,222.22,1,,1009.78
+"
+        );
+        let w = StrengthFit::parse_for(&t, &material(StrengthModel::Fit, None))
+            .unwrap()
+            .data_warnings(StrengthModel::Fit);
+        assert!(
+            w.iter().all(|l| !l.contains("placeholder") && !l.contains("negative") && !l.contains("only 2")),
+            "{w:#?}"
+        );
     }
 }

@@ -341,7 +341,14 @@ beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, cap
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
 gunwale_immersion_deg}]}}
-| null, closest, zones, ended_early}`.
+| null, closest, zones, ended_early, data_warnings}`.
+`data_warnings` (absent when empty): lab-data warnings, most serious first: rows that look like
+placeholders (name dummy / placeholder / fake / tbd / todo / xxx, final split outside 100-1000 psi,
+density outside 30-150 pcf, or final f'c under 500 psi), falling (negative slope) lines, weak
+lines (< 5 points or rms > 15% of the mean), lines through only 2 points (exact, so no error
+estimate; the reports then show no fit line or rms), under tested_mixes the mixes with fewer than
+3 breaks; and a winner (or closest) density outside the tested densities in fit mode, with how far
+its strength is extrapolated. The terminal shows the first 3 and counts the rest.
 `closest` (only when no design passes): `{fails, design}`, the candidate that misses the gates by
 the least (largest relative miss over D/C, freeboard, loaded and empty GM; the 16 best by the
 search's early-exit numbers are re-checked with every case and gate), analysed in full like a

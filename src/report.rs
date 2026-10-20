@@ -14,6 +14,8 @@ use std::path::Path;
 
 /// Hard cap on summary length.
 pub const MAX_LINES: usize = 40;
+/// Lab-data warnings shown in the summary; the rest are counted on one line.
+const MAX_DATA_WARNINGS: usize = 3;
 /// Max load case lines and frontier rows before eliding.
 const MAX_CASES: usize = 6;
 const MAX_FRONTIER: usize = 14;
@@ -33,16 +35,21 @@ fn fmt_opt(v: Option<f64>, prec: usize) -> String {
     v.map_or_else(|| "-".to_string(), |x| format!("{x:.prec$}"))
 }
 
-/// One-line description of the strength fit.
+/// One-line description of the strength fit. With 2 points or fewer the line is exact by
+/// construction, so no rms is printed (it would read 0.0, as if the fit were perfect).
 pub fn mix_fit_line(f: &crate::mix::StrengthFit) -> String {
+    let rms = if f.points.len() > 2 {
+        format!("rms {:.1} psi", f.rms_residual_psi)
+    } else {
+        format!("no error estimate ({} points)", f.points.len())
+    };
     format!(
-        "strength: final split = {:.2}*rho {:+.1} psi from {} lab tests ({:.1}-{:.1} pcf), rms {:.1} psi",
+        "strength: final split = {:.2}*rho {:+.1} psi from {} lab tests ({:.1}-{:.1} pcf), {rms}",
         f.split_slope_psi_per_pcf,
         f.split_intercept_psi,
         f.points.len(),
         f.density_min_pcf,
         f.density_max_pcf,
-        f.rms_residual_psi
     ) + &crate::mix::Property::ALL
         .iter()
         .filter(|&&p| f.measured(p).is_some())
@@ -374,6 +381,17 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
         p.hull.stations
     ));
     out.extend(strength_lines(r));
+    // Lab-data warnings, WARNINGs first; the rest are counted (all are in result.json and the
+    // PDF report), so they cannot push the winner off the capped summary.
+    let mut dw: Vec<&String> = r.data_warnings.iter().filter(|w| w.starts_with("WARNING")).collect();
+    dw.extend(r.data_warnings.iter().filter(|w| !w.starts_with("WARNING")));
+    out.extend(dw.iter().take(MAX_DATA_WARNINGS).map(|w| w.to_string()));
+    if dw.len() > MAX_DATA_WARNINGS {
+        out.push(format!(
+            "  + {} more lab-data warnings (data_warnings in result.json)",
+            dw.len() - MAX_DATA_WARNINGS
+        ));
+    }
     for lc in p.load_cases.iter().take(MAX_CASES) {
         let w: Vec<String> = lc.weights_lb.iter().map(|w| format!("{w:.0}")).collect();
         let total: f64 = lc.weights_lb.iter().sum();
@@ -932,6 +950,7 @@ mod tests {
             race: None,
             zones: None,
             ended_early: None,
+            data_warnings: Vec::new(),
         }
     }
 
