@@ -53,6 +53,23 @@ fn small_shape_search_is_deterministic_and_bounded() {
     assert!(h.name.starts_with("opt-"));
 }
 
+/// A huge refine_rounds is a cap: the pattern search stops once its step is below range/1024,
+/// so it evaluates far fewer shapes than the rounds allow.
+#[test]
+fn refine_rounds_stop_at_min_step() {
+    let mut p = small(true);
+    let ss = p.shape_search.as_mut().unwrap();
+    // Two free factors: 4 best x 2 directions x 2 = at most 16 shapes a round.
+    for b in [&mut ss.fore_wp, &mut ss.fore_rocker, &mut ss.aft_wp, &mut ss.aft_rocker] {
+        *b = [b[0], b[0]];
+    }
+    (ss.fore_len_frac, ss.aft_len_frac) = ([0.4, 0.4], [0.4, 0.4]);
+    (ss.samples, ss.refine_rounds) = (4, 100_000);
+    let r = jaguar::run(&p, &|_| {}).unwrap();
+    assert!(r.ended_early.is_none());
+    assert!(r.candidates.len() < 1000, "{} shapes", r.candidates.len());
+}
+
 #[test]
 fn fixed_parameters_stay_fixed() {
     let r = jaguar::run(&small(true), &|_| {}).unwrap();

@@ -115,6 +115,26 @@ fn search_space_flags_bounds() {
     assert_eq!(w.search_space[0].at_bound, None);
 }
 
+/// search.depth_tol_in: the winner moves below its 12 in grid depth to the shallowest
+/// 1/16 in step that passes; the next 1/16 in shallower was tried and fails.
+#[test]
+fn depth_tol_refines_winner_depth() {
+    let (mut p, h) = example_gm0();
+    let grid = optimize::run(&p, &h).unwrap().winner.unwrap().candidate;
+    p.search.depth_tol_in = Some(0.0625);
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.unwrap();
+    let c = &w.candidate;
+    assert!(w.verified);
+    assert!(c.depth_in < grid.depth_in && c.depth_in > grid.depth_in - 1.0, "{}", c.depth_in);
+    assert_eq!(((grid.depth_in - c.depth_in) / 0.0625).fract(), 0.0);
+    assert!(c.hull_weight_lb < grid.hull_weight_lb);
+    assert_eq!((c.thickness_in, c.density_pcf), (grid.thickness_in, grid.density_pcf));
+    let below = r.candidates.iter().find(|k| (k.depth_in - (c.depth_in - 0.0625)).abs() < 1e-12);
+    assert!(below.is_some_and(|k| !k.passes), "next shallower depth must be tried and fail");
+    assert_eq!(w.search_space[2].at_bound, None);
+}
+
 #[test]
 fn deterministic_json() {
     let (p, h) = example_gm0();
@@ -611,4 +631,26 @@ fn gm_per_load_case_and_empty_canoe_gate() {
     assert!(none.winner.is_none());
     let text = jaguar::report::summary_lines(&none).join("\n");
     assert!(text.contains("empty-canoe GM"), "{text}");
+}
+
+/// A fine depth_tol_in drives the depth onto the freeboard gate (raised here so it governs); the
+/// refined winner must still verify (freeboard is re-checked at 2n-1 stations during the
+/// bisection). Without that re-check every case here missed by 0.003-0.009 in.
+#[test]
+fn fine_depth_tol_winner_verifies() {
+    let (mut p, h) = example_gm0();
+    p.search.depth_tol_in = Some(0.001);
+    let mut fails = 0;
+    for fb in [7.0, 9.0] {
+        for stations in [21, 81] {
+            p.gates.freeboard_min_in = fb;
+            p.hull.stations = stations;
+            let w = optimize::run(&p, &h).unwrap().winner.expect("winner");
+            if !w.verified {
+                fails += 1;
+                eprintln!("fb {fb} {stations} st depth {}: {:?}", w.candidate.depth_in, w.verify_failure);
+            }
+        }
+    }
+    assert_eq!(fails, 0);
 }

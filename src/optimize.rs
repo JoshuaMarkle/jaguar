@@ -7,6 +7,8 @@
 //!    abort the run.
 //! 3. Winner = lightest candidate with dc <= gates.dc_search and
 //!    gated freeboard >= gates.freeboard_min_in + freeboard_margin_in.
+//!    With `search.depth_tol_in`, a single-mix winner's depth is then bisected
+//!    below its grid depth ([`refine_depth`]).
 //! 4. Re-evaluate the winner at 2n-1 and 4n-3 stations and Richardson-
 //!    extrapolate its D/C ([`convergence`]); `verified` = extrapolated (or,
 //!    when irregular, the 2n-1) D/C <= dc_verify.
@@ -1060,7 +1062,7 @@ pub fn run_with_progress(
     hull: &Hull,
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> Result<RunResult> {
-    run_inner(params, hull, true, on_progress)
+    run_search(params, hull, on_progress, &RunControl::default())
 }
 
 /// [`run_with_progress`] that can be paused and ended ([`RunControl`]). Ended = Err([`RunEnded`]):
@@ -1074,21 +1076,46 @@ pub fn run_controlled(
     run_search(params, hull, on_progress, ctl)
 }
 
-/// [`run_with_progress`] with a choice of parallelism. `parallel = false` runs
-/// the whole search on one thread (a private 1-thread rayon pool) so the shape
-/// search can parallelize over shapes instead. Output is identical either way.
-pub fn run_inner(
-    params: &Params,
-    hull: &Hull,
-    parallel: bool,
-    on_progress: &(dyn Fn(Progress) + Sync),
-) -> Result<RunResult> {
-    let ctl = RunControl::default();
-    if parallel {
-        return run_search(params, hull, on_progress, &ctl);
-    }
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build()?;
-    pool.install(|| run_search(params, hull, on_progress, &ctl))
+/// What the shape search scores a shape on ([`run_inner`]).
+pub struct Inner {
+    /// The candidate [`run`] would make the winner (`winner.candidate`, before verification
+    /// fills in a missing `drag_n`); None = nothing passes.
+    pub best: Option<Candidate>,
+    /// Every candidate tried, as [`run`] reports them.
+    pub candidates: Vec<Candidate>,
+}
+
+/// The shape search's inner loop: [`run`]'s wall search without the winner analysis
+/// (verification at 2n-1 and 4n-3 stations, diagrams, worked calculation) and without the
+/// closest design, which a shape's score never reads. The best shape is re-run with [`run`].
+/// Called on a 1-thread pool by the shape search, so its "parallel" rayon calls run serially.
+pub fn run_inner(params: &Params, hull: &Hull) -> Result<Inner> {
+    let s = search_walls(params, hull, &|_| {}, &RunControl::default())?;
+    let best = s.refined.map(|r| r.0).or(s.best);
+    let mut candidates = s.candidates;
+    candidates.extend(s.depth_tries);
+    Ok(Inner { best, candidates })
+}
+
+/// The wall search up to the winner's candidate: [`search_walls`]'s output, kept for the
+/// winner analysis.
+struct Searched {
+    fit: StrengthFit,
+    axis: Vec<(f64, StrengthFit, Option<String>)>,
+    dense: Vec<(f64, StrengthFit, Option<String>)>,
+    ts: Vec<f64>,
+    geoms: Vec<(f64, f64)>,
+    grids: Vec<Grid>,
+    pairs: Vec<(usize, usize)>,
+    plans: Vec<Result<Vec<CaseSeats>, String>>,
+    candidates: Vec<Candidate>,
+    zone_stats: Option<ZoneSearch>,
+    /// The best passing grid candidate.
+    best: Option<Candidate>,
+    /// `best` moved to a shallower depth ([`refine_depth`]), with its seats.
+    refined: Option<DepthTry>,
+    /// Every depth [`refine_depth`] tried (not yet in `candidates`).
+    depth_tries: Vec<Candidate>,
 }
 
 fn run_search(
@@ -1097,6 +1124,92 @@ fn run_search(
     on_progress: &(dyn Fn(Progress) + Sync),
     ctl: &RunControl,
 ) -> Result<RunResult> {
+    let Searched {
+        fit,
+        axis,
+        dense,
+        ts,
+        geoms,
+        grids,
+        pairs,
+        plans,
+        mut candidates,
+        mut zone_stats,
+        best,
+        refined,
+        depth_tries,
+    } = search_walls(params, hull, on_progress, ctl)?;
+    let winner = match &best {
+        None => None,
+        Some(c) => {
+            let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
+            let pi = pairs
+                .iter()
+                .position(|&(gi, ti)| geoms[gi] == (c.depth_in, c.flare_deg) && ts[ti] == c.thickness_in)
+                .ok_or_else(|| anyhow::anyhow!("winner wall not on the search grid"))?;
+            let maker: Option<Box<ZonedMaker>> = match &c.zones {
+                None => None,
+                Some(zl) => {
+                    let di = dense
+                        .iter()
+                        .position(|a| a.0 == zl.dense_pcf && a.2 == c.dense_mix)
+                        .ok_or_else(|| anyhow::anyhow!("winner dense mix not on the zones axis"))?;
+                    let fits = [axis[ri].1.clone(), dense[di].1.clone()];
+                    let seats = plans[pi].as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
+                    let (t, zl) = (c.thickness_in, zl.clone());
+                    Some(Box::new(move |g: &Grid| {
+                        ZonedWall::new(params, g, t, zl.clone(), fits.clone(), seats)
+                    }))
+                }
+            };
+            let (c, plan) = match &refined {
+                Some((rc, rp)) => (rc, rp),
+                None => (c, &plans[pi]),
+            };
+            Some(finish_winner(params, &fit, &axis[ri].1, hull, c, plan, maker.as_deref(), on_progress)?)
+        }
+    };
+    candidates.extend(depth_tries);
+
+    if let (Some(st), Some(w)) = (&mut zone_stats, &winner) {
+        st.saved_lb = st.single_mix_lb.map(|s| s - w.candidate.hull_weight_lb);
+    }
+    let closest = match winner {
+        Some(_) => None,
+        None => {
+            let space = ClosestSpace {
+                axis: &axis,
+                grids: &grids,
+                geoms: &geoms,
+                pairs: &pairs,
+                ts: &ts,
+                plans: &plans,
+            };
+            closest_design(params, &fit, hull, &candidates, &space, on_progress)?
+        }
+    };
+    let winner_hull = (winner.is_some() || closest.is_some()).then(|| hull.clone());
+    Ok(RunResult {
+        format: RESULT_FORMAT,
+        params: params.clone(),
+        strength: fit,
+        winner_hull,
+        candidates,
+        winner,
+        closest,
+        race: None,
+        zones: zone_stats,
+        ended_early: None,
+    })
+}
+
+/// The wall grid (and zones) evaluated, the best candidate picked and its depth refined.
+fn search_walls(
+    params: &Params,
+    hull: &Hull,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &RunControl,
+) -> Result<Searched> {
     let ts = thicknesses(params);
     let fit = strength(params)?;
     let axis = density_axis(params, &fit)?;
@@ -1198,74 +1311,109 @@ fn run_search(
         }
     }
 
-    let best = candidates.iter().filter(|c| c.passes).reduce(|a, b| if better(params, b, a) { b } else { a });
-
-    let winner = match best {
-        None => None,
-        Some(c) => {
-            let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix).unwrap_or(0);
-            let pi = pairs
-                .iter()
-                .position(|&(gi, ti)| geoms[gi] == (c.depth_in, c.flare_deg) && ts[ti] == c.thickness_in)
-                .ok_or_else(|| anyhow::anyhow!("winner wall not on the search grid"))?;
-            let maker: Option<Box<ZonedMaker>> = match &c.zones {
-                None => None,
-                Some(zl) => {
-                    let di = dense
-                        .iter()
-                        .position(|a| a.0 == zl.dense_pcf && a.2 == c.dense_mix)
-                        .ok_or_else(|| anyhow::anyhow!("winner dense mix not on the zones axis"))?;
-                    let fits = [axis[ri].1.clone(), dense[di].1.clone()];
-                    let seats = plans[pi].as_ref().map_err(|e| anyhow::anyhow!("winner seats: {e}"))?;
-                    let (t, zl) = (c.thickness_in, zl.clone());
-                    Some(Box::new(move |g: &Grid| {
-                        ZonedWall::new(params, g, t, zl.clone(), fits.clone(), seats)
-                    }))
-                }
-            };
-            Some(finish_winner(
-                params,
-                &fit,
-                &axis[ri].1,
-                hull,
-                c,
-                &plans[pi],
-                maker.as_deref(),
-                on_progress,
-            )?)
-        }
+    let best = candidates
+        .iter()
+        .filter(|c| c.passes)
+        .reduce(|a, b| if better(params, b, a) { b } else { a })
+        .cloned();
+    // Continuous depth (search.depth_tol_in): a single-mix winner moves to the shallowest
+    // depth below its grid depth that still passes, with seats solved at that depth.
+    let (refined, depth_tries) = match (&best, params.search.depth_tol_in) {
+        (Some(c), Some(tol)) if c.zones.is_none() => refine_depth(params, hull, &axis, &ds, c, tol),
+        _ => (None, Vec::new()),
     };
-
-    if let (Some(st), Some(w)) = (&mut zone_stats, &winner) {
-        st.saved_lb = st.single_mix_lb.map(|s| s - w.candidate.hull_weight_lb);
-    }
-    let closest = match winner {
-        Some(_) => None,
-        None => {
-            let space = ClosestSpace {
-                axis: &axis,
-                grids: &grids,
-                geoms: &geoms,
-                pairs: &pairs,
-                ts: &ts,
-                plans: &plans,
-            };
-            closest_design(params, &fit, hull, &candidates, &space, on_progress)?
-        }
-    };
-    let winner_hull = (winner.is_some() || closest.is_some()).then(|| hull.clone());
-    Ok(RunResult {
-        format: RESULT_FORMAT,
-        params: params.clone(),
-        strength: fit,
-        winner_hull,
+    Ok(Searched {
+        fit,
+        axis,
+        dense,
+        ts,
+        geoms,
+        grids,
+        pairs,
+        plans,
         candidates,
-        winner,
-        closest,
-        race: None,
-        zones: zone_stats,
-        ended_early: None,
+        zone_stats,
+        best,
+        refined,
+        depth_tries,
     })
+}
+
+/// One analysis result from [`refine_depth`]: the candidate and the seats it was checked at.
+type DepthTry = (Candidate, Result<Vec<CaseSeats>, String>);
+
+/// Continuous mold depth (`search.depth_tol_in`): bisects single-mix grid winner `c` (same
+/// wall, mix and flare) over depths `c.depth_in - j * tol` above the next shallower grid depth,
+/// which lost to `c` and so failed. Assumes pass/fail is monotone in depth over that one step.
+/// A depth passes when it passes the search and its freeboard and loaded GM also pass at the
+/// 2n-1 verification stations (no search margin on those gates, unlike D/C).
+/// Returns the shallowest passing depth found when it beats `c` (None = keep `c`), and every
+/// candidate tried, in bisection order.
+fn refine_depth(
+    params: &Params,
+    hull: &Hull,
+    axis: &[(f64, StrengthFit, Option<String>)],
+    ds: &[f64],
+    c: &Candidate,
+    tol: f64,
+) -> (Option<DepthTry>, Vec<Candidate>) {
+    let gi = ds.iter().position(|&d| d == c.depth_in);
+    let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix);
+    let (Some(gi), Some(ri)) = (gi, ri) else { return (None, Vec::new()) };
+    if gi == 0 {
+        return (None, Vec::new());
+    }
+    let step = c.depth_in - ds[gi - 1];
+    // Largest j with j * tol < step: depths stay above the failed grid depth.
+    let n = ((step / tol - 1e-9).ceil() as usize).saturating_sub(1);
+    let mid = &axis[axis.len() / 2];
+    let try_at = |d: f64| -> DepthTry {
+        let (grid, why) = Grid::build_topsides(hull, d, params.hull.stations, candidate_topsides(params, c));
+        let sec = sections(&grid, c.thickness_in);
+        let plan =
+            plan_seats(params, &mid.1, &grid, &sec, c.thickness_in, mid.0).map_err(|e| format!("{e:#}"));
+        let mut k = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, true);
+        (k.mix, k.flare_deg) = (c.mix.clone(), c.flare_deg);
+        if let Some(why) = why {
+            k.passes = false;
+            k.error = Some(why);
+        }
+        // Bisection drives the depth onto the freeboard (or GM) gate, which has no search margin:
+        // a depth passes only if those gates also hold at the 2n-1 verification stations.
+        if k.passes {
+            let fine = 2 * params.hull.stations - 1;
+            let grid = Grid::build_topsides(hull, d, fine, candidate_topsides(params, c)).0;
+            let sec = sections(&grid, c.thickness_in);
+            let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, false);
+            let (fb, gm) = (v.verdict.as_ref().map(|v| v.freeboard_in), v.gm_in);
+            let (fb_min, gm_min) = (params.gates.freeboard_required_in(), params.stability.gm_min_in);
+            if !(fb.is_some_and(|f| f >= fb_min) && gm.is_some_and(|g| g >= gm_min)) {
+                k.passes = false;
+                k.error = Some(match (fb, gm) {
+                    (Some(f), Some(g)) => format!(
+                        "at {fine} stations: freeboard {f:.4} in (gate {fb_min}), loaded GM {g:.4} in (gate {gm_min})"
+                    ),
+                    _ => format!("no verdict at {fine} stations"),
+                });
+            }
+        }
+        (k, plan)
+    };
+    // j = lo passes (the grid winner at 0), j = hi fails (the grid depth below at n + 1).
+    let (mut lo, mut hi) = (0, n + 1);
+    let (mut found, mut tried) = (None, Vec::new());
+    while hi - lo > 1 {
+        let j = (lo + hi) / 2;
+        let (k, plan) = try_at(c.depth_in - j as f64 * tol);
+        tried.push(k.clone());
+        if k.passes {
+            lo = j;
+            found = Some((k, plan));
+        } else {
+            hi = j;
+        }
+    }
+    (found.filter(|(k, _)| better(params, k, c)), tried)
 }
 
 /// The search grid [`closest_design`] re-evaluates candidates on.

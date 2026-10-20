@@ -80,6 +80,8 @@ knee_patch_in = 3.0       # never 0: a point load does not converge
 thickness_in = [0.375, 0.75, 0.0625]
 density_pcf  = [50.0, 64.0, 1.0]
 depth_in     = [10.0, 16.0, 1.0]
+# depth_tol_in = 0.0625            # optional: continuous depth; the winner's depth is bisected
+#                                  # below its grid depth in steps of this (1/16 in)
 # flare_deg    = [3.0, 5.0, 1.0]   # optional: search the flare too (hull.flare_deg = 0 then); more flare
 #                                  # = more concrete, so it is chosen only when a check needs it
 

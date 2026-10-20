@@ -18,7 +18,10 @@
 //!    parameters are held fixed.
 //! 2. `refine_rounds` rounds of pattern search: around the best K = 4 shapes,
 //!    +/- step on each free parameter (step = range/8, halved after a round
-//!    without improvement), clamped, already-seen shapes skipped.
+//!    without improvement), clamped, already-seen shapes skipped. Ends early
+//!    once the step is below 1/1024 of the range ([`MIN_STEP`]).
+//!    Each shape is scored by `optimize::run_inner`: the wall search without
+//!    the winner analysis, which only the final re-run needs.
 //! 3. The best shape is re-run with the normal (parallel) inner search, so the
 //!    winner is verified at 2n-1 stations as usual.
 //!
@@ -32,7 +35,9 @@
 
 use crate::hull::{Grid, Hull, linspace};
 use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
-use crate::optimize::{Candidate, Progress, RunControl, RunEnded, RunResult, run_inner, run_with_progress};
+use crate::optimize::{
+    Candidate, Inner, Progress, RunControl, RunEnded, RunResult, run_inner, run_with_progress,
+};
 use crate::params::{ObjectiveKind, Params, SHAPE_DIMS, ShapeSearch};
 use crate::race;
 use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
@@ -45,6 +50,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub const STATIONS: usize = 41;
 pub const WATERLINES: usize = 21;
 const K_BEST: usize = 4;
+/// Pattern search ends once its step (a fraction of each factor's range) falls below this:
+/// 1/1024 of the range is far finer than a mold is built (0.007 in of a 7 in draft range).
+const MIN_STEP: f64 = 1.0 / 1024.0;
 
 struct SplitMix64(u64);
 impl SplitMix64 {
@@ -101,12 +109,18 @@ pub fn normalize(ss: &ShapeSearch, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS
 }
 
 /// Dimensions the search moves (fixed bounds and symmetric-tied aft ones excluded).
-/// Most shapes a search can evaluate: the samples plus every refine round at its full size
-/// (the best K_BEST shapes stepped both ways along each free factor). Rounds that repeat known
-/// shapes are smaller, so this is an upper bound (the web UI's time estimate).
+/// Shapes a search is expected to evaluate (the web UI's time estimate): the samples plus up to
+/// [`TYPICAL_ROUNDS`] refine rounds at full size (the best K_BEST shapes stepped both ways along
+/// each free factor). Not a bound: the search stops at [`MIN_STEP`] (7 rounds without
+/// improvement from the start), but rounds that improve keep their step, and the web UI's
+/// estimate grows as rounds are added.
 pub fn planned_shapes(ss: &ShapeSearch) -> usize {
-    ss.samples + ss.refine_rounds * K_BEST * 2 * free_dims(ss).len()
+    ss.samples + ss.refine_rounds.min(TYPICAL_ROUNDS) * K_BEST * 2 * free_dims(ss).len()
 }
+
+/// Refine rounds a search typically runs before [`MIN_STEP`] stops it (the team's 2026-10-20
+/// settings, 7 free factors: 19).
+const TYPICAL_ROUNDS: usize = 24;
 
 fn free_dims(ss: &ShapeSearch) -> Vec<usize> {
     let b = ss.bounds();
@@ -242,29 +256,23 @@ fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
     let s = to_shape(&mid);
     let hull = templated(params, generate(&s, STATIONS, WATERLINES, "reference")?)?;
     let params = &for_shape(params, &s);
-    let r = run_inner(params, &hull, true, &|_| {})?;
+    let r = run_inner(params, &hull)?;
     let c = representative(&r).context("reference shape: inner search produced no candidates")?;
     let top = race::topsides(&hull, c.depth_in, crate::optimize::candidate_topsides(params, &c));
     race::plan(&top, c.hull_weight_lb, rp).context("race paths on the reference (midpoint) shape")
 }
 
-fn score_of(
-    params: &Params,
-    r: &RunResult,
-    m: &ShapeMetrics,
-    refs: Option<Refs>,
-    race_s: Option<f64>,
-) -> f64 {
+fn score_of(params: &Params, r: &Inner, m: &ShapeMetrics, refs: Option<Refs>, race_s: Option<f64>) -> f64 {
     if m.rejected.is_some() {
         return f64::INFINITY;
     }
-    match &r.winner {
+    match &r.best {
         None => f64::INFINITY,
         Some(w) => match params.objective.kind {
-            ObjectiveKind::Weight => w.candidate.hull_weight_lb,
+            ObjectiveKind::Weight => w.hull_weight_lb,
             ObjectiveKind::Race => race_s.unwrap_or(f64::INFINITY),
             ObjectiveKind::Drag => {
-                let d = w.candidate.drag_n.unwrap_or(f64::INFINITY);
+                let d = w.drag_n.unwrap_or(f64::INFINITY);
                 match refs {
                     None => d,
                     Some(rf) => {
@@ -279,9 +287,9 @@ fn score_of(
 }
 
 /// Inner winner, or best failing candidate (lowest D/C; else the first).
-fn representative(r: &RunResult) -> Option<Candidate> {
-    if let Some(w) = &r.winner {
-        return Some(w.candidate.clone());
+fn representative(r: &Inner) -> Option<Candidate> {
+    if let Some(w) = &r.best {
+        return Some(w.clone());
     }
     r.candidates
         .iter()
@@ -341,8 +349,7 @@ fn eval_shape(
     let mut shape = to_shape(v);
     let params = &for_shape(params, &shape);
     shape.gunwale_radius_in = params.hull.gunwale_radius_in;
-    // Called on a 1-thread pool (`on_workers`): "parallel" rayon calls run serially there.
-    let r = run_inner(params, &hull, true, &|_| {})?;
+    let r = run_inner(params, &hull)?;
     let mut rep = representative(&r).context("inner search produced no candidates")?;
     if rep.drag_n.is_none() {
         rep.drag_n = crate::optimize::candidate_drag(params, &hull, &rep);
@@ -359,10 +366,9 @@ fn eval_shape(
         }
         Err(_) => {}
     }
-    if let (Some(pl), Some(rp), Some(w)) = (plan, &params.race, &r.winner)
+    if let (Some(pl), Some(rp), Some(c)) = (plan, &params.race, &r.best)
         && m.rejected.is_none()
     {
-        let c = &w.candidate;
         let top = race::topsides(&hull, c.depth_in, crate::optimize::candidate_topsides(params, c));
         match race::planned_time(&top, c.hull_weight_lb, rp, pl) {
             Ok(t) => rep.race_s = Some(t),
@@ -501,7 +507,7 @@ pub fn run_controlled(
     let mut step = 1.0 / 8.0;
     let mut rounds = 0;
     for _ in 0..ss.refine_rounds {
-        if ctl.stopped() {
+        if ctl.stopped() || step < MIN_STEP {
             break;
         }
         rounds += 1;

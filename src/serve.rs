@@ -51,8 +51,8 @@
 //!   "elapsed_s": running time without pauses | null, "eta_s": estimated seconds left | null
 //!   (running, not ending, the first wave done (one per worker thread): done per running second x
 //!   what is left; a shape search
-//!   counts every refine round at full size, `shapeopt::planned_shapes`, so it tends to finish
-//!   sooner; the final verification is not included),
+//!   counts its typical refine rounds at full size, `shapeopt::planned_shapes`, and grows when
+//!   more rounds run; the final verification is not included),
 //!   "shape": {"index": i, "shapes": n} | null (shape search only), "candidates": [...new since ?since=k...]}
 //!   Poll every ~250 ms with `?since=<count already seen>` to get only new
 //!   candidates (cheap incremental updates; no websockets needed).
@@ -144,7 +144,7 @@ struct Shared {
     started: Option<Instant>,
     paused_at: Option<Instant>,
     paused_s: f64,
-    /// Shape search: most shapes it can evaluate (`shapeopt::planned_shapes`).
+    /// Shape search: shapes it is expected to evaluate (`shapeopt::planned_shapes`).
     planned: Option<usize>,
     /// Size of the first wave of work (worker threads, at most the total): no estimate before.
     wave: usize,

@@ -951,8 +951,8 @@ pub struct ShapeSearch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gunwale_radius_in: Option<[f64; 2]>,
     /// Snap sampled draft / length / beam to multiples of this, in (molds,
-    /// strongbacks). Absent = continuous. Search depth already steps by
-    /// `search.depth_in`.
+    /// strongbacks). Absent = continuous. Mold depth steps by `search.depth_in`
+    /// (continuous with `search.depth_tol_in`).
     #[serde(default)]
     pub draft_step_in: Option<f64>,
     #[serde(default)]
@@ -1014,6 +1014,12 @@ pub struct Search {
     /// when it buys a gate (freeboard, flotation, ...). Absent = `hull.flare_deg`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flare_deg: Option<[f64; 3]>,
+    /// Optional mold depth resolution, in: after the grid, the single-mix winner's
+    /// depth is bisected (same wall, mix, flare) between its grid depth and the
+    /// next shallower one, on multiples of this below the grid depth. Absent =
+    /// the grid depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_tol_in: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1198,6 +1204,11 @@ impl Params {
             if !(lo > 0.0 && hi >= lo && step > 0.0) {
                 bail!("search.{name} must be [min > 0, max >= min, step > 0], got {r:?}");
             }
+        }
+        if let Some(tol) = self.search.depth_tol_in
+            && !(tol.is_finite() && tol > 0.0)
+        {
+            bail!("search.depth_tol_in must be > 0, got {tol}");
         }
         if self.gates.thickness_min_buildable_in > self.search.thickness_in[1] {
             bail!("gates.thickness_min_buildable_in is above search.thickness_in max");
@@ -1694,6 +1705,17 @@ mod tests {
         assert_eq!(pu.d_over_t().unwrap(), 0.5);
         pu.d_over_t = Some(0.7);
         assert_eq!(pu.d_over_t().unwrap(), 0.7);
+    }
+
+    #[test]
+    fn depth_tol_must_be_positive() {
+        let mut p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        for (tol, ok) in
+            [(Some(0.0625), true), (Some(0.0), false), (Some(-1.0), false), (Some(f64::NAN), false)]
+        {
+            p.search.depth_tol_in = tol;
+            assert_eq!(p.validate().is_ok(), ok, "{tol:?}");
+        }
     }
 
     #[test]

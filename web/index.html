@@ -381,7 +381,7 @@ const SHAPE_INT = [
 const SHAPE_OPT = [
   ['length_step_in', 'Length step', 'in', 'Snap the sampled length to multiples of this (strongback, mold sections). Empty = continuous.', 'continuous'],
   ['beam_step_in', 'Beam step', 'in', 'Snap the sampled beam to multiples of this. Empty = continuous.', 'continuous'],
-  ['draft_step_in', 'Draft step', 'in', 'Snap the sampled design draft to multiples of this. Empty = continuous. (Mold depth already steps by the search range.)', 'continuous'],
+  ['draft_step_in', 'Draft step', 'in', 'Snap the sampled design draft to multiples of this. Empty = continuous. (Mold depth steps by its search range, or continuously with Mold depth resolution.)', 'continuous'],
   ['min_entry_angle_deg', 'Min entry angle', 'deg', 'Smallest allowed waterline entry half-angle at the bow (chord over the first 5% of length). Finer bows are rejected as unbuildable. Empty = no limit.', 'no limit'],
 ];
 const GME_T = 'Minimum metacentric height of the empty canoe (no crew aboard): how strongly it rights itself when it sits empty in the water, e.g. at the dock or launching. Empty = not gated (still computed and shown).';
@@ -454,7 +454,13 @@ function numRow(sec, f) {
   return row(id, label, t, `<input type="number" id="${id}" step="${step}" ${min !== undefined ? `min="${min}"` : ''} required>`, unit);
 }
 // Optional searched flare (search.flare_deg): all three empty = the Hull side flare is used.
-const FLARE_AX = ['flare_deg', 'Side flare (searched)', 'deg', 'Optional: search the side flare (demolding draft) as min, max, step. The low end is your demolding minimum; more flare is only chosen when a check needs it (it adds concrete). Empty = the fixed Hull side flare (set that to 0 when searching).'];
+const FLARE_AX = ['flare_deg', 'Side flare (searched)', 'deg', 'Optional: search the side flare (demolding draft) as min, max, step. The low end is your demolding minimum; more flare is only chosen when a check needs it (it adds concrete). Empty = the fixed Hull side flare (which is ignored while a range is given here).'];
+const DEPTH_TOL_T = 'Optional: make the mold depth continuous. After the depth grid picks a winner, JAGUAR bisects between that depth and the next shallower grid depth (same wall, mix and flare) in steps of this, e.g. 0.0625 = 1/16 in, and keeps the shallowest depth that still passes. Empty = the grid depth.';
+// A searched flare range replaces the fixed Hull side flare: grey it out (it is written as 0).
+function flareMode() {
+  const searched = [0, 1, 2].some(n => $(`search.flare_deg.${n}`).value.trim() !== ''), e = $('hull.flare_deg');
+  e.disabled = searched; e.title = searched ? 'Searched: see Search ranges > Side flare (searched).' : '';
+}
 function triRow(f, sec = 'search') {
   const [k, label, unit, t] = f;
   const i = n => `<input type="number" id="${sec}.${k}.${n}" title="${esc(t)} (${['min', 'max', 'step'][n]})" step="any" min="0" placeholder="${['min', 'max', 'step'][n]}">`;
@@ -557,7 +563,9 @@ function buildForm() {
       + row('punching.mesh_after_layer', 'Mesh after pass', MESH_T, '<input id="punching.mesh_after_layer" placeholder="e.g. 1 or 1, 2">')
       + row('punching.mold', 'Mold', pmo, '<select id="punching.mold"><option value="male">male (pass 1 = inside face)</option><option value="female">female (pass 1 = outside face)</option></select>')
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
-    + section('search', FIELDS.search.map(f => triRow(f)).join('') + triRow(FLARE_AX))
+    + section('search', FIELDS.search.map(f => triRow(f)).join('')
+      + row('search.depth_tol_in', 'Mold depth resolution', DEPTH_TOL_T, '<input type="number" id="search.depth_tol_in" step="any" min="0" placeholder="grid step">', 'in')
+      + triRow(FLARE_AX))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('lettering',
       row('lettering.on', 'Check freeboard at the lettering', LET_T, '<input type="checkbox" class="switch" id="lettering.on">')
@@ -596,6 +604,7 @@ function buildForm() {
   $('shapemode').onchange = setShapeMode;
   $('flotation.on').onchange = setFlotation;
   $('lettering.on').onchange = setLettering;
+  for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).addEventListener('input', flareMode);
   for (const k of ['school', 'canoe_name', 'height_in', 'width_ratio', 'end_margin_in']) $('lettering.' + k).addEventListener('input', letNote);
   $('turning.on').onchange = setTurning;
   $('stands.on').onchange = setStands;
@@ -803,6 +812,8 @@ function fillForm(p, hulls) {
   $('stability.gm_empty_min_in').value = p.stability.gm_empty_min_in ?? '';
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
+  $('search.depth_tol_in').value = p.search.depth_tol_in ?? '';
+  flareMode();
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
   raceEvents();
   // After the load cases and race events: a row's load case list and the Race events preset need them.
@@ -821,7 +832,7 @@ function formToml() {
   const out = ['# generated by the JAGUAR web UI', '[hull]'];
   if (!shape) out.push(`file = ${tstr(g('hull.file'))}`);
   if (!shape && g('hull.gunwale_radius_in').trim() !== '') out.push(`gunwale_radius_in = ${fl(g('hull.gunwale_radius_in'))}`);
-  out.push(`stations = ${int('hull.stations')}`, `flare_deg = ${fl(g('hull.flare_deg'))}`);
+  out.push(`stations = ${int('hull.stations')}`, `flare_deg = ${$('hull.flare_deg').disabled ? '0.0' : fl(g('hull.flare_deg'))}`);
   if (g('hull.roughness_um').trim() !== '' && Number(g('hull.roughness_um')) !== 0) out.push(`roughness_um = ${fl(g('hull.roughness_um'))}`);
   if ($('hull.doubly_symmetric').checked) out.push('doubly_symmetric = true');
   if (g('hull.templates').trim() !== '') out.push(`templates = ${int('hull.templates')}`);
@@ -857,6 +868,7 @@ function formToml() {
         if (fa.some(v => v === '')) throw new Error('searched flare: give min, max and step, or leave all three empty');
         out.push(`flare_deg = [${fa.map(fl).join(', ')}]`);
       }
+      if (g('search.depth_tol_in').trim() !== '') out.push(`depth_tol_in = ${fl(g('search.depth_tol_in'))}`);
     }
     const ds = sec === 'objective' ? dispRows() : [];
     if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ ${c.load_case != null ? `load_case = ${tstr(c.load_case)}` : `crew_lb = ${fl(c.crew_lb)}`}, weight = ${fl(w)} }`).join(', ')}]`);
@@ -1264,7 +1276,9 @@ function buildTabs() {
   if (tab === 'cands') { $('axx').onchange = e => { axSel.x = e.target.value; drawPlot(); }; $('axy').onchange = e => { axSel.y = e.target.value; drawPlot(); }; }
 }
 const flareDeg = () => { const c = winC(); if (c && typeof c.flare_deg === 'number') return c.flare_deg;
-  const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'); return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
+  const p = result && result.params; if (p && p.hull && typeof p.hull.flare_deg === 'number') return p.hull.flare_deg; const e = $('hull.flare_deg'), s = $('search.flare_deg.0');
+  if (e && e.disabled && s) return isFinite(Number(s.value)) ? Number(s.value) : 0; // searched: its low end
+  return e && isFinite(Number(e.value)) ? Number(e.value) : 0; };
 function interp(xs, ys, x) {
   if (x <= xs[0]) return ys[0]; if (x >= xs[xs.length - 1]) return ys[ys.length - 1];
   let i = 1; while (xs[i] < x) i++;
@@ -1691,7 +1705,10 @@ function plotChecks(ctx, W, H) {
 function plotMap(ctx, W, H) {
   const w = winC(); if (!w) return msg(ctx, W, H, 'Needs a passing winner. Run an optimization first.');
   // Single-mix walls only: a two-mix wall has no one density cell.
-  const sel = cands.filter(k => !k.zones && Math.abs(k.depth_in - w.depth_in) < 1e-9 && !k.shape === !w.shape && Math.abs(k.length_in - w.length_in) < 1e-6);
+  // A winner refined below the depth grid (search.depth_tol_in) shows the grid depth it came from.
+  const da = ((result && result.winner && result.winner.search_space) || []).find(a => a.name === 'depth_in');
+  const gd = da && da.step ? da.min + Math.ceil((w.depth_in - da.min) / da.step - 1e-9) * da.step : w.depth_in;
+  const sel = cands.filter(k => !k.zones && Math.abs(k.depth_in - gd) < 1e-6 && !k.shape === !w.shape && Math.abs(k.length_in - w.length_in) < 1e-6);
   const ts = [...new Set(sel.map(k => k.thickness_in))].sort((a, b) => a - b), rs = [...new Set(sel.map(k => k.density_pcf))].sort((a, b) => a - b);
   if (!ts.length || !rs.length) return msg(ctx, W, H, 'No grid candidates at the winner depth.');
   const r = { l: 72, t: 22, w: W - 260, h: H - 58 }, cw = r.w / rs.length, ch = r.h / ts.length;
@@ -1718,7 +1735,7 @@ function plotMap(ctx, W, H) {
   ctx.fillText('density, pcf', r.l + r.w / 2, r.t + r.h + 28); ctx.textAlign = 'right';
   ts.forEach((v, j) => { if (j % every(ts.length) === 0) ctx.fillText(v.toFixed(3), r.l - 6, r.t + r.h - (j + 0.5) * ch + 4); });
   ctx.save(); ctx.translate(16, r.t + r.h / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('thickness, in', 0, 0); ctx.restore(); ctx.textAlign = 'left';
-  ctx.fillText(`Depth ${w.depth_in} in. Cell = hull weight lb (passes) or D/C (fails), one-mix walls.${w.zones ? ` Winner: two-mix wall, ${w.hull_weight_lb.toFixed(0)} lb (Mix zones tab).` : ''}`, r.l, 14);
+  ctx.fillText(`Depth ${+gd.toFixed(4)} in${Math.abs(gd - w.depth_in) > 1e-6 ? ` (winner refined to ${+w.depth_in.toFixed(4)})` : ''}. Cell = hull weight lb (passes) or D/C (fails), one-mix walls.${w.zones ? ` Winner: two-mix wall, ${w.hull_weight_lb.toFixed(0)} lb (Mix zones tab).` : ''}`, r.l, 14);
   const lx = r.l + r.w + 16;
   [[passCol(0), `passes, lightest${wts.length ? ' ' + w0.toFixed(0) + ' lb' : ''}`], [passCol(1), `passes, heaviest${wts.length ? ' ' + w1.toFixed(0) + ' lb' : ''}`], [failCol(dcGate), 'fails, D/C near gate'], [failCol(4 * dcGate), 'fails, D/C far over'], [C.error, 'analysis error']]
     .forEach(([c, l], i) => { ctx.fillStyle = c; ctx.fillRect(lx, r.t + i * 20, 12, 12); ctx.strokeStyle = C.hair; ctx.strokeRect(lx + 0.5, r.t + i * 20 + 0.5, 12, 12); ctx.fillStyle = C.soft; ctx.fillText(l, lx + 20, r.t + i * 20 + 10); });

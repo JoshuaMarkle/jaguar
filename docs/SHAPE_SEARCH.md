@@ -42,7 +42,7 @@ stability logic lives in one place.
 
 | key | effect |
 |---|---|
-| `draft_step_in`, `length_step_in`, `beam_step_in` | sampled values snap to the nearest multiple inside the bounds (depth already steps by `search.depth_in`) |
+| `draft_step_in`, `length_step_in`, `beam_step_in` | sampled values snap to the nearest multiple inside the bounds (depth steps by `search.depth_in`, refined by `search.depth_tol_in`) |
 | `symmetric = true` | `aft_wp`, `aft_rocker`, `aft_len_frac` follow the fore values (3 fewer dimensions, aft bounds ignored); the same switch as `hull.doubly_symmetric` (either sets both) |
 | `rocker_in = [min, max]` | keel rise above the lowest keel point at 5% L from the bow and from the stern, in. Outside = **rejected** (not remapped) |
 | `min_entry_angle_deg` | design-waterline entry half-angle = atan(half-breadth / x) of the chord over the first 5% L. Finer = **rejected** |
@@ -106,9 +106,11 @@ above the waterline, not the generator, so searching it would need a second oute
    and nests their stacks until a debug build overflows).
 3. **Pattern search**, `refine_rounds` rounds: around the best 4 shapes, step +/- on each free
    parameter (step starts at range/8 and halves after a round without improvement), clamped to
-   the bounds, skipping shapes already seen.
-4. The best shape is re-run with the normal parallel inner search, so the winner is verified at
-   2n-1 stations. `winner_hull` in result.json is the generated hull.
+   the bounds, skipping shapes already seen. Stops early once the step is below range/1024
+   (finer than a mold is built), so a large `refine_rounds` is a cap, not a cost.
+4. Each shape is scored on the wall search alone (`optimize::run_inner`: no verification,
+   diagrams or closest design; a shape's score never reads them). The best shape is re-run with
+   the normal parallel inner search, so the winner is verified at 2n-1 stations. `winner_hull` in result.json is the generated hull.
 5. `candidates` holds one entry per shape (its inner winner, or its best failing candidate with
    the reason), so the web UI scatter shows one dot per shape.
 
