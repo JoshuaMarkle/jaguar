@@ -455,6 +455,7 @@ function numRow(sec, f) {
 }
 // Optional searched flare (search.flare_deg): all three empty = the Hull side flare is used.
 const FLARE_AX = ['flare_deg', 'Side flare (searched)', 'deg', 'Optional: search the side flare (demolding draft) as min, max, step. The low end is your demolding minimum; more flare is only chosen when a check needs it (it adds concrete). Empty = the fixed Hull side flare (which is ignored while a range is given here).'];
+const FLARE_TOL_T = 'Optional, needs a searched flare range: make the flare continuous. After the grid picks a winner, JAGUAR bisects between its flare and the next smaller grid flare in steps of this (e.g. 0.1), and with a depth resolution too tries flare-then-depth and depth-then-flare and keeps the lighter. Empty = the grid flare.';
 const DEPTH_TOL_T = 'Optional: make the mold depth continuous. After the depth grid picks a winner, JAGUAR bisects between that depth and the next shallower grid depth (same wall, mix and flare) in steps of this, e.g. 0.0625 = 1/16 in, and keeps the shallowest depth that still passes. Empty = the grid depth.';
 // A searched flare range replaces the fixed Hull side flare: grey it out (it is written as 0).
 function flareMode() {
@@ -565,7 +566,8 @@ function buildForm() {
       + row('punching.d_over_t', 'Mesh depth / wall', pdt, '<input type="number" id="punching.d_over_t" step="any" min="0" max="1" placeholder="from passes">'))
     + section('search', FIELDS.search.map(f => triRow(f)).join('')
       + row('search.depth_tol_in', 'Mold depth resolution', DEPTH_TOL_T, '<input type="number" id="search.depth_tol_in" step="any" min="0" placeholder="grid step">', 'in')
-      + triRow(FLARE_AX))
+      + triRow(FLARE_AX)
+      + row('search.flare_tol_deg', 'Side flare resolution', FLARE_TOL_T, '<input type="number" id="search.flare_tol_deg" step="any" min="0" placeholder="grid step">', 'deg'))
     + section('gates', FIELDS.gates.map(f => numRow('gates', f)).join(''))
     + section('lettering',
       row('lettering.on', 'Check freeboard at the lettering', LET_T, '<input type="checkbox" class="switch" id="lettering.on">')
@@ -813,6 +815,7 @@ function fillForm(p, hulls) {
   for (const [k] of FIELDS.search) for (let n = 0; n < 3; n++) $(`search.${k}.${n}`).value = p.search[k][n];
   for (let n = 0; n < 3; n++) $(`search.flare_deg.${n}`).value = p.search.flare_deg ? p.search.flare_deg[n] : '';
   $('search.depth_tol_in').value = p.search.depth_tol_in ?? '';
+  $('search.flare_tol_deg').value = p.search.flare_tol_deg ?? '';
   flareMode();
   $('cases').innerHTML = ''; for (const lc of p.load_case) lcBlock(lc);
   raceEvents();
@@ -869,6 +872,10 @@ function formToml() {
         out.push(`flare_deg = [${fa.map(fl).join(', ')}]`);
       }
       if (g('search.depth_tol_in').trim() !== '') out.push(`depth_tol_in = ${fl(g('search.depth_tol_in'))}`);
+      if (g('search.flare_tol_deg').trim() !== '') {
+        if (fa.every(v => v === '')) throw new Error('side flare resolution needs a searched flare range');
+        out.push(`flare_tol_deg = ${fl(g('search.flare_tol_deg'))}`);
+      }
     }
     const ds = sec === 'objective' ? dispRows() : [];
     if (ds.length) out.push(`displacements = [${ds.map(([c, w]) => `{ ${c.load_case != null ? `load_case = ${tstr(c.load_case)}` : `crew_lb = ${fl(c.crew_lb)}`}, weight = ${fl(w)} }`).join(', ')}]`);

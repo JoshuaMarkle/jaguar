@@ -84,6 +84,7 @@ depth_in     = [10.0, 16.0, 1.0]
 #                                  # below its grid depth in steps of this (1/16 in)
 # flare_deg    = [3.0, 5.0, 1.0]   # optional: search the flare too (hull.flare_deg = 0 then); more flare
 #                                  # = more concrete, so it is chosen only when a check needs it
+# flare_tol_deg = 0.1              # optional, with flare_deg: continuous flare like depth_tol_in
 
 [gates]
 dc_search = 0.93          # search margin under dc_verify (verify extrapolates D/C over stations)

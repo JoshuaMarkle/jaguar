@@ -7,8 +7,8 @@
 //!    abort the run.
 //! 3. Winner = lightest candidate with dc <= gates.dc_search and
 //!    gated freeboard >= gates.freeboard_min_in + freeboard_margin_in.
-//!    With `search.depth_tol_in`, a single-mix winner's depth is then bisected
-//!    below its grid depth ([`refine_depth`]).
+//!    With `search.depth_tol_in` / `flare_tol_deg`, a single-mix winner's depth
+//!    and flare are then bisected below their grid values ([`refine_wall`]).
 //! 4. Re-evaluate the winner at 2n-1 and 4n-3 stations and Richardson-
 //!    extrapolate its D/C ([`convergence`]); `verified` = extrapolated (or,
 //!    when irregular, the 2n-1) D/C <= dc_verify.
@@ -1093,7 +1093,7 @@ pub fn run_inner(params: &Params, hull: &Hull) -> Result<Inner> {
     let s = search_walls(params, hull, &|_| {}, &RunControl::default())?;
     let best = s.refined.map(|r| r.0).or(s.best);
     let mut candidates = s.candidates;
-    candidates.extend(s.depth_tries);
+    candidates.extend(s.refine_tries);
     Ok(Inner { best, candidates })
 }
 
@@ -1112,10 +1112,10 @@ struct Searched {
     zone_stats: Option<ZoneSearch>,
     /// The best passing grid candidate.
     best: Option<Candidate>,
-    /// `best` moved to a shallower depth ([`refine_depth`]), with its seats.
-    refined: Option<DepthTry>,
-    /// Every depth [`refine_depth`] tried (not yet in `candidates`).
-    depth_tries: Vec<Candidate>,
+    /// `best` moved to a lighter depth and flare ([`refine_wall`]), with its seats.
+    refined: Option<WallTry>,
+    /// Every point [`refine_wall`] tried (not yet in `candidates`).
+    refine_tries: Vec<Candidate>,
 }
 
 fn run_search(
@@ -1137,7 +1137,7 @@ fn run_search(
         mut zone_stats,
         best,
         refined,
-        depth_tries,
+        refine_tries,
     } = search_walls(params, hull, on_progress, ctl)?;
     let winner = match &best {
         None => None,
@@ -1169,7 +1169,7 @@ fn run_search(
             Some(finish_winner(params, &fit, &axis[ri].1, hull, c, plan, maker.as_deref(), on_progress)?)
         }
     };
-    candidates.extend(depth_tries);
+    candidates.extend(refine_tries);
 
     if let (Some(st), Some(w)) = (&mut zone_stats, &winner) {
         st.saved_lb = st.single_mix_lb.map(|s| s - w.candidate.hull_weight_lb);
@@ -1316,10 +1316,10 @@ fn search_walls(
         .filter(|c| c.passes)
         .reduce(|a, b| if better(params, b, a) { b } else { a })
         .cloned();
-    // Continuous depth (search.depth_tol_in): a single-mix winner moves to the shallowest
-    // depth below its grid depth that still passes, with seats solved at that depth.
-    let (refined, depth_tries) = match (&best, params.search.depth_tol_in) {
-        (Some(c), Some(tol)) if c.zones.is_none() => refine_depth(params, hull, &axis, &ds, c, tol),
+    // Continuous depth and flare (search.depth_tol_in, flare_tol_deg): a single-mix winner moves
+    // to the lightest passing point below its grid one, with seats solved there.
+    let (refined, refine_tries) = match &best {
+        Some(c) if c.zones.is_none() => refine_wall(params, hull, &axis, (&ds, &fs), c),
         _ => (None, Vec::new()),
     };
     Ok(Searched {
@@ -1335,54 +1335,57 @@ fn search_walls(
         zone_stats,
         best,
         refined,
-        depth_tries,
+        refine_tries,
     })
 }
 
-/// One analysis result from [`refine_depth`]: the candidate and the seats it was checked at.
-type DepthTry = (Candidate, Result<Vec<CaseSeats>, String>);
+/// One analysis result from [`refine_wall`]: the candidate and the seats it was checked at.
+type WallTry = (Candidate, Result<Vec<CaseSeats>, String>);
 
-/// Continuous mold depth (`search.depth_tol_in`): bisects single-mix grid winner `c` (same
-/// wall, mix and flare) over depths `c.depth_in - j * tol` above the next shallower grid depth,
-/// which lost to `c` and so failed. Assumes pass/fail is monotone in depth over that one step.
-/// A depth passes when it passes the search and its freeboard and loaded GM also pass at the
-/// 2n-1 verification stations (no search margin on those gates, unlike D/C).
-/// Returns the shallowest passing depth found when it beats `c` (None = keep `c`), and every
-/// candidate tried, in bisection order.
-fn refine_depth(
+/// A wall variable [`refine_wall`] makes continuous.
+#[derive(Clone, Copy)]
+enum Refine {
+    Depth,
+    Flare,
+}
+
+/// Continuous mold depth and flare (`search.depth_tol_in`, `search.flare_tol_deg`) from
+/// single-mix grid winner `c` (same wall and mix): each variable is bisected over `x - j * tol`
+/// above its next lower grid value, which is lighter than `c` and so failed (less depth or
+/// flare = less freeboard and GM). Assumes pass/fail is monotone over that one step. With both,
+/// flare-then-depth and depth-then-flare are run (the two trade against each other) and the
+/// better end point kept. A point passes when it passes the search and its freeboard and loaded
+/// GM also pass at the 2n-1 verification stations (no search margin on those gates, unlike D/C).
+/// Returns the refined winner when it beats `c` (None = keep `c`), and every candidate tried.
+fn refine_wall(
     params: &Params,
     hull: &Hull,
     axis: &[(f64, StrengthFit, Option<String>)],
-    ds: &[f64],
+    (ds, fs): (&[f64], &[f64]),
     c: &Candidate,
-    tol: f64,
-) -> (Option<DepthTry>, Vec<Candidate>) {
-    let gi = ds.iter().position(|&d| d == c.depth_in);
-    let ri = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix);
-    let (Some(gi), Some(ri)) = (gi, ri) else { return (None, Vec::new()) };
-    if gi == 0 {
+) -> (Option<WallTry>, Vec<Candidate>) {
+    let (dtol, ftol) = (params.search.depth_tol_in, params.search.flare_tol_deg);
+    let Some(ri) = axis.iter().position(|a| a.0 == c.density_pcf && a.2 == c.mix) else {
         return (None, Vec::new());
-    }
-    let step = c.depth_in - ds[gi - 1];
-    // Largest j with j * tol < step: depths stay above the failed grid depth.
-    let n = ((step / tol - 1e-9).ceil() as usize).saturating_sub(1);
+    };
     let mid = &axis[axis.len() / 2];
-    let try_at = |d: f64| -> DepthTry {
-        let (grid, why) = Grid::build_topsides(hull, d, params.hull.stations, candidate_topsides(params, c));
+    let try_at = |d: f64, f: f64| -> WallTry {
+        let top = Topsides { flare_deg: f, ..params.hull.topsides() };
+        let (grid, why) = Grid::build_topsides(hull, d, params.hull.stations, top);
         let sec = sections(&grid, c.thickness_in);
         let plan =
             plan_seats(params, &mid.1, &grid, &sec, c.thickness_in, mid.0).map_err(|e| format!("{e:#}"));
         let mut k = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, true);
-        (k.mix, k.flare_deg) = (c.mix.clone(), c.flare_deg);
+        (k.mix, k.flare_deg) = (c.mix.clone(), f);
         if let Some(why) = why {
             k.passes = false;
             k.error = Some(why);
         }
-        // Bisection drives the depth onto the freeboard (or GM) gate, which has no search margin:
-        // a depth passes only if those gates also hold at the 2n-1 verification stations.
+        // Bisection drives the wall onto the freeboard (or GM) gate, which has no search margin:
+        // a point passes only if those gates also hold at the 2n-1 verification stations.
         if k.passes {
             let fine = 2 * params.hull.stations - 1;
-            let grid = Grid::build_topsides(hull, d, fine, candidate_topsides(params, c)).0;
+            let grid = Grid::build_topsides(hull, d, fine, top).0;
             let sec = sections(&grid, c.thickness_in);
             let v = evaluate(params, &axis[ri].1, &grid, &sec, c.thickness_in, c.density_pcf, &plan, false);
             let (fb, gm) = (v.verdict.as_ref().map(|v| v.freeboard_in), v.gm_in);
@@ -1399,21 +1402,56 @@ fn refine_depth(
         }
         (k, plan)
     };
-    // j = lo passes (the grid winner at 0), j = hi fails (the grid depth below at n + 1).
-    let (mut lo, mut hi) = (0, n + 1);
-    let (mut found, mut tried) = (None, Vec::new());
-    while hi - lo > 1 {
-        let j = (lo + hi) / 2;
-        let (k, plan) = try_at(c.depth_in - j as f64 * tol);
-        tried.push(k.clone());
-        if k.passes {
-            lo = j;
-            found = Some((k, plan));
-        } else {
-            hi = j;
+    // Lowest passing value of one variable below passing point `p` (None: not refinable there,
+    // or nothing lower passed).
+    let bisect = |p: &Candidate, which: Refine, tried: &mut Vec<Candidate>| -> Option<WallTry> {
+        let (grid, tol, x) = match which {
+            Refine::Depth => (ds, dtol?, p.depth_in),
+            Refine::Flare => (fs, ftol?, p.flare_deg),
+        };
+        let gi = grid.iter().position(|&g| g == x).filter(|&i| i > 0)?;
+        let step = x - grid[gi - 1];
+        // Largest j with j * tol < step: values stay above the failed grid value.
+        let n = ((step / tol - 1e-9).ceil() as usize).saturating_sub(1);
+        // j = lo passes (`p` at 0), j = hi fails (the grid value below at n + 1).
+        let (mut lo, mut hi, mut found) = (0, n + 1, None);
+        while hi - lo > 1 {
+            let j = (lo + hi) / 2;
+            let v = x - j as f64 * tol;
+            let (k, plan) = match which {
+                Refine::Depth => try_at(v, p.flare_deg),
+                Refine::Flare => try_at(p.depth_in, v),
+            };
+            tried.push(k.clone());
+            if k.passes {
+                lo = j;
+                found = Some((k, plan));
+            } else {
+                hi = j;
+            }
+        }
+        found
+    };
+    let orders: &[[Refine; 2]] = match (dtol, ftol) {
+        (Some(_), Some(_)) => &[[Refine::Flare, Refine::Depth], [Refine::Depth, Refine::Flare]],
+        _ => &[[Refine::Depth, Refine::Flare]],
+    };
+    let mut tried = Vec::new();
+    let mut best: Option<WallTry> = None;
+    for order in orders {
+        let mut cur: Option<WallTry> = None;
+        for &which in order {
+            if let Some(t) = bisect(cur.as_ref().map_or(c, |t| &t.0), which, &mut tried) {
+                cur = Some(t);
+            }
+        }
+        if let Some(t) = cur
+            && best.as_ref().is_none_or(|b| better(params, &t.0, &b.0))
+        {
+            best = Some(t);
         }
     }
-    (found.filter(|(k, _)| better(params, k, c)), tried)
+    (best.filter(|(k, _)| better(params, k, c)), tried)
 }
 
 /// The search grid [`closest_design`] re-evaluates candidates on.

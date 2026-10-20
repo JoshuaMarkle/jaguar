@@ -1020,6 +1020,11 @@ pub struct Search {
     /// the grid depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth_tol_in: Option<f64>,
+    /// Optional flare resolution, deg (needs `flare_deg`): the single-mix winner's flare is
+    /// bisected between its grid flare and the next smaller one like `depth_tol_in` (with
+    /// both, in either order, the lighter kept). Absent = the grid flare.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flare_tol_deg: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1209,6 +1214,13 @@ impl Params {
             && !(tol.is_finite() && tol > 0.0)
         {
             bail!("search.depth_tol_in must be > 0, got {tol}");
+        }
+        match (self.search.flare_tol_deg, self.search.flare_deg) {
+            (Some(tol), _) if !(tol.is_finite() && tol > 0.0) => {
+                bail!("search.flare_tol_deg must be > 0, got {tol}")
+            }
+            (Some(_), None) => bail!("search.flare_tol_deg needs a searched flare range (search.flare_deg)"),
+            _ => {}
         }
         if self.gates.thickness_min_buildable_in > self.search.thickness_in[1] {
             bail!("gates.thickness_min_buildable_in is above search.thickness_in max");
@@ -1716,6 +1728,17 @@ mod tests {
             p.search.depth_tol_in = tol;
             assert_eq!(p.validate().is_ok(), ok, "{tol:?}");
         }
+    }
+
+    #[test]
+    fn flare_tol_needs_a_flare_range() {
+        let mut p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        (p.hull.flare_deg, p.search.flare_tol_deg) = (0.0, Some(0.1));
+        assert!(p.validate().is_err(), "no search.flare_deg");
+        p.search.flare_deg = Some([3.0, 5.0, 0.5]);
+        p.validate().unwrap();
+        p.search.flare_tol_deg = Some(0.0);
+        assert!(p.validate().is_err());
     }
 
     #[test]

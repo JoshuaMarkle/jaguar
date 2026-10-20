@@ -1,0 +1,5 @@
+# M4 A (the team's mix) and a weak 80 pcf mix: seats are planned at the middle of the mix
+# list (80 pcf), heavy, so loaded GM binds and flare matters (tests/optimize.rs).
+mix,density_pcf,split_tensile_psi,fraction_of_final,compressive_psi
+M4 A,65.35,313.33,1,1423.79
+heavy,80,50,1,100

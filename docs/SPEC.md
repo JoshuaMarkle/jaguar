@@ -234,14 +234,16 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    tip, full hull interior up to D = enclosed area minus wall area) displace >= `swamp_factor` x self weight at 62.4 pcf. l is found
    by bisection and reported as `air_pocket_in`; l > `air_pocket_max_in` fails with a reason. Thicknesses below `thickness_min_buildable_in` are
    never tried.
-   **Continuous depth** (optional `search.depth_tol_in` = s > 0): after the grid, a single-mix
-   winner at grid depth D (not the lowest) is bisected over D - j s, j >= 1, above the next
-   shallower grid depth (same wall, mix and flare; seats re-solved at each depth), assuming
-   pass/fail is monotone over that one step. A depth passes only if its freeboard and loaded GM
-   also pass at the 2n-1 verify stations (bisection lands on those gates, which have no search
-   margin). The shallowest passing depth replaces the winner when
-   it beats it under the objective; every depth tried is appended to `candidates`. Two-mix
-   winners keep their grid depth. Absent = grid depth only.
+   **Continuous depth and flare** (optional `search.depth_tol_in` = s > 0; `search.flare_tol_deg`,
+   which needs `search.flare_deg`): after the grid, a single-mix winner at grid depth D (not the
+   lowest) is bisected over D - j s, j >= 1, above the next shallower grid depth (same wall and
+   mix; seats re-solved at each point), assuming pass/fail is monotone over that one step; flare
+   likewise below the winner's grid flare. With both, flare-then-depth and depth-then-flare are
+   run and the lighter end point kept. A point passes only if its freeboard and loaded GM also
+   pass at the 2n-1 verify stations (bisection lands on those gates, which have no search
+   margin). The refined point replaces the winner when it beats it under the objective; every
+   point tried is appended to `candidates`. Two-mix winners keep their grid point. Absent = grid
+   values only.
 7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
    friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction). Friction = 0.5 rho V^2 S Cf on the wetted surface S, Re = V L / nu, Cf = the

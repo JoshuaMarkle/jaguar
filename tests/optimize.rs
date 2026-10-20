@@ -654,3 +654,49 @@ fn fine_depth_tol_winner_verifies() {
     }
     assert_eq!(fails, 0);
 }
+
+/// search.flare_tol_deg: on a wide hull where loaded GM binds (the team's crew and gates, seats
+/// planned at a heavy middle mix), the grid winner (4.5 deg) fails verification; refined, the
+/// flare lands between grid values (just above 4.0, which fails) with a shallower mold, lighter
+/// and verified. Without flare_tol_deg the flare stays on the grid.
+#[test]
+fn flare_tol_refines_flare_between_grid_values() {
+    use jaguar::hullgen::{ShapeParams, generate};
+    let text = std::fs::read_to_string("tests/fixtures/team_canoe.toml").unwrap();
+    let mut p = Params::parse(&text, Path::new("tests/fixtures")).unwrap();
+    p.shape_search = None;
+    p.objective.kind = jaguar::params::ObjectiveKind::Weight;
+    (p.hull.stations, p.hull.flare_deg, p.gates.freeboard_margin_in) = (41, 0.0, 1.0);
+    (p.search.flare_deg, p.search.depth_in) = (Some([3.0, 5.0, 0.5]), [10.375, 18.375, 0.5]);
+    let shape = ShapeParams {
+        length_in: 216.0,
+        beam_in: 27.8,
+        draft_in: 7.5,
+        fore_wp: 0.74,
+        section: 0.9,
+        fore_rocker: 0.37,
+        aft_wp: 0.74,
+        aft_rocker: 0.37,
+        fore_len_frac: 0.5,
+        aft_len_frac: 0.5,
+        gunwale_radius_in: None,
+        metrics: None,
+    };
+    let h = generate(&shape, 41, 21, "wide").unwrap().prepared(&p.hull).unwrap();
+    let grid = optimize::run(&p, &h).unwrap().winner.unwrap();
+    assert_eq!((grid.candidate.flare_deg, grid.verified), (4.5, false));
+    p.search.depth_tol_in = Some(0.01);
+    let depth_only = optimize::run(&p, &h).unwrap().winner.unwrap().candidate;
+    assert_eq!(depth_only.flare_deg, 4.5);
+    p.search.flare_tol_deg = Some(0.01);
+    let r = optimize::run(&p, &h).unwrap();
+    let w = r.winner.as_ref().unwrap();
+    let c = &w.candidate;
+    assert!(w.verified, "{:?}", w.verify_failure);
+    assert!(c.flare_deg > 4.0 && c.flare_deg < 4.5, "{}", c.flare_deg);
+    assert!(c.depth_in < grid.candidate.depth_in);
+    assert!(c.hull_weight_lb < depth_only.hull_weight_lb.min(grid.candidate.hull_weight_lb));
+    // The 0.01 deg less flare was tried and failed.
+    let less = r.candidates.iter().find(|k| (k.flare_deg - (c.flare_deg - 0.01)).abs() < 1e-9);
+    assert!(less.is_some_and(|k| !k.passes));
+}
