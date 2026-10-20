@@ -520,6 +520,33 @@ pub struct Layout {
     pub utilization: f64,
     /// Estimated hand labor.
     pub labor: Labor,
+    /// The other ways to lay the foam with the same stock, packing and rates ([`alternatives`]).
+    pub alternatives: Vec<Alternative>,
+}
+
+/// Another way to lay the foam, for comparison: its labor and accuracy, not packed on sheets.
+#[derive(Debug, Clone, Serialize)]
+pub struct Alternative {
+    pub name: String,
+    pub orientation: Orientation,
+    pub keel_foam_in: Option<f64>,
+    /// The layout this comparison belongs to.
+    pub current: bool,
+    /// Why it cannot be built with this stock; None when `result` is there.
+    pub error: Option<String>,
+    pub result: Option<AltResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AltResult {
+    pub labor: Labor,
+    pub sand_ft3: f64,
+    pub max_step_in: f64,
+    pub switch_in: Option<f64>,
+    pub foam_pieces: usize,
+    /// Hardboard templates (boards) and their area, ft^2.
+    pub templates: usize,
+    pub hardboard_ft2: f64,
 }
 
 /// Mold boards for a `jaguar-result/1` winner. Err if it has no winner, or a piece fits no sheet.
@@ -536,8 +563,70 @@ enum Shape {
     Upright { half: Vec<Pt>, guide: Option<Vec<Pt>>, x: f64, grid: Option<i64> },
 }
 
-/// Mold boards for `hull` with the wall and depth of `es` (`es.thickness_in` required).
+/// Mold boards for `hull` with the wall and depth of `es` (`es.thickness_in` required), with the
+/// other ways to lay the foam for comparison.
 pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
+    let mut l = plan(hull, es, spec, true)?;
+    l.alternatives = alternatives(hull, es, spec);
+    Ok(l)
+}
+
+/// All flat, all upright, and flat + upright keel with slabs of each foam thickness on hand, of
+/// two of the thickest glued, and of the chosen thickness, each with this spec's stock, packing and rates, laid out but not packed on
+/// sheets (the slow part). Hybrid only for tracing templates.
+fn alternatives(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Vec<Alternative> {
+    let thickest = spec.foam_in.iter().copied().fold(0.0, f64::max);
+    let mut keels: Vec<f64> = spec.foam_in.clone();
+    keels.push(2.0 * thickest);
+    keels.extend(spec.keel_foam_in);
+    keels.sort_by(f64::total_cmp);
+    keels.dedup();
+    let own_keel = spec.keel_foam_in.unwrap_or(thickest);
+    let mut alts: Vec<(String, Orientation, Option<f64>)> = vec![
+        ("All flat".into(), Orientation::Flat, None),
+        ("All upright".into(), Orientation::Vertical, None),
+    ];
+    if spec.templates() {
+        alts.extend(keels.iter().map(|&t| {
+            let note = if spec.foam_in.contains(&t) {
+                String::new()
+            } else if (t - 2.0 * thickest).abs() < 1e-9 {
+                format!(" (two {thickest} in sheets glued)")
+            } else {
+                " (not a stock thickness)".into()
+            };
+            (format!("Flat + {t} in keel slabs{note}"), Orientation::Hybrid, Some(t))
+        }));
+    }
+    alts.into_par_iter()
+        .map(|(name, orientation, keel)| {
+            let current = orientation == spec.orientation
+                && (orientation != Orientation::Hybrid || keel.is_some_and(|t| (t - own_keel).abs() < 1e-9));
+            // Half canoe is for flat layers; upright alone drops it.
+            let half_canoe = spec.half_canoe && orientation != Orientation::Vertical;
+            let s = MoldSpec { orientation, keel_foam_in: keel, half_canoe, ..spec.clone() };
+            let (error, result) = match plan(hull, es, &s, false) {
+                Ok(l) => (
+                    None,
+                    Some(AltResult {
+                        sand_ft3: l.stack.sand_ft3,
+                        max_step_in: l.stack.max_step_in,
+                        switch_in: l.stack.switch_in,
+                        foam_pieces: l.stack.foam_pieces,
+                        templates: l.pieces.len(),
+                        hardboard_ft2: l.pieces.iter().map(|p| p.area_in2).sum::<f64>() / 144.0,
+                        labor: l.labor,
+                    }),
+                ),
+                Err(e) => (Some(format!("{e:#}")), None),
+            };
+            Alternative { name, orientation, keel_foam_in: keel, current, error, result }
+        })
+        .collect()
+}
+
+/// The layout itself; `nest` false leaves the pieces off the sheets (and Tight's split search).
+fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Result<Layout> {
     spec.validate()?;
     let wall = es.thickness_in.context("the mold needs the wall thickness (the inner surface)")?;
     let es = ExportSpec { pocket_in: None, filled: false, ..es.clone() };
@@ -765,7 +854,10 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
         }
         Ok((ls, ps))
     };
-    let (layers, pieces, sheets) = if (spec.packing == Packing::Tight || nests) && flat {
+    let (layers, pieces, sheets) = if !nest_sheets {
+        let (ls, ps) = build(None)?;
+        (ls, ps, vec![])
+    } else if (spec.packing == Packing::Tight || nests) && flat {
         // Fewest pieces that fit is not always fewest sheets (a 70 in piece on a 96 in sheet
         // wastes the rest of its length): try shorter pieces too, packed in quarter turns, then
         // the three best again turned to any angle; fewest sheets, then fewest pieces.
@@ -871,7 +963,8 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
         }
     };
     let used: f64 = sheets.iter().map(|s| s.used_in2).sum();
-    let utilization = used / sheets.iter().map(|s| s.length_in * s.width_in).sum::<f64>();
+    let sheet_area = sheets.iter().map(|s| s.length_in * s.width_in).sum::<f64>();
+    let utilization = if sheet_area > 0.0 { used / sheet_area } else { 0.0 };
     let labor = labor(&layers, &pieces, sand_vol, surface_ft2, spec);
     Ok(Layout {
         format: MOLD_FORMAT.into(),
@@ -883,6 +976,7 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
         sheets,
         utilization,
         labor,
+        alternatives: vec![],
     })
 }
 
@@ -2799,6 +2893,7 @@ mod tests {
             labor: labor(&[], &ps, 0.0, 0.0, &MoldSpec::default()),
             pieces: ps,
             utilization: 0.0,
+            alternatives: vec![],
             sheets: sh,
         };
         let dxf = to_dxf(&l, 0).unwrap();

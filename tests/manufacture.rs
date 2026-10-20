@@ -428,6 +428,34 @@ fn labor_estimate_adds_up_and_follows_the_layout() {
 }
 
 #[test]
+fn alternatives_compare_the_other_layouts() {
+    let l = flat();
+    let names: Vec<&str> = l.alternatives.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "All flat",
+            "All upright",
+            "Flat + 2 in keel slabs",
+            "Flat + 4 in keel slabs (two 2 in sheets glued)"
+        ]
+    );
+    // The current layout's row is this layout (labor does not depend on the sheets).
+    let cur: Vec<_> = l.alternatives.iter().filter(|a| a.current).collect();
+    assert_eq!(cur.len(), 1);
+    let r = cur[0].result.as_ref().unwrap();
+    assert!((r.labor.total_hr - l.labor.total_hr).abs() < 1e-9 && r.templates == l.pieces.len());
+    // Keel slab rows say where they switch, and sand less than all flat.
+    for a in &l.alternatives[2..] {
+        let ar = a.result.as_ref().unwrap();
+        assert!(ar.switch_in.is_some() && ar.sand_ft3 < r.sand_ft3, "{}", a.name);
+    }
+    // Boards in the mold: no keel slab rows.
+    let mold = from_result(&example(), &MoldSpec { boards: Boards::Mold, ..MoldSpec::default() }).unwrap();
+    assert_eq!(mold.alternatives.len(), 2);
+}
+
+#[test]
 fn boards_in_the_mold_sit_between_the_foam_layers() {
     let spec = MoldSpec { boards: Boards::Mold, ..MoldSpec::default() };
     let l = from_result(&example(), &spec).unwrap();

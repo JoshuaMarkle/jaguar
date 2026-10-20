@@ -2001,6 +2001,12 @@ function mfgPacketHtml(m) {
     <tr><td>Sanding</td><td>${f(lb.sand_in3 / 1728)} ft\u00b3 of steps to sand off at ${rt.sand_in3_per_min} in\u00b3/min (deepest step ${f(s.max_step_in)} in), plus a final pass over ${f(lb.surface_ft2, 0)} ft\u00b2 at ${rt.finish_ft2_per_min} ft\u00b2/min</td><td>${hr(lb.sand_hr)}</td></tr>
     <tr><td>Assembly</td><td>${lb.foam_pieces} foam pieces glued and aligned at ${rt.assemble_min} min each</td><td>${hr(lb.assemble_hr)}</td></tr></table>
     <p class="muted">Estimate from the shop rates in the Manufacture tab (labor rates); time one test piece and set them for a better figure. Water-jet time is not included.</p>`;
+  const alts = m.alternatives || [];
+  const cmpHtml = alts.length ? `<h2>Compare layouts</h2><table><tr><th>layout</th><th>hand work</th><th>trace</th><th>cut</th><th>sand</th><th>glue</th><th>to sand</th><th>deepest step</th><th>templates</th><th>hardboard</th></tr>
+    ${alts.map(a => { const r = a.result, b = a.current ? ['<b>', '</b>'] : ['', ''];
+      return r ? `<tr><td>${b[0]}${esc(a.name)}${a.current ? ' (this packet)' : ''}${b[1]}${r.switch_in != null ? `<br><span class="muted">switch at ${f(r.switch_in)} in</span>` : ''}</td><td>${b[0]}${hr(r.labor.total_hr)}${b[1]}</td><td>${f(r.labor.trace_hr, 1)}</td><td>${f(r.labor.cut_hr, 1)}</td><td>${f(r.labor.sand_hr, 1)}</td><td>${f(r.labor.assemble_hr, 1)}</td><td>${f(r.sand_ft3)} ft³</td><td>${f(r.max_step_in)} in</td><td>${r.templates}</td><td>${f(r.hardboard_ft2, 0)} ft²</td></tr>`
+        : `<tr><td>${esc(a.name)}</td><td colspan="9" class="muted">cannot be built with this stock: ${esc(a.error || '')}</td></tr>`; }).join('')}</table>
+    <p class="muted">Same foam, sheets, packing, half canoe and rates; hours in h. Deepest step: how far the cut foam strays from the hull before sanding (smaller = closer to the design). Hardboard is template area; only this packet's layout is packed on sheets.</p>` : '';
   const layerRows = m.layers.map(ly => `<tr><td>${box}</td><td><b>${esc(ly.label)}</b></td><td>${f(ly.pos_in)}</td><td>${f(ly.foam_in, 3)}</td><td>${ly.foam_labels.map(esc).join(', ')}</td><td>${ly.pieces.map(i => esc(m.pieces[i].label)).join(', ')}</td></tr>`).join('');
   const tplRows = m.pieces.map((p, i) => `<tr><td>${box}</td><td>${box}</td><td><b>${esc(p.label)}</b></td><td>${sheetOf[i] || '-'}</td><td>${p.traces.map(esc).join(', ')}</td><td>${p.holes.length}</td></tr>`).join('');
   const sheetBlocks = m.sheets.map((sh, k) => {
@@ -2034,6 +2040,7 @@ function mfgPacketHtml(m) {
     </div>
     <h2>Steps</h2><ol>${steps.map(t => `<li>${box} ${t}</li>`).join('')}</ol>
     ${laborHtml}
+    ${cmpHtml}
     <h2>Stack</h2><table><tr><th></th><th>layer</th><th>${hybrid ? 'height (flat) / x (keel), in' : flat ? 'underside above floor, in' : 'bow face x, in'}</th><th>foam, in</th><th>foam pieces</th><th>templates</th></tr>${layerRows}</table>
     ${m.layers.filter(ly => !ly.upright).map(ly => `<div class="layer"><h3>${esc(ly.label)} <span class="muted">${f(ly.foam_in, 3)} in foam, from ${f(ly.pos_in)} in above the floor</span></h3>${draw(ly)}</div>`).join('')}
     <div>${m.layers.filter(ly => ly.upright).map(ly => `<div class="layer slab"><b>${esc(ly.label)}</b> <span class="muted">x ${f(ly.pos_in, 1)}</span><br>${draw(ly)}</div>`).join('')}</div>

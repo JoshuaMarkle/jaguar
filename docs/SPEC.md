@@ -520,6 +520,11 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   assembly (per foam piece). Rates in `MoldSpec.labor` (web: labor rates; CLI `--labor` JSON);
   defaults 60 in/min, 0.5 min, 40 in^2/min, 12 in, 0.25 min, 10 in^3/min, 0.5 ft^2/min, 2 min are
   guesses to calibrate. `stack.max_step_in`: the deepest step before sanding (accuracy).
+* **Compare layouts** (`alternatives`; shop packet table, CLI): all flat, all upright, and flat +
+  upright keel with slabs of each foam thickness on hand, of two of the thickest glued and of the
+  chosen thickness (keel rows for tracing templates only), each with the same stock, packing, half
+  canoe and rates, laid out but not packed on sheets: labor, foam to sand, deepest step, templates
+  and their area, or why it cannot be built.
 * **Packing** (`--packing`): `blocks` (default) cuts every flat layer at the same joints, the
   fewest equal lengths over the floor layer's span for which every layer's piece in every block
   fits (foam and hardboard): the joints line up from floor to keel, so the mold comes apart in

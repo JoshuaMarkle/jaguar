@@ -639,6 +639,17 @@ fn main() -> Result<()> {
                 "labor about {:.1} h: tracing {:.1}, cutting {:.1}, sanding {:.1}, assembly {:.1} (estimate)",
                 lb.total_hr, lb.trace_hr, lb.cut_hr, lb.sand_hr, lb.assemble_hr
             );
+            println!("compare (same stock, packing and rates):");
+            for alt in &l.alternatives {
+                let mark = if alt.current { "*" } else { " " };
+                match (&alt.result, &alt.error) {
+                    (Some(r), _) => println!(
+                        "  {mark} {:<48} {:5.1} h  sand {:.2} ft3  deepest step {:.2} in  {} templates",
+                        alt.name, r.labor.total_hr, r.sand_ft3, r.max_step_in, r.templates
+                    ),
+                    (None, e) => println!("  {mark} {:<48} cannot: {}", alt.name, e.as_deref().unwrap_or("")),
+                }
+            }
             println!(
                 "{} hardboard {} on {} sheets ({}) ({:.0}% used); wrote {}",
                 l.pieces.len(),
