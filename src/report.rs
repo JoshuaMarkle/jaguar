@@ -238,6 +238,25 @@ fn num(x: f64) -> String {
     if s == "-0" { "0".into() } else { s.to_string() }
 }
 
+/// The 4 gates closest to binding, e.g. `binding  loaded GM 2.9990 >= 3 slack -0.0010 (2M, 2F,
+/// 321 st) | ...` (`Winner::gates`, already sorted). None without gates.
+fn gate_line(w: &crate::optimize::Winner) -> Option<String> {
+    let items: Vec<String> = w
+        .gates
+        .iter()
+        .take(4)
+        .map(|g| {
+            let op = if g.at_least { ">=" } else { "<=" };
+            let at = if g.at.is_empty() { String::new() } else { format!("{}, ", g.at) };
+            format!(
+                "{} {:.4} {op} {} slack {:+.4} ({at}{} st)",
+                g.name, g.value, g.limit, g.slack, g.stations
+            )
+        })
+        .collect();
+    (!items.is_empty()).then(|| format!("        binding  {}", items.join(" | ")))
+}
+
 /// Winner density's lab provenance on one line, e.g.
 /// `mix 58 pcf predicted (fit); nearest tested: M2 55.6 (-2.4), final target 60.0 (+2.0); reach 2.0 pcf`.
 fn provenance_line(p: &crate::mix::MixProvenance) -> String {
@@ -575,6 +594,7 @@ pub fn summary_lines(r: &RunResult) -> Vec<String> {
             if let Some(f) = &w.verify_failure {
                 out.push(format!("        verification failed: {f}"));
             }
+            out.extend(gate_line(w));
             out.extend(stands_lines(w));
             if !w.knee_split_sensitivity.is_empty() {
                 out.push(format!(
@@ -995,6 +1015,7 @@ mod tests {
             stands: None,
             knee_split_sensitivity: vec![],
             curves: None,
+            gates: Vec::new(),
         }
     }
 

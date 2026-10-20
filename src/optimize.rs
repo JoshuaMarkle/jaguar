@@ -219,6 +219,108 @@ pub struct Winner {
     /// Power-speed and righting-lever curves of the winner ([`winner_curves`]); not gated.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub curves: Option<crate::curves::Curves>,
+    /// Every gate with its slack, closest to binding first ([`gate_slack`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<GateSlack>,
+}
+
+/// One gate of an analysed design and how close it is to binding (the report's binding
+/// constraints table).
+#[derive(Debug, Clone, Serialize)]
+pub struct GateSlack {
+    /// e.g. "loaded GM", "D/C bending_tension".
+    pub name: String,
+    /// Load case where it is worst; empty when it is not per case.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub at: String,
+    pub value: f64,
+    pub limit: f64,
+    /// true: the value must be >= limit (a minimum); false: <= limit (a maximum).
+    pub at_least: bool,
+    /// Signed margin in the gate's units, >= 0 = passes: value - limit for a minimum,
+    /// limit - value for a maximum.
+    pub slack: f64,
+    /// slack / max(|limit|, 1): the sort key (gates have different units).
+    pub relative: f64,
+    /// Stations the value is from: the verification count where the gate is checked there,
+    /// else the search count.
+    pub stations: usize,
+}
+
+/// The gates of design `c` (search values) with its verification `v` (2n-1 stations), `cases`
+/// and `empty` (2n-1) and station convergence `conv`, sorted by relative slack: verified D/C,
+/// each check's search D/C, freeboard, loaded and empty GM, and when gated the air pocket and the
+/// overall beam. Values are at verification resolution where it re-computes them.
+fn gate_slack(
+    params: &Params,
+    c: &Candidate,
+    v: &Candidate,
+    cases: &[CaseDiagrams],
+    empty: &EmptyFloat,
+    conv: &Convergence,
+) -> Vec<GateSlack> {
+    let n = params.hull.stations;
+    let (fine, finest) = (2 * n - 1, 4 * n - 3);
+    let mut out = Vec::new();
+    let mut gate = |name: String, at: &str, value: f64, limit: f64, at_least: bool, stations: usize| {
+        let slack = if at_least { value - limit } else { limit - value };
+        if slack.is_finite() {
+            let relative = slack / limit.abs().max(1.0);
+            out.push(GateSlack {
+                name,
+                at: at.to_string(),
+                value,
+                limit,
+                at_least,
+                slack,
+                relative,
+                stations,
+            });
+        }
+    };
+    let case = |pick: fn(&CaseDiagrams) -> Option<f64>| {
+        cases
+            .iter()
+            .filter_map(|k| pick(k).map(|x| (x, k.name.as_str())))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map_or("", |m| m.1)
+    };
+    let (g, dv) = (&params.gates, params.gates.dc_verify);
+    match (conv.extrapolated, v.verdict.as_ref()) {
+        (Some(x), _) => gate("D/C verified".into(), "", x.max(conv.dc[2]), dv, false, finest),
+        (None, Some(vv)) => gate("D/C verified".into(), "", vv.dc, dv, false, fine),
+        (None, None) => {}
+    }
+    if let Some(cv) = &c.verdict {
+        for k in &cv.checks {
+            let at = c.governing_case.as_deref().unwrap_or("");
+            gate(format!("D/C {}", k.name), at, k.dc, g.dc_search, false, n);
+        }
+    }
+    if let Some(vv) = &v.verdict {
+        gate(
+            "freeboard".into(),
+            case(|k| k.freeboard_in),
+            vv.freeboard_in,
+            g.freeboard_required_in(),
+            true,
+            fine,
+        );
+    }
+    if let Some(gm) = v.gm_in {
+        gate("loaded GM".into(), case(|k| k.gm_in), gm, params.stability.gm_min_in, true, fine);
+    }
+    if let (Some(m), Some(gm)) = (params.stability.gm_empty_min_in, empty.gm_in) {
+        gate("empty GM".into(), "", gm, m, true, fine);
+    }
+    if let (Some(fp), Some(l)) = (&params.flotation, c.air_pocket_in) {
+        gate("air pocket each end, in".into(), "", l, fp.air_pocket_max_in, false, n);
+    }
+    if let Some(ss) = &params.shape_search {
+        gate("overall beam, in".into(), "", c.beam_in, ss.beam_in[1], false, n);
+    }
+    out.sort_by(|a, b| a.relative.total_cmp(&b.relative));
+    out
 }
 
 /// Worked calculation of the winner's governing load case at the seats its
@@ -2061,6 +2163,7 @@ fn finish_winner(
         }
         why.join("; ")
     });
+    let gates = gate_slack(params, c, &v, &cases, &empty, &conv);
     let search_space = search_space(params, fit, c)?;
     let walls = &search_space[..3];
     let mut candidate = c.clone();
@@ -2097,6 +2200,7 @@ fn finish_winner(
         stands: None,
         knee_split_sensitivity: Vec::new(),
         curves: None,
+        gates,
     })
 }
 

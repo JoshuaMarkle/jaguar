@@ -2615,6 +2615,11 @@ function reportHtml(canoeImg, charts) {
   const ks = win.knee_split_sensitivity || [];
   const splitSec = ks.length ? `<h3>Knee punching by knee split</h3>` + table(['knee_split', 'load on one knee lb', 'demand psi', 'capacity psi', 'D/C'], ks.map(q =>
     `<tr class="${p.punching && q.knee_split === p.punching.knee_split ? 'gov' : ''}"><td>${f(q.knee_split, 1)}${q.knee_split === 1 ? ' (one knee)' : ''}</td><td>${f(q.load_lb, 1)}</td><td>${f(q.demand_psi, 1)}</td><td>${f(q.capacity_psi, 1)}</td><td>${f(q.dc, 3)}</td></tr>`)) : '';
+  // Every gate with its slack, closest to binding first (result.winner.gates).
+  const gates = win.gates || [];
+  const gatesTbl = !gates.length ? '' : `<h3>Binding constraints</h3><div class="muted">Every gate of this design, closest to binding first (sorted by slack relative to the limit). Values are at the verification station count where it re-checks the gate; negative slack fails.</div>`
+    + table(['gate', 'where', 'value', 'limit', 'slack', 'stations'], gates.map(g =>
+      `<tr class="${g.slack < 0 ? 'gov' : ''}"><td>${esc(g.name)}</td><td>${esc(g.at || '')}</td><td>${f(g.value, 4)}</td><td>${g.at_least ? '&ge;' : '&le;'} ${f(g.limit, 3)}</td><td>${g.slack >= 0 ? '+' : ''}${f(g.slack, 4)}</td><td>${g.stations}</td></tr>`));
   const s = result.strength, tested = p.material && p.material.strength_model === 'tested_mixes';
   const np = s ? (s.points || []).length : 0;
   // A line through 2 points is exact by construction (rms 0): no line or error is shown for it.
@@ -2650,6 +2655,7 @@ function reportHtml(canoeImg, charts) {
   ${standsSec}
   ${raceSec}
   <div class="page"><h2 style="margin-top:0">Optimization data.</h2>
+    ${gatesTbl}
     <h3>Search space</h3>${space}
     ${conv ? `<h3>Station convergence of the winner</h3>${conv}` : ''}
     <h2>Mix data.</h2>${mix}

@@ -340,8 +340,13 @@ sag_max_lbin, x_sag_in, hog_max_lbin, x_hog_in, x_in, shear_lb, moment_lbin, ver
 beam_dc, sweep_*}, knee_split_sensitivity [{knee_split, load_lb, demand_psi, capacity_psi, dc}],
 curves {error | speeds_fps, power [{name, crew_lb, displacement_lb, draft_in, drag_n, power_w}],
 angles_deg, gz [{name, weight_lb, kg_in, gz_in, max_gz_in, max_gz_deg, vanishing_deg,
-gunwale_immersion_deg}]}}
+gunwale_immersion_deg}]}, gates [{name, at, value, limit, at_least, slack, relative, stations}]}
 | null, closest, zones, ended_early, data_warnings}`.
+`winner.gates`: every gate of the design with its signed slack (>= 0 passes; value - limit for a
+minimum, limit - value for a maximum), sorted by `relative` = slack / max(|limit|, 1): verified D/C
+(extrapolated, else 2n-1) vs `dc_verify`; each check's search D/C vs `dc_search`; freeboard, loaded
+and empty GM at 2n-1; air pocket and (shape search) overall beam at n. The terminal prints the
+four closest as `binding`; the PDF report has the whole table.
 `data_warnings` (absent when empty): lab-data warnings, most serious first: rows that look like
 placeholders (name dummy / placeholder / fake / tbd / todo / xxx, final split outside 100-1000 psi,
 density outside 30-150 pcf, or final f'c under 500 psi), falling (negative slope) lines, weak
