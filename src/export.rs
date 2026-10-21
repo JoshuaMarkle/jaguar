@@ -6,7 +6,9 @@
 //! smooth-keel loft, topsides to the mold depth, the stem radius), both sides mirrored.
 //!
 //! * Each station's half girth (sheer -> keel centreline) is resampled by arc length to a fixed
-//!   number of points, so the surface is a regular grid even where rocker lifts the keel.
+//!   number of points, so the surface is a regular grid even where rocker lifts the keel. The
+//!   knuckle at the design draft, where the straight flared topsides start, is kept as a girth
+//!   point (its neighbours 0.05 in or more away), so it stays on its mold board line.
 //!   Leading/trailing stations with no offsets are dropped, except one at each end which becomes
 //!   the stem line. The exported length is therefore the extent of the non-zero offsets.
 //! * `thickness_in = Some(t)`: a closed SOLID. The inner face is the outer girth offset inward by
@@ -147,25 +149,76 @@ fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
-/// Resample a 2D polyline to `n` points evenly spaced by arc length (ends kept exactly).
-fn resample(p: &[(f64, f64)], n: usize) -> Vec<(f64, f64)> {
+/// Cumulative arc length of a 2D polyline at each vertex.
+fn arc(p: &[(f64, f64)]) -> Vec<f64> {
     let mut s = vec![0.0];
     for w in p.windows(2) {
         s.push(s.last().unwrap() + (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1));
     }
+    s
+}
+
+/// The point of polyline `p` (arc lengths `s`) at arc length `target`; a vertex exactly.
+fn at_arc(p: &[(f64, f64)], s: &[f64], target: f64) -> (f64, f64) {
+    if let Some(k) = s.iter().position(|&v| v == target) {
+        return p[k];
+    }
+    let k = s.partition_point(|&v| v <= target).clamp(1, p.len() - 1);
+    let seg = s[k] - s[k - 1];
+    let t = if seg > 0.0 { (target - s[k - 1]) / seg } else { 0.0 };
+    (p[k - 1].0 + t * (p[k].0 - p[k - 1].0), p[k - 1].1 + t * (p[k].1 - p[k - 1].1))
+}
+
+/// Resample a 2D polyline to `n` points evenly spaced by arc length (ends kept exactly).
+fn resample(p: &[(f64, f64)], n: usize) -> Vec<(f64, f64)> {
+    let s = arc(p);
     let total = *s.last().unwrap();
     (0..n)
-        .map(|j| {
-            if j == n - 1 {
-                return *p.last().unwrap();
-            }
-            let target = total * j as f64 / (n - 1) as f64;
-            let k = s.partition_point(|&v| v <= target).clamp(1, p.len() - 1);
-            let seg = s[k] - s[k - 1];
-            let t = if seg > 0.0 { (target - s[k - 1]) / seg } else { 0.0 };
-            (p[k - 1].0 + t * (p[k].0 - p[k - 1].0), p[k - 1].1 + t * (p[k].1 - p[k - 1].1))
-        })
+        .map(
+            |j| {
+                if j == n - 1 { *p.last().unwrap() } else { at_arc(p, &s, total * j as f64 / (n - 1) as f64) }
+            },
+        )
         .collect()
+}
+
+/// Least arc length from the knuckle to its neighbouring girth points ([`resample_knuckle`]).
+const KNUCKLE_GAP_IN: f64 = 0.05;
+
+/// [`resample`], keeping the knuckle where the straight flared topsides meet the table (the
+/// vertex at height `dd`, the design draft): that vertex exactly, one point to each side, the
+/// rest even by arc length above and below. Evenly resampled, the corner was cut by a chord and
+/// the STEP's cubic B-spline rounded it over about an inch, so the straight side seemed to start
+/// up to an inch higher than the mold boards it is designed on. The neighbours sit
+/// 2 t tan(a / 2) away (at least [`KNUCKLE_GAP_IN`]) for a wall `t` thick and a bend a: on the
+/// concave side the mitred inner point moves t tan(a / 2) along the girth, so closer neighbours
+/// would cross it and fold the inner face (a STEP face that is not a simple polygon).
+/// No such vertex strictly inside, no bend (a box's straight side), too few points, or less
+/// than 4 gaps or 4 t of girth on either side (near a tip, a solid end): [`resample`].
+fn resample_knuckle(p: &[(f64, f64)], n: usize, dd: f64, t: f64) -> Vec<(f64, f64)> {
+    let Some(k) = (1..p.len().saturating_sub(1)).find(|&k| (p[k].1 - dd).abs() < 1e-9) else {
+        return resample(p, n);
+    };
+    let s = arc(p);
+    let (sc, total) = (s[k], *s.last().unwrap());
+    let dir = |a: (f64, f64), b: (f64, f64)| (b.1 - a.1).atan2(b.0 - a.0);
+    let bend = (dir(p[k - 1], p[k]) - dir(p[k], p[k + 1])).abs();
+    let gap = (2.0 * t * (0.5 * bend).tan()).max(KNUCKLE_GAP_IN);
+    let room = 4.0 * gap.max(t);
+    if n < 7 || bend < 1e-9 || sc < room || total - sc < room {
+        return resample(p, n);
+    }
+    // m1 points on [0, sc - gap], the knuckle, m2 on [sc + gap, total].
+    let (la, lb) = (sc - gap, total - sc - gap);
+    let m1 = (((n - 1) as f64 * la / (la + lb)).round() as usize).clamp(2, n - 3);
+    let m2 = n - 1 - m1;
+    let span = |a: f64, b: f64, m: usize| (0..m).map(move |j| a + (b - a) * j as f64 / (m - 1) as f64);
+    let mut out: Vec<(f64, f64)> = span(0.0, sc - gap, m1).map(|t| at_arc(p, &s, t)).collect();
+    out.push(p[k]);
+    out.extend(
+        span(sc + gap, total, m2).map(|t| if t >= total { *p.last().unwrap() } else { at_arc(p, &s, t) }),
+    );
+    out
 }
 
 /// Starboard half girth of one station, sheer -> centreline keel point at height `zk`, consecutive duplicates removed. `None` if the
@@ -297,7 +350,7 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     let mut rows: Vec<(f64, Vec<(f64, f64)>)> = vec![];
     for (i, half) in halves.iter().enumerate().take(i1 + 1).skip(i0) {
         let half = match half {
-            Some(p) => resample(p, h),
+            Some(p) => resample_knuckle(p, h, hull.draft_design, spec.thickness_in.unwrap_or(0.0)),
             None => {
                 // Stem line: from the sheer down to the keel there (the neighbouring station's
                 // keel on a sharp forefoot, the top of the arc over a stem radius).
@@ -1207,6 +1260,32 @@ mod tests {
         assert_eq!(r[0], (0.0, 0.0));
         assert_eq!(r[4], (2.0, 2.0));
         assert!((r[2].1 - 2.0).abs() < 1e-12 && r[2].0.abs() < 1e-12);
+    }
+
+    #[test]
+    fn resample_keeps_the_topsides_knuckle() {
+        // Sheer (8, 15) straight down a flared side to the knuckle (7.5, 7.875), then the bottom
+        // to the keel: an odd spacing that even resampling would cut across.
+        let p = [(8.0, 15.0), (7.5, 7.875), (5.0, 3.0), (0.0, 0.0)];
+        let r = resample_knuckle(&p, 21, 7.875, 0.375);
+        assert_eq!(r.len(), 21);
+        assert_eq!((r[0], r[20]), (p[0], p[3]));
+        let k = r.iter().position(|&q| q == p[1]).expect("knuckle kept exactly");
+        // Neighbours 2 t tan(bend / 2) away: the bend is 27.15 - 4.01 deg.
+        let bend = (2.5f64).atan2(4.875) - (0.5f64).atan2(7.125);
+        let gap = 0.75 * (0.5 * bend).tan();
+        assert!(gap > KNUCKLE_GAP_IN);
+        for q in [r[k - 1], r[k + 1]] {
+            assert!(((q.0 - p[1].0).hypot(q.1 - p[1].1) - gap).abs() < 1e-9);
+        }
+        // Everything above the knuckle is on the straight side.
+        for q in &r[..k] {
+            assert!((q.0 - (7.5 + 0.5 * (q.1 - 7.875) / 7.125)).abs() < 1e-9, "{q:?}");
+        }
+        assert!(r.windows(2).all(|w| w[1].1 < w[0].1), "keeps running down the girth");
+        assert_eq!(resample_knuckle(&p, 21, 9.0, 0.375), resample(&p, 21), "no knuckle vertex");
+        let boxy = [(5.0, 10.0), (5.0, 6.0), (5.0, 0.0), (0.0, 0.0)];
+        assert_eq!(resample_knuckle(&boxy, 21, 6.0, 0.375), resample(&boxy, 21), "straight side, no bend");
     }
 
     #[test]
