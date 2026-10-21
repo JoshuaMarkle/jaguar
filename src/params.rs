@@ -534,6 +534,35 @@ impl Params {
     pub fn flares(&self) -> Vec<f64> {
         self.search.flare_deg.map_or_else(|| vec![self.hull.flare_deg], range)
     }
+
+    /// Mold depths the wall search tries for thicknesses `ts`, ascending: `search.depth_in`, or
+    /// with `search.mold_board_in` = b every t + k b inside `[depth_in min, max]` for each t.
+    pub fn depths(&self, ts: &[f64]) -> Vec<f64> {
+        let [lo, hi, _] = self.search.depth_in;
+        let Some(b) = self.search.mold_board_in else {
+            return range(self.search.depth_in);
+        };
+        let mut ds: Vec<f64> = ts
+            .iter()
+            .flat_map(|&t| {
+                let k0 = ((lo - t) / b - 1e-9).ceil().max(0.0) as usize;
+                let k1 = ((hi - t) / b + 1e-9).floor();
+                (k0..).take_while(move |&k| k as f64 <= k1).map(move |k| t + k as f64 * b)
+            })
+            .collect();
+        ds.sort_by(f64::total_cmp);
+        ds.dedup();
+        ds
+    }
+
+    /// Whether mold depth `d` can be built at thickness `t`: always, or with
+    /// `search.mold_board_in` when d - t is a whole number of boards.
+    pub fn depth_fits(&self, d: f64, t: f64) -> bool {
+        self.search.mold_board_in.is_none_or(|b| {
+            let k = (d - t) / b;
+            (k - k.round()).abs() < 1e-9
+        })
+    }
 }
 
 impl HullParams {
@@ -1020,6 +1049,12 @@ pub struct Search {
     /// the grid depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth_tol_in: Option<f64>,
+    /// Optional foam board thickness of the male mold, in: the mold (stacked boards, gunwale on
+    /// the floor, its top the canoe's inner keel) is depth - thickness tall, so only depths
+    /// thickness + k boards inside `depth_in` are searched (`depth_in`'s step is then unused).
+    /// Not with `depth_tol_in`. Absent = the `depth_in` grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mold_board_in: Option<f64>,
     /// Optional flare resolution, deg (needs `flare_deg`): the single-mix winner's flare is
     /// bisected between its grid flare and the next smaller one like `depth_tol_in` (with
     /// both, in either order, the lighter kept). Absent = the grid flare.
@@ -1253,6 +1288,14 @@ impl Params {
             && !(tol.is_finite() && tol > 0.0)
         {
             bail!("search.depth_tol_in must be > 0, got {tol}");
+        }
+        match (self.search.mold_board_in, self.search.depth_tol_in) {
+            (Some(b), _) if !(b.is_finite() && b > 0.0) => bail!("search.mold_board_in must be > 0, got {b}"),
+            (Some(_), Some(_)) => bail!(
+                "search.mold_board_in and search.depth_tol_in: a board mold only comes in whole boards, \
+                 remove depth_tol_in"
+            ),
+            _ => {}
         }
         match (self.search.flare_tol_deg, self.search.flare_deg) {
             (Some(tol), _) if !(tol.is_finite() && tol > 0.0) => {
@@ -1777,6 +1820,30 @@ mod tests {
         {
             p.search.depth_tol_in = tol;
             assert_eq!(p.validate().is_ok(), ok, "{tol:?}");
+        }
+    }
+
+    #[test]
+    fn mold_board_depths_are_thickness_plus_whole_boards() {
+        let mut p = Params::load(Path::new("examples/canoe.toml")).unwrap();
+        p.search.depth_in = [10.0, 16.0, 1.0];
+        assert_eq!(p.depths(&[0.375]), range(p.search.depth_in), "absent: the depth grid");
+        assert!(p.depth_fits(12.3, 0.375));
+        p.search.mold_board_in = Some(1.875);
+        assert_eq!(p.depths(&[0.375]), [11.625, 13.5, 15.375]);
+        assert_eq!(p.depths(&[0.375, 0.5]), [11.625, 11.75, 13.5, 13.625, 15.375, 15.5]);
+        assert!(p.depth_fits(15.375, 0.375) && !p.depth_fits(15.375, 0.5) && !p.depth_fits(14.0, 0.375));
+        p.search.depth_in = [13.5, 13.5, 1.0];
+        assert_eq!(p.depths(&[0.375]), [13.5], "both ends inclusive");
+        for (b, tol, ok) in [
+            (Some(1.875), None, true),
+            (Some(0.0), None, false),
+            (Some(f64::NAN), None, false),
+            (Some(1.875), Some(0.0625), false),
+            (None, Some(0.0625), true),
+        ] {
+            (p.search.mold_board_in, p.search.depth_tol_in) = (b, tol);
+            assert_eq!(p.validate().is_ok(), ok, "{b:?} {tol:?}");
         }
     }
 

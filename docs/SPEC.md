@@ -266,6 +266,12 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    holds at the 2n-1 verify stations at its verification limit (bisection lands on the gates). The refined point replaces the winner when it beats it under the objective; every
    point tried is appended to `candidates`. Two-mix winners keep their grid point. Absent = grid
    values only.
+   **Board mold** (optional `search.mold_board_in` = b > 0, foam board thickness): the male mold,
+   stacked from boards with the gunwale on the floor, is D - t tall (its top is the inner keel),
+   so the depth axis is every D = t + k b (k whole) inside `[depth_in min, max]` for each searched
+   t, and a wall (t, D) is tried only when D - t is a whole number of boards (`depth_in`'s step is
+   unused; `search_space` reports b as the depth step). Every wall the search, a shape search and
+   the zoned search evaluate obeys it. Not with `depth_tol_in` (an error).
 7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
    friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction). Friction = 0.5 rho V^2 S Cf on the wetted surface S, Re = V L / nu, Cf = the

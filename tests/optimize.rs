@@ -135,6 +135,39 @@ fn depth_tol_refines_winner_depth() {
     assert_eq!(w.search_space[2].at_bound, None);
 }
 
+/// search.mold_board_in: every wall tried is thickness + whole boards deep (the male mold is
+/// depth - t), progress counts only those walls, and the winner is one of them.
+#[test]
+fn mold_board_limits_depth_to_whole_boards() {
+    let (mut p, h) = example_gm0();
+    p.search.mold_board_in = Some(1.875);
+    let total = AtomicUsize::new(0);
+    let r = optimize::run_with_progress(&p, &h, &|e| {
+        if let Progress::Started { total: t } = e {
+            total.store(t, Ordering::SeqCst)
+        }
+    })
+    .unwrap();
+    assert_eq!(r.candidates.len(), total.load(Ordering::SeqCst));
+    let boards = |c: &optimize::Candidate| (c.depth_in - c.thickness_in) / 1.875;
+    for c in &r.candidates {
+        assert!((boards(c) - boards(c).round()).abs() < 1e-9, "t {} depth {}", c.thickness_in, c.depth_in);
+        assert!((10.0..=16.0).contains(&c.depth_in), "depth {}", c.depth_in);
+    }
+    let w = r.winner.expect("a board-depth winner");
+    assert!(w.verified);
+    assert_eq!(w.search_space[2].step, Some(1.875));
+    // Each thickness gets its own depths: 0.375 in -> 11.625, 13.5, 15.375 in.
+    let at = |t: f64| {
+        let mut d: Vec<f64> =
+            r.candidates.iter().filter(|c| c.thickness_in == t).map(|c| c.depth_in).collect();
+        d.sort_by(f64::total_cmp);
+        d.dedup();
+        d
+    };
+    assert_eq!(at(0.375), [11.625, 13.5, 15.375]);
+}
+
 #[test]
 fn deterministic_json() {
     let (p, h) = example_gm0();

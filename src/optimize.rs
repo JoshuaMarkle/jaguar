@@ -1078,8 +1078,9 @@ pub fn search_space(params: &Params, fit: &StrengthFit, c: &Candidate) -> Result
             a
         }
     };
-    let ds = range(s.depth_in);
-    let mut out = vec![t, rho, axis("depth_in", &ds, Some(s.depth_in[2]), c.depth_in)];
+    let ds = params.depths(&ts);
+    let mut out =
+        vec![t, rho, axis("depth_in", &ds, Some(s.mold_board_in.unwrap_or(s.depth_in[2])), c.depth_in)];
     if let Some(fr) = s.flare_deg {
         let mut a = axis("flare_deg", &range(fr), Some(fr[2]), c.flare_deg);
         // The low end is the team's demolding draft: a real limit, not a range to widen.
@@ -1536,10 +1537,8 @@ fn search_walls(
     let fit = strength(params)?;
     let axis = density_axis(params, &fit)?;
     let rhos: Vec<f64> = axis.iter().map(|a| a.0).collect();
-    let ds = range(params.search.depth_in);
+    let ds = params.depths(&ts);
     let fs = params.flares();
-    let total = ts.len() * rhos.len() * ds.len() * fs.len();
-    on_progress(Progress::Started { total });
     let n = params.hull.stations;
     let done = AtomicUsize::new(0);
 
@@ -1551,8 +1550,20 @@ fn search_walls(
         .par_iter()
         .map(|&(d, f)| Grid::build_topsides(hull, d, n, Topsides { flare_deg: f, ..params.hull.topsides() }))
         .unzip();
-    let pairs: Vec<(usize, usize)> =
-        (0..grids.len()).flat_map(|g| (0..ts.len()).map(move |t| (g, t))).collect();
+    // (geometry, thickness) pairs; with `search.mold_board_in` only depths a whole number of
+    // boards above that thickness.
+    let pairs: Vec<(usize, usize)> = (0..grids.len())
+        .flat_map(|g| (0..ts.len()).map(move |t| (g, t)))
+        .filter(|&(g, t)| params.depth_fits(geoms[g].0, ts[t]))
+        .collect();
+    anyhow::ensure!(
+        !pairs.is_empty(),
+        "no mold depth in search.depth_in {:?} is a thickness plus whole mold boards of {:?} in",
+        params.search.depth_in,
+        params.search.mold_board_in
+    );
+    let total = pairs.len() * rhos.len();
+    on_progress(Progress::Started { total });
     // Seats per wall (geometry, t) and density, [pi][ri] (src/seats.rs): auto seats depend on the
     // wall's weight and strength, so each density gets its own; verify reuses them.
     let plans: Vec<Vec<Plan>> = pairs
