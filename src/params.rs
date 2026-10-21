@@ -1297,6 +1297,20 @@ impl Params {
             ),
             _ => {}
         }
+        if let (Some(_), Some(ss)) = (self.search.mold_board_in, &self.shape_search) {
+            let [lo, hi, _] = self.search.thickness_in;
+            if lo != hi {
+                bail!(
+                    "search.mold_board_in with [shape_search]: the curved bottom is the thickness plus whole \
+                     boards, so search.thickness_in needs one value (min = max), got {lo} to {hi}"
+                );
+            }
+            if ss.draft_step_in.is_some() {
+                bail!(
+                    "search.mold_board_in sets the draft to whole boards, remove shape_search.draft_step_in"
+                );
+            }
+        }
         match (self.search.flare_tol_deg, self.search.flare_deg) {
             (Some(tol), _) if !(tol.is_finite() && tol > 0.0) => {
                 bail!("search.flare_tol_deg must be > 0, got {tol}")
@@ -1845,6 +1859,19 @@ mod tests {
             (p.search.mold_board_in, p.search.depth_tol_in) = (b, tol);
             assert_eq!(p.validate().is_ok(), ok, "{b:?} {tol:?}");
         }
+    }
+
+    #[test]
+    fn board_mold_shape_search_needs_one_thickness_and_no_draft_step() {
+        let mut p = Params::load(Path::new("examples/shape_opt.toml")).unwrap();
+        p.search.mold_board_in = Some(1.875);
+        p.shape_search.as_mut().unwrap().draft_step_in = None;
+        p.search.thickness_in = [0.375, 0.5, 0.125];
+        assert!(p.validate().is_err(), "two thicknesses");
+        p.search.thickness_in = [0.375, 0.375, 0.125];
+        p.validate().unwrap();
+        p.shape_search.as_mut().unwrap().draft_step_in = Some(0.5);
+        assert!(p.validate().is_err(), "draft step");
     }
 
     #[test]

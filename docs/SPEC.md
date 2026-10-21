@@ -271,7 +271,13 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    so the depth axis is every D = t + k b (k whole) inside `[depth_in min, max]` for each searched
    t, and a wall (t, D) is tried only when D - t is a whole number of boards (`depth_in`'s step is
    unused; `search_space` reports b as the depth step). Every wall the search, a shape search and
-   the zoned search evaluate obeys it. Not with `depth_tol_in` (an error).
+   the zoned search evaluate obeys it. Not with `depth_tol_in` (an error). With `[shape_search]` the
+   curved bottom of the mold is whole boards too: each sampled shape's draft is set so the table top
+   (`draft_design`, where the straight flared topsides start) is t + j b, j >= 1, nearest the sampled
+   draft inside `shape_search.draft_in` (the keel lift is a fixed fraction of the draft); so the
+   topsides D - `draft_design` are whole boards as well. A shape with no such draft in the bounds is
+   rejected with that reason. Needs one `thickness_in` value and no `shape_search.draft_step_in`
+   (errors). The mold's inner-surface break sits t sin(flare) (0.03 in at 5 deg) off the board line.
 7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
    friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a
    race prediction). Friction = 0.5 rho V^2 S Cf on the wetted surface S, Re = V L / nu, Cf = the

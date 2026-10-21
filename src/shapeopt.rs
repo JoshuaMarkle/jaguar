@@ -86,10 +86,47 @@ fn to_shape(v: &[f64; SHAPE_DIMS]) -> ShapeParams {
     }
 }
 
+/// Wall thickness and board of a board mold (`search.mold_board_in`; params validation pins
+/// the thickness to one value with a shape search).
+pub fn board(params: &Params) -> Option<(f64, f64)> {
+    params.search.mold_board_in.map(|b| (params.search.thickness_in[0], b))
+}
+
+/// With a board mold the curved bottom of the mold (inner keel at t to the table top
+/// `draft_design`, where the straight flared topsides start) is whole boards: the table top is
+/// t + j b, j >= 1, so the topsides (depth - top) are whole boards too. The keel lift `generate`
+/// removes is a fixed fraction of the draft (the table rows depend only on z / draft), so the
+/// top per inch of draft is measured once at draft 1. No j inside the draft bounds: `v` is left
+/// as is and [`board_reason`] rejects the shape.
+fn board_draft(ss: &ShapeSearch, (t, b): (f64, f64), v: &mut [f64; SHAPE_DIMS]) {
+    let mut s = to_shape(v);
+    s.draft_in = 1.0;
+    let Ok(h) = generate(&s, STATIONS, WATERLINES, "board") else { return };
+    let f = h.draft_design;
+    let [lo, hi] = ss.draft_in;
+    let j0 = ((lo * f - t) / b - 1e-9).ceil().max(1.0);
+    let j1 = ((hi * f - t) / b + 1e-9).floor();
+    if j0 <= j1 {
+        v[2] = (t + ((v[2] * f - t) / b).round().clamp(j0, j1) * b) / f;
+    }
+}
+
+/// Why `hull` breaks the board mold, if it does: its curved bottom is not whole boards.
+fn board_reason(params: &Params, hull: &Hull) -> Option<String> {
+    let (t, b) = board(params)?;
+    let j = (hull.draft_design - t) / b;
+    (j < 1.0 - 1e-6 || (j - j.round()).abs() > 1e-6).then(|| {
+        format!(
+            "curved bottom {:.3} in is not the thickness {t} in plus whole mold boards of {b} in",
+            hull.draft_design
+        )
+    })
+}
+
 /// Apply manufacturability rules to a raw point: snap draft/length/beam to
-/// their steps (nearest multiple inside the bounds) and tie aft = fore when
-/// `symmetric`.
-pub fn normalize(ss: &ShapeSearch, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS] {
+/// their steps (nearest multiple inside the bounds), tie aft = fore when
+/// `symmetric`, and with a board mold set the draft to whole boards ([`board_draft`]).
+pub fn normalize(ss: &ShapeSearch, board: Option<(f64, f64)>, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS] {
     for (d, step, [lo, hi]) in [
         (0, ss.length_step_in, ss.length_in),
         (1, ss.beam_step_in, ss.beam_in),
@@ -104,6 +141,9 @@ pub fn normalize(ss: &ShapeSearch, mut v: [f64; SHAPE_DIMS]) -> [f64; SHAPE_DIMS
         v[6] = v[3];
         v[7] = v[5];
         v[9] = v[8];
+    }
+    if let Some(tb) = board {
+        board_draft(ss, tb, &mut v);
     }
     v
 }
@@ -201,7 +241,7 @@ fn key(v: &[f64; SHAPE_DIMS]) -> [u64; SHAPE_DIMS] {
 }
 
 /// Latin hypercube sample of `n` points in the bounds.
-fn lhs(ss: &ShapeSearch, n: usize) -> Vec<[f64; SHAPE_DIMS]> {
+fn lhs(ss: &ShapeSearch, board: Option<(f64, f64)>, n: usize) -> Vec<[f64; SHAPE_DIMS]> {
     let b = ss.bounds();
     let mut rng = SplitMix64(ss.seed);
     let mut pts = vec![[0.0; SHAPE_DIMS]; n];
@@ -216,7 +256,7 @@ fn lhs(ss: &ShapeSearch, n: usize) -> Vec<[f64; SHAPE_DIMS]> {
             p[d] = if hi > lo { lo + (perm[i] as f64 + u) / n as f64 * (hi - lo) } else { *lo };
         }
     }
-    pts.into_iter().map(|v| normalize(ss, v)).collect()
+    pts.into_iter().map(|v| normalize(ss, board, v)).collect()
 }
 
 struct Eval {
@@ -235,7 +275,7 @@ pub struct Refs {
 }
 
 fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
-    let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
+    let mid = normalize(ss, board(params), ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
     let s = to_shape(&mid);
     let hull = generate(&s, STATIONS, WATERLINES, "reference")?;
     // At the table top (the shape's draft less the keel lift `generate` removes).
@@ -254,7 +294,7 @@ fn refs(params: &Params, ss: &ShapeSearch) -> Result<Refs> {
 /// plan exists even when that shape has no passing wall).
 fn race_plan(params: &Params, ss: &ShapeSearch) -> Result<race::Plan> {
     let rp = params.race.as_ref().context("objective.kind = race needs [race]")?;
-    let mid = normalize(ss, ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
+    let mid = normalize(ss, board(params), ss.bounds().map(|(_, [lo, hi])| 0.5 * (lo + hi)));
     let s = to_shape(&mid);
     let hull = templated(params, generate(&s, STATIONS, WATERLINES, "reference")?)?;
     let params = &for_shape(params, &s);
@@ -348,6 +388,7 @@ fn eval_shape(
     index: usize,
 ) -> Result<Eval> {
     let (hull, unbuildable) = hull_or_reason(params, v, index)?;
+    let unbuildable = unbuildable.or_else(|| board_reason(params, &hull));
     let mut shape = to_shape(v);
     let params = &for_shape(params, &shape);
     shape.gunwale_radius_in = params.hull.gunwale_radius_in;
@@ -498,7 +539,7 @@ pub fn run_controlled(
     };
 
     let init: Vec<[f64; SHAPE_DIMS]> =
-        lhs(ss, ss.samples).into_iter().filter(|v| seen.insert(key(v))).collect();
+        lhs(ss, board(params), ss.samples).into_iter().filter(|v| seen.insert(key(v))).collect();
     batch_eval(init, &mut shapes, &mut evals)?;
 
     let ranked = |evals: &[Eval]| {
@@ -521,7 +562,7 @@ pub fn run_controlled(
                 for sgn in [1.0, -1.0] {
                     let mut v = shapes[c];
                     v[d] = (v[d] + sgn * step * (hi - lo)).clamp(lo, hi);
-                    let v = normalize(ss, v);
+                    let v = normalize(ss, board(params), v);
                     if seen.insert(key(&v)) {
                         batch.push(v);
                     }
@@ -615,5 +656,33 @@ mod tests {
             assert!((0.0..1.0).contains(&u));
             assert_eq!(u, b.unit());
         }
+    }
+
+    #[test]
+    fn board_mold_curved_bottom_is_whole_boards() {
+        let mut p = Params::load(std::path::Path::new("examples/shape_opt.toml")).unwrap();
+        p.search.mold_board_in = Some(1.875);
+        p.search.thickness_in = [0.375, 0.375, 0.125];
+        let ss = p.shape_search.as_mut().unwrap();
+        ss.draft_step_in = None;
+        ss.draft_in = [1.375, 8.375];
+        let ss = ss.clone();
+        let tb = board(&p);
+        assert_eq!(tb, Some((0.375, 1.875)));
+        for (i, v) in lhs(&ss, tb, 40).iter().enumerate() {
+            let h = hull_for(&p, v, i).unwrap();
+            let j = (h.draft_design - 0.375) / 1.875;
+            assert!((j - j.round()).abs() < 1e-9 && j.round() >= 1.0, "{} {j}", h.draft_design);
+            assert!((ss.draft_in[0] - 1e-9..=ss.draft_in[1] + 1e-9).contains(&v[2]), "{}", v[2]);
+            assert_eq!(board_reason(&p, &h), None);
+        }
+        // No board fits the bounds: the shape is left as sampled and rejected.
+        let mut tight = ss.clone();
+        tight.draft_in = [5.0, 5.5];
+        let v = lhs(&tight, tb, 1)[0];
+        let h = hull_for(&p, &v, 0).unwrap();
+        assert!(board_reason(&p, &h).unwrap().contains("whole mold boards"));
+        p.search.mold_board_in = None;
+        assert_eq!(board_reason(&p, &h), None, "no board mold, no rule");
     }
 }
