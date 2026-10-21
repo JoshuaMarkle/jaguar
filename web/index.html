@@ -2333,7 +2333,8 @@ function plotRace(ctx, W, H) {
   y += 6; const rec = raceRes.recommended;
   row('Recommended [objective] (from time sensitivity)', 652);
   row(`straight_weight = ${rec.straight_weight.toFixed(3)}    turn_radius_in = ${rec.turn_radius_in.toFixed(0)}`);
-  const ds = rec.displacements.map(d => `${d.load_case != null ? d.load_case + ' ' : ''}${d.crew_lb.toFixed(0)} lb: ${d.weight.toFixed(3)}`);
+  // A load-case displacement is written in its input form (no crew_lb: the case carries it).
+  const ds = rec.displacements.map(d => `${[d.load_case, typeof d.crew_lb === 'number' ? `${d.crew_lb.toFixed(0)} lb` : null].filter(v => v != null).join(' ')}: ${d.weight.toFixed(3)}`);
   for (let i = 0; i < ds.length; i += 3) row((i ? '' : 'displacements  ') + ds.slice(i, i + 3).join('   '), 450, C.muted);
   y += 6;
   const tn = e.segments.filter(sg => sg.radius_m != null);
