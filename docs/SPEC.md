@@ -276,7 +276,10 @@ can produce, needs only linear interpolation, and the browser can mesh it direct
    (`draft_design`, where the straight flared topsides start) is t + j b, j >= 1, nearest the sampled
    draft inside `shape_search.draft_in` (the keel lift is a fixed fraction of the draft); so the
    topsides D - `draft_design` are whole boards as well. A shape with no such draft in the bounds is
-   rejected with that reason. Needs one `thickness_in` value and no `shape_search.draft_step_in`
+   rejected with that reason. The rocker (keel rise at 5% of length from each end, the `rocker_in`
+   measure) is whole boards too: each end's rocker exponent is solved for the j b nearest the
+   sampled rocker inside its exponent bounds and `rocker_in` (else rejected the same way).
+   Needs one `thickness_in` value and no `shape_search.draft_step_in`
    (errors). The mold's inner-surface break sits t sin(flare) (0.03 in at 5 deg) off the board line.
 7. **Objective** (`objective.kind`, default `drag` when omitted; drag is computed and reported for every candidate whatever the objective): `weight` = lightest passing; `drag` = lowest Michell wave +
    friction resistance at `speed_mps` (`src/resistance.rs`; use it to rank shapes, not as a

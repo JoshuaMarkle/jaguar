@@ -34,7 +34,7 @@
 //! breaks ties by index, so thread scheduling never changes the result.
 
 use crate::hull::{Grid, Hull, linspace};
-use crate::hullgen::{ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
+use crate::hullgen::{END_FRAC, ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
 use crate::optimize::{
     Candidate, Inner, Progress, RunControl, RunEnded, RunResult, run_inner, run_with_progress,
 };
@@ -111,16 +111,54 @@ fn board_draft(ss: &ShapeSearch, (t, b): (f64, f64), v: &mut [f64; SHAPE_DIMS]) 
     }
 }
 
-/// Why `hull` breaks the board mold, if it does: its curved bottom is not whole boards.
-fn board_reason(params: &Params, hull: &Hull) -> Option<String> {
+/// With a board mold the rocker (keel rise at `END_FRAC` of length from each end, the
+/// `rocker_in` measure) is whole boards j b: the end's rocker exponent is solved for it. The
+/// keel there is draft (1 - X^pr) with X the station's taper factor (measured as the keel at
+/// pr = 1), so pr = ln(1 - j b / draft) / ln X, nearest the sampled rocker, inside the exponent
+/// bounds, `rocker_in` and below the draft. No such j: `v` is left as is and [`board_reason`]
+/// rejects the shape.
+fn board_rocker(ss: &ShapeSearch, b: f64, v: &mut [f64; SHAPE_DIMS]) {
+    let s = to_shape(v);
+    let (l, t) = (s.length_in, s.draft_in);
+    let mut unit = s.clone();
+    (unit.fore_rocker, unit.aft_rocker) = (1.0, 1.0);
+    for (d, x, [elo, ehi]) in [(5, END_FRAC * l, ss.fore_rocker), (7, (1.0 - END_FRAC) * l, ss.aft_rocker)] {
+        if d == 7 && ss.symmetric {
+            v[7] = v[5];
+            continue;
+        }
+        let xx = 1.0 - keel_z(&unit, x) / t;
+        if !(xx > 0.0 && xx < 1.0) {
+            continue;
+        }
+        let rocker = |pr: f64| t * (1.0 - xx.powf(pr));
+        let [rlo, rhi] = ss.rocker_in.unwrap_or([0.0, f64::INFINITY]);
+        let j0 = (rocker(elo).max(rlo) / b - 1e-9).ceil().max(0.0);
+        let j1 = (rocker(ehi).min(rhi) / b + 1e-9).floor().min((t / b - 1e-9).ceil() - 1.0);
+        if j0 <= j1 {
+            let j = (rocker(v[d]) / b).round().clamp(j0, j1);
+            v[d] = if j == 0.0 { 0.0 } else { (1.0 - j * b / t).ln() / xx.ln() };
+        }
+    }
+}
+
+/// Why shape `s` (`hull` generated from it) breaks the board mold, if it does: its curved bottom
+/// or its rocker is not whole boards.
+fn board_reason(params: &Params, s: &ShapeParams, hull: &Hull) -> Option<String> {
     let (t, b) = board(params)?;
+    let whole = |v: f64| (v - v.round()).abs() <= 1e-6;
     let j = (hull.draft_design - t) / b;
-    (j < 1.0 - 1e-6 || (j - j.round()).abs() > 1e-6).then(|| {
-        format!(
+    if j < 1.0 - 1e-6 || !whole(j) {
+        return Some(format!(
             "curved bottom {:.3} in is not the thickness {t} in plus whole mold boards of {b} in",
             hull.draft_design
-        )
-    })
+        ));
+    }
+    let m = metrics(s);
+    [("bow", m.rocker_bow_in), ("stern", m.rocker_stern_in)]
+        .into_iter()
+        .find(|&(_, r)| !whole(r / b))
+        .map(|(end, r)| format!("{end} rocker {r:.3} in is not whole mold boards of {b} in"))
 }
 
 /// Apply manufacturability rules to a raw point: snap draft/length/beam to
@@ -143,7 +181,17 @@ pub fn normalize(ss: &ShapeSearch, board: Option<(f64, f64)>, mut v: [f64; SHAPE
         v[9] = v[8];
     }
     if let Some(tb) = board {
-        board_draft(ss, tb, &mut v);
+        // The rocker scales with the draft and the keel lift (so the draft for a given top) with
+        // the rocker: alternate until both stay put (one or two rounds; board_reason rejects
+        // what does not settle).
+        for _ in 0..8 {
+            let before = v;
+            board_draft(ss, tb, &mut v);
+            board_rocker(ss, tb.1, &mut v);
+            if v == before {
+                break;
+            }
+        }
     }
     v
 }
@@ -388,7 +436,7 @@ fn eval_shape(
     index: usize,
 ) -> Result<Eval> {
     let (hull, unbuildable) = hull_or_reason(params, v, index)?;
-    let unbuildable = unbuildable.or_else(|| board_reason(params, &hull));
+    let unbuildable = unbuildable.or_else(|| board_reason(params, &to_shape(v), &hull));
     let mut shape = to_shape(v);
     let params = &for_shape(params, &shape);
     shape.gunwale_radius_in = params.hull.gunwale_radius_in;
@@ -669,20 +717,37 @@ mod tests {
         let ss = ss.clone();
         let tb = board(&p);
         assert_eq!(tb, Some((0.375, 1.875)));
+        let whole = |v: f64| (v / 1.875 - (v / 1.875).round()).abs() < 1e-9;
         for (i, v) in lhs(&ss, tb, 40).iter().enumerate() {
             let h = hull_for(&p, v, i).unwrap();
             let j = (h.draft_design - 0.375) / 1.875;
             assert!((j - j.round()).abs() < 1e-9 && j.round() >= 1.0, "{} {j}", h.draft_design);
             assert!((ss.draft_in[0] - 1e-9..=ss.draft_in[1] + 1e-9).contains(&v[2]), "{}", v[2]);
-            assert_eq!(board_reason(&p, &h), None);
+            let m = metrics(&to_shape(v));
+            assert!(
+                whole(m.rocker_bow_in) && whole(m.rocker_stern_in),
+                "{} {}",
+                m.rocker_bow_in,
+                m.rocker_stern_in
+            );
+            assert!((ss.fore_rocker[0]..=ss.fore_rocker[1]).contains(&v[5]), "{}", v[5]);
+            assert_eq!(board_reason(&p, &to_shape(v), &h), None);
+        }
+        // rocker_in pinned to one board: every shape gets exactly that rocker at both ends.
+        let mut one = ss.clone();
+        (one.rocker_in, one.fore_rocker, one.symmetric) = (Some([1.875, 1.875]), [0.0, 2.0], true);
+        for v in lhs(&one, tb, 20) {
+            let m = metrics(&to_shape(&v));
+            assert!((m.rocker_bow_in - 1.875).abs() < 1e-9 && (m.rocker_stern_in - 1.875).abs() < 1e-9);
+            assert_eq!(shape_metrics(&one, &to_shape(&v)).rejected, None);
         }
         // No board fits the bounds: the shape is left as sampled and rejected.
         let mut tight = ss.clone();
         tight.draft_in = [5.0, 5.5];
         let v = lhs(&tight, tb, 1)[0];
         let h = hull_for(&p, &v, 0).unwrap();
-        assert!(board_reason(&p, &h).unwrap().contains("whole mold boards"));
+        assert!(board_reason(&p, &to_shape(&v), &h).unwrap().contains("whole mold boards"));
         p.search.mold_board_in = None;
-        assert_eq!(board_reason(&p, &h), None, "no board mold, no rule");
+        assert_eq!(board_reason(&p, &to_shape(&v), &h), None, "no board mold, no rule");
     }
 }
