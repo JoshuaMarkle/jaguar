@@ -142,6 +142,61 @@ pad_in = 6.0              # stand pad width along the hull (also the square pad 
 orientation = "upright"   # "upright" (stands under the keel) or "inverted" (on the gunwales)
 step_in = 0.5             # stand-position sweep step; the position with the lowest D/C is reported
 
+# Drawing sheets (jaguar drawing / web "Drawings"): never read by the search. Values shown are the
+# defaults, except the title block text, which the sheets require (they fail naming what is missing).
+# [drawing]
+# canoe_name = "Jaguar"
+# school = "University of Virginia"                 # as it appears in the title block
+# official_school_name = "University of Virginia"   # export WARNS when school or [lettering] school differs
+# # logo = "logo.png"                               # PNG (no transparency) or JPEG, relative to this file
+# drawn_by = "Your name"
+# drawn_date = "2026-10-21"
+# checked_by = ""
+# checked_date = ""
+# note = ""
+# sheet_size = "D"                  # "D" 34 x 22 (competition) or "B" 17 x 11 (draft checks)
+# revisions = [{ rev = "A", date = "2026-10-21", description = "First issue", by = "YN" }]
+# mold_revisions = []
+# precision_overall = 2             # decimals: overall dimensions and offsets
+# precision_laminate = 3            # decimals: wall and laminate dimensions
+# body_plan = true                  # optional views of sheet 1
+# offsets_table = true
+# stands_diagram = true             # needs [stands]
+# # waterline_case = "2M"           # static waterline drawn; default the heaviest crew
+# offset_stations = 21              # offsets table / body plan stations, tips included
+# offset_waterline_step_in = 1.0
+# buttock_step_in = 3.0
+# taper_fraction = 0.99             # bow / stern taper = tip to this fraction of the max beam
+# concrete_waste = 0.10             # BOM factors (all quantities are computed from the design)
+# mesh_overlap = 0.10
+# mesh_description = "REINFORCEMENT MESH"
+# sealer_coverage_ft2_per_gal = 200.0
+# sealer_coats = 2
+# sealer_sides = 2
+# sealer_description = "CONCRETE SEALER"
+# vinyl_waste = 0.15
+# lettering_sides = 2
+# vinyl_description = "LETTERING / GRAPHICS VINYL"
+# bom_rows = []                     # hand rows: { part_no = "X-01", qty = 1.0, unit = "EA", description = "..." }
+# mold_bom_rows = []
+# bom_overrides = []                # { part_no = "S-01", qty = 2.0, reason = "..." } (recorded in the file metadata)
+# # mold_board_in = 1.875           # default: search.mold_board_in (the mold must be whole boards)
+# foam_sheet_in = [96.0, 48.0]
+# kerf_in = 0.125
+# edge_margin_in = 0.5
+# foam_description = "FOAM BOARD"
+# adhesive_coverage_ft2_per_unit = 40.0
+# adhesive_unit = "CAN"
+# adhesive_description = "FOAM ADHESIVE"
+# surface_coverage_ft2_per_gal = 300.0
+# surface_coats = 1
+# surface_description = "MOLD SURFACE TREATMENT"
+# # [[drawing.graphic]]             # graphics besides [lettering]: placement dims + vinyl
+# # name = "Logo"
+# # x_in = 60.0
+# # length_in = 12.0
+# # height_in = 6.0
+
 # [turning]               # optional: add the transverse wall stress of a steady turn to the biaxial check
 # speed_mps = 2.5         # boat speed through the turn (lateral acceleration V^2 / R)
 # radius_in = 394.0       # turn radius (394 in = 10 m)

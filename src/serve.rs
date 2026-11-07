@@ -77,11 +77,12 @@
 //!   the current result (export, race and the report use it; result.json is left as is), 409
 //!   while a run is going. `DELETE /api/runs?file=<name>` deletes it and its summary. Names
 //!   with a path separator or `..`, or not a run file: 400; missing: 404.
-//! * `GET  /api/export?format=step|stl[&shell=pockets|wall|filled]` -> the last run's winner as
+//! * `GET  /api/export?format=step|stl[&shell=pockets|wall|filled|mold]` -> the last run's winner as
 //!   a file download (Content-Disposition attachment; STEP AP214 solid or binary STL, inches, see
 //!   `export.rs`). `shell`: `pockets` (default) the shelled solid with its sealed air pockets,
 //!   `wall` the shelled solid without them (`_no_pockets` file), `filled` the unshelled canoe,
-//!   the outer hull filled in to the mold depth (`_filled` file, for freeboard in CAD). 404 if
+//!   the outer hull filled in to the mold depth (`_filled` file, for freeboard in CAD), `mold` the
+//!   male mold as sanded, the canoe less its wall (`_mold` file, `export::build_mold`). 404 if
 //!   no result yet, 409 if that result has no winner, 400 bad format or shell.
 //! * `POST /api/race`      body = canoe.toml text (the form; its `[race]` section, else 400).
 //!   Races the last result's winner (`race::run`, docs/SPEC.md "Race simulator") and returns
@@ -89,11 +90,21 @@
 //!   result yet, 409 if a run is going or the result has no winner, 422 if the race fails.
 //! * `POST /api/manufacture` body = JSON `manufacture::MoldSpec` (fields left out take their
 //!   defaults: tracing templates, flat layers, blocks packing, `foam_in` [2] (one number or
-//!   a list), `foam_sheets` [[96, 48]], `sheets` [[96, 48]], 1/4 in gap, `nest_inside` false, `ring_in` 1, `holes` true, `hole_in` 0.25, `kerf_in` 0, `dxf_marks` false, `half_canoe` false, `switch_in` / `keel_foam_in` null = auto, `labor` shop rates). Lays out the hardboard for the last result's
+//!   a list), `foam_sheets` [[96, 48]], `sheets` [[96, 48]], 1/4 in gap, `nest_inside` false, `ring_in` 1, `holes` true, `hole_in` 0.25, `kerf_in` 0, `dxf_marks` false, `half_canoe` false, `switch_in` / `keel_foam_in` null = auto, `slice_in` [1, 0.5] and `max_step_in` 1 (pancake), `blocks` / `top_blocks` / `top_from_in` null = auto, `hole_spacing_in` 12, `labor` shop rates). Lays out the hardboard for the last result's
 //!   winner's foam mold (`manufacture.rs`) and returns the
 //!   jaguar-mold/1 layout plus "dxf": [{"name", "text"}], one R12 DXF per sheet. Synchronous
 //!   (about a second). 400 bad spec, 404 no result yet, 409 a run is going or no winner, 422 if
 //!   the layout fails (a piece fits no sheet).
+//! * `GET  /api/drawing` -> {"source": "design"|"run params"|"canoe.toml"|"defaults", "spec":
+//!   params::Drawing}: the drawing inputs (title block, BOM factors, views) of the current
+//!   design: saved in it, else its params' `[drawing]`, else the CLI canoe.toml's, else defaults.
+//!   404 no result yet.
+//! * `POST /api/drawing?sheet=1|2&format=pdf|svg|dxf` body = params::Drawing as JSON (empty: the
+//!   inputs above). Saves the posted inputs into the current design (its `runs/` file, and
+//!   result.json when that is the same run) so a re-export reproduces the sheets, then renders
+//!   that sheet (`sheets.rs`) as a download; warnings (an unofficial school name, an unverified
+//!   design) in the `X-Jaguar-Warnings` header. 400 bad inputs, 404 no result, 409 a run is
+//!   going or no winner, 422 the sheets cannot be drawn (the message names the missing input).
 //!
 //! * `GET  /api/session`   -> {"app": "jaguar", "version", "desktop": bool, "folder": str|null}.
 //!   `desktop` = started by a double-click (`launch.rs`); `folder` = its canoe folder. The
@@ -395,6 +406,11 @@ impl App {
             ("POST", "/api/runs/open") => self.open_run(query),
             ("POST", "/api/race") => self.race(body),
             ("POST", "/api/manufacture") => self.manufacture(body),
+            ("GET", "/api/drawing") => self.drawing_spec(),
+            ("POST", "/api/drawing") => {
+                let (st, ct, _, bytes, _) = self.drawing(query, body);
+                (st, ct, String::from_utf8_lossy(&bytes).into_owned())
+            }
             ("POST", "/api/pause") | ("POST", "/api/resume") | ("POST", "/api/stop") => {
                 let mut s = self.lock();
                 if s.state != "running" {
@@ -457,6 +473,7 @@ impl App {
                 | "/api/export"
                 | "/api/race"
                 | "/api/manufacture"
+                | "/api/drawing"
                 | "/api/pause"
                 | "/api/resume"
                 | "/api/stop"
@@ -478,7 +495,10 @@ impl App {
             "pockets" => "",
             "wall" => "_no_pockets",
             "filled" => "_filled",
-            s => return fail(err_reply(400, format!("unknown shell '{s}' (pockets | wall | filled)"))),
+            "mold" => "_mold",
+            s => {
+                return fail(err_reply(400, format!("unknown shell '{s}' (pockets | wall | filled | mold)")));
+            }
         };
         let Some(result) = self.lock().result.clone() else {
             return fail(err_reply(404, "no result yet: run first"));
@@ -497,7 +517,12 @@ impl App {
                 let need = (hull.length / (0.5 * l)).ceil() as usize + 1;
                 spec.stations = spec.stations.max(need.min(4001));
             }
-            Ok((export::build_mesh(&hull, &spec)?, hull.name))
+            let mesh = if suffix == "_mold" {
+                export::build_mold(&hull, &spec)?
+            } else {
+                export::build_mesh(&hull, &spec)?
+            };
+            Ok((mesh, hull.name))
         });
         let (mesh, name) = match built {
             Ok(v) => v,
@@ -517,6 +542,105 @@ impl App {
             "stl" => (200, "model/stl", Some(format!("{stem}{suffix}.stl")), export::to_stl(&mesh, &name)),
             f => fail(err_reply(400, format!("unknown export format '{f}' (step | stl)"))),
         }
+    }
+
+    /// `GET /api/drawing`: the drawing inputs of the current design and where they come from.
+    fn drawing_spec(&self) -> Reply {
+        let Some(result) = self.lock().result.clone() else {
+            return err_reply(404, "no result yet: run first");
+        };
+        let v: serde_json::Value = match serde_json::from_str(&result) {
+            Ok(v) => v,
+            Err(e) => return err_reply(500, e),
+        };
+        let file = crate::drawing::spec_from_toml(&self.params_path);
+        let (source, spec) = if v["drawing"].is_object() {
+            ("design", crate::drawing::spec_of(&v, None))
+        } else if v["params"]["drawing"].is_object() {
+            ("run params", crate::drawing::spec_of(&v, None))
+        } else {
+            match file {
+                Ok(Some(d)) => ("canoe.toml", Ok(d)),
+                Ok(None) => ("defaults", Ok(crate::params::Drawing::default())),
+                Err(e) => return err_reply(500, format!("{e:#}")),
+            }
+        };
+        match spec.and_then(|s| Ok(serde_json::to_value(s)?)) {
+            Ok(s) => json_reply(200, serde_json::json!({ "source": source, "spec": s })),
+            Err(e) => err_reply(500, format!("{e:#}")),
+        }
+    }
+
+    /// `POST /api/drawing?sheet=1|2&format=pdf|svg|dxf`: (status, content type, file name, bytes,
+    /// warnings). A non-empty body (the inputs as JSON) is saved into the current design first.
+    fn drawing(&self, query: &str, body: &str) -> (u16, &'static str, Option<String>, Vec<u8>, Vec<String>) {
+        let fail = |(st, ct, b): Reply| (st, ct, None, b.into_bytes(), vec![]);
+        let arg = |k: &str| query.split('&').find_map(|kv| kv.strip_prefix(k)?.strip_prefix('='));
+        let sheet = arg("sheet").unwrap_or("1");
+        let fmt = arg("format").unwrap_or("pdf");
+        if !matches!(sheet, "1" | "2") || !matches!(fmt, "pdf" | "svg" | "dxf") {
+            return fail(err_reply(400, "give sheet=1|2 and format=pdf|svg|dxf"));
+        }
+        let (state, result, run_file) = {
+            let s = self.lock();
+            (s.state, s.result.clone(), s.run_file.clone())
+        };
+        if state == "running" {
+            return fail(err_reply(409, "a run is going: draw its winner when it is done"));
+        }
+        let Some(mut result) = result else { return fail(err_reply(404, "no result yet: run first")) };
+        let v: serde_json::Value = match serde_json::from_str(&result) {
+            Ok(v) => v,
+            Err(e) => return fail(err_reply(500, e)),
+        };
+        if !v["winner"]["candidate"].is_object() {
+            return fail(err_reply(409, "the result has no winner: a failing design is not drawn"));
+        }
+        let spec = if body.trim().is_empty() {
+            let fallback = crate::drawing::spec_from_toml(&self.params_path).ok().flatten();
+            match crate::drawing::spec_of(&v, fallback.as_ref()) {
+                Ok(s) => s,
+                Err(e) => return fail(err_reply(500, format!("{e:#}"))),
+            }
+        } else {
+            let s: crate::params::Drawing = match serde_json::from_str(body) {
+                Ok(s) => s,
+                Err(e) => return fail(err_reply(400, format!("drawing inputs: {e}"))),
+            };
+            if let Err(e) = s.validate() {
+                return fail(err_reply(400, format!("{e:#}")));
+            }
+            // Saved with the design: the run file shown, and result.json when it is the same run.
+            let saved = match crate::drawing::with_spec(&result, &s) {
+                Ok(t) => t,
+                Err(e) => return fail(err_reply(500, format!("{e:#}"))),
+            };
+            if let Some(f) = &run_file {
+                let p = self.runs_dir.join(f);
+                if let Ok(t) = std::fs::read_to_string(&p) {
+                    let _ = std::fs::write(&p, crate::drawing::with_spec(&t, &s).unwrap_or(t));
+                }
+            }
+            if std::fs::read_to_string(&self.result_path).is_ok_and(|t| t == result) {
+                let _ = std::fs::write(&self.result_path, &saved);
+            }
+            self.lock().result = Some(saved.clone());
+            result = saved;
+            s
+        };
+        let dw = match crate::sheets::render(&result, spec, crate::sheets::STAMP) {
+            Ok(d) => d,
+            Err(e) => return fail(err_reply(422, format!("{e:#}"))),
+        };
+        let doc = if sheet == "1" { &dw.canoe } else { &dw.mold };
+        let tag = if sheet == "1" { "sheet1_canoe" } else { "sheet2_mold" };
+        let name = Some(format!("{}_{tag}.{fmt}", dw.stem()));
+        let (ct, bytes) = match fmt {
+            "pdf" => ("application/pdf", crate::drafting::to_pdf(doc)),
+            "svg" => ("image/svg+xml", crate::drafting::to_svg(doc).into_bytes()),
+            _ => ("application/dxf", crate::drafting::to_dxf(doc).into_bytes()),
+        };
+        (200, ct, name, bytes, dw.warnings.clone())
     }
 
     /// Params of the most recent run or prefs save, else the startup params.
@@ -1150,6 +1274,32 @@ fn respond(mut req: tiny_http::Request, app: &App) {
         let _ = req.respond(resp);
         return;
     }
+    if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/drawing") {
+        let (status, ctype, file, bytes, warnings) =
+            app.drawing(url.split_once('?').map_or("", |q| q.1), &body);
+        let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
+        );
+        if let Some(f) = file {
+            let cd = format!("attachment; filename=\"{f}\"");
+            if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
+                resp = resp.with_header(h);
+            }
+        }
+        // Header text must be ASCII: anything else becomes '?'.
+        let w: String = warnings
+            .join(" | ")
+            .chars()
+            .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '?' })
+            .collect();
+        if !w.is_empty()
+            && let Ok(h) = tiny_http::Header::from_bytes(&b"X-Jaguar-Warnings"[..], w.as_bytes())
+        {
+            resp = resp.with_header(h);
+        }
+        let _ = req.respond(resp);
+        return;
+    }
     let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
     let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
         .expect("static header is valid");
@@ -1360,6 +1510,16 @@ mod tests {
         assert_eq!(st, 200, "{body}");
         assert!(body.contains("jaguar-hull/1"));
         assert_eq!(a.handle("GET", "/api/result", "").0, 404);
+        // Drawing sheets: the panel, and the endpoint refuses until there is a design.
+        let page = a.handle("GET", "/", "").2;
+        assert!(page.contains(r#"id="drawbtn""#) && page.contains("function openDrawing("));
+        assert_eq!(a.handle("GET", "/api/drawing", "").0, 404);
+        assert_eq!(a.handle("POST", "/api/drawing?sheet=1&format=pdf", "").0, 404);
+        assert_eq!(a.handle("POST", "/api/drawing?sheet=3&format=pdf", "").0, 400);
+        assert_eq!(a.handle("DELETE", "/api/drawing", "").0, 405);
+        a.lock().result = Some(r#"{"format":"jaguar-result/1","winner":null}"#.into());
+        assert_eq!(a.handle("POST", "/api/drawing?sheet=2&format=svg", "").0, 409, "no winner, no drawing");
+        a.lock().result = None;
         assert_eq!(a.handle("GET", "/nope", "").0, 404);
         assert_eq!(a.handle("DELETE", "/api/run", "").0, 405);
     }
@@ -1788,6 +1948,14 @@ mod tests {
         assert_eq!(st, 200);
         assert!(file.unwrap().ends_with("_filled.stl"));
         assert!(tris(&fill) < tris(&wall));
+        // The male mold: the canoe less its wall, one solid.
+        let (st, _, file, mold) = a.export("format=step&shell=mold");
+        assert_eq!(st, 200);
+        assert!(file.unwrap().ends_with("_mold.step"));
+        assert!(String::from_utf8_lossy(&mold).contains("MANIFOLD_SOLID_BREP"));
+        let (st, _, file, _) = a.export("format=stl&shell=mold");
+        assert!(st == 200 && file.unwrap().ends_with("_mold.stl"));
+        assert!(INDEX_HTML.contains("['mold', 'Male mold"));
         assert_eq!(a.export("format=stl&shell=surface").0, 400);
         // A pocket shorter than the 161-station spacing (1.5 in) still exports: stations refine.
         let mut short: serde_json::Value = serde_json::to_value(&result).unwrap();

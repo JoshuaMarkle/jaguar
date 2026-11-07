@@ -22,6 +22,8 @@
 
 pub mod check;
 pub mod curves;
+pub mod drafting;
+pub mod drawing;
 pub mod equilibrium;
 pub mod export;
 pub mod flotation;
@@ -40,6 +42,7 @@ pub mod seats;
 pub mod section;
 pub mod serve;
 pub mod shapeopt;
+pub mod sheets;
 pub mod stands;
 pub mod stepimport;
 pub mod units;

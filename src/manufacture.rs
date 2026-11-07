@@ -1,9 +1,9 @@
 //! Mold boards for the shop (web Manufacture tab, `jaguar mold`). Below `export` in the layout:
 //! reads the winner's geometry, never feeds physics.
 //!
-//! The mold is a MALE mold: its surface is the canoe's inner wall ([`export::Mesh::inner_rows`]:
-//! the outer hull offset inward by the wall, the solid concrete ends left out, no air pocket
-//! bulkheads), built upside down with the gunwale on the shop floor from foam sheets
+//! The mold is a MALE mold: its surface is the canoe's inner wall ([`export::mold_rows`]:
+//! the outer hull offset inward by the wall, tapering into the ends as cut and sanded, to a stem
+//! line at least a wall inside each tip; no air pocket bulkheads), built upside down with the gunwale on the shop floor from foam sheets
 //! (hand-cut and sanded, never water-jet cut). Only hardboard is water-jet cut, for one of two
 //! uses ([`Boards`]):
 //!
@@ -24,9 +24,11 @@
 //! the layers (and boards, in the mold) below it, outlines are waterlines of the inner surface,
 //! symmetric about the centreline, until the layer no longer reaches the keel; a layer is cut
 //! across into equal lengths. [`Orientation::Vertical`]: layers stand upright across the canoe
-//! like ribs, from the bow end xa of the hollow run, each a cross-section closed by the gunwale
+//! like ribs, from the bow tip xa of the mold, each a cross-section closed by the gunwale
 //! line on the floor. [`Orientation::Hybrid`]: flat layers up to a switch height, then upright
 //! keel slabs on them ([`keel_slabs`]); the switch defaults to the least sanding ([`sand_in3`]).
+//! [`Orientation::Pancake`]: flat layers of varying thickness, thin where the hull flattens out
+//! toward the keel and thick up the steep sides ([`pancake_order`]: least labor, steps capped).
 //!
 //! [`Packing`]: `Blocks` (default) cuts every flat layer at the same joints (the fewest equal
 //! lengths for which every layer's piece in every block fits), so the joints line up from floor to
@@ -72,6 +74,8 @@ const TICK_IN: f64 = 12.0;
 const TIP_ZONE_IN: f64 = 12.0;
 /// Two template pieces closer than this everywhere are one shape (FewestShapes), in.
 const SAME_SHAPE_IN: f64 = 0.02;
+/// Pancake layer heights are whole multiples of this, in (a power of two: sums stay exact).
+const PANCAKE_GRID_IN: f64 = 1.0 / 64.0;
 
 pub type Pt = [f64; 2];
 
@@ -88,6 +92,10 @@ pub enum Orientation {
     /// Flat layers up to a switch height, then upright keel slabs across the canoe standing on
     /// them: flat layers follow the steep sides, upright slabs the flat bottom and keel.
     Hybrid,
+    /// Flat layers of varying thickness ([`pancake_order`]): stock foam up the steep sides,
+    /// thinner slices resawn from it where the bottom flattens out, for the least labor with no
+    /// step deeper than `max_step_in`.
+    Pancake,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,6 +164,23 @@ pub struct MoldSpec {
     pub switch_in: Option<f64>,
     /// Hybrid: keel slab thickness; None = the thickest foam on hand.
     pub keel_foam_in: Option<f64>,
+    /// Pancake: thinner layers the shop can resaw from the foam on hand (one number or a list),
+    /// each from the thinnest stock thicker than it.
+    #[serde(deserialize_with = "one_or_many")]
+    pub slice_in: Vec<f64>,
+    /// Pancake: the deepest step a layer may leave before sanding (layer thickness x the surface
+    /// normal's vertical component), in: the precision the stack is cut to.
+    pub max_step_in: f64,
+    /// Blocks: equal blocks along the canoe for the lower layers; None = the fewest that fit.
+    pub blocks: Option<usize>,
+    /// Blocks: the upper layers in this many blocks of varied length ([`varied_edges`]: short
+    /// where the hull changes fastest along its length); None = the lower layers' joints.
+    pub top_blocks: Option<usize>,
+    /// Blocks with `top_blocks`: height above the floor where the upper layers start (rounded to
+    /// a layer underside); None = pancake: the first resawn layer, else mid-height.
+    pub top_from_in: Option<f64>,
+    /// Alignment holes every this many inches along the canoe, from the hull's bow end.
+    pub hole_spacing_in: f64,
     /// Shop rates for the labor estimate ([`Labor`]).
     pub labor: LaborRates,
 }
@@ -178,6 +203,8 @@ pub struct LaborRates {
     pub finish_ft2_per_min: f64,
     /// Gluing and aligning one foam piece in the stack, min.
     pub assemble_min: f64,
+    /// Resawing a foam blank into a thinner slice (pancake), slice area per minute, ft^2/min.
+    pub resaw_ft2_per_min: f64,
 }
 
 impl Default for LaborRates {
@@ -191,6 +218,7 @@ impl Default for LaborRates {
             sand_in3_per_min: 10.0,
             finish_ft2_per_min: 0.5,
             assemble_min: 2.0,
+            resaw_ft2_per_min: 4.0,
         }
     }
 }
@@ -202,6 +230,8 @@ pub struct Labor {
     pub cut_hr: f64,
     pub sand_hr: f64,
     pub assemble_hr: f64,
+    /// Resawing the pancake slices from thicker stock.
+    pub resaw_hr: f64,
     pub total_hr: f64,
     /// Template tracings, and the outline traced in all, in.
     pub traces: usize,
@@ -215,6 +245,8 @@ pub struct Labor {
     pub surface_ft2: f64,
     /// Foam pieces glued into the stack.
     pub foam_pieces: usize,
+    /// Foam resawn into thinner slices (the blanks' area), ft^2.
+    pub resaw_ft2: f64,
 }
 
 impl Default for MoldSpec {
@@ -237,6 +269,12 @@ impl Default for MoldSpec {
             half_canoe: false,
             switch_in: None,
             keel_foam_in: None,
+            slice_in: vec![1.0, 0.5],
+            max_step_in: 1.0,
+            blocks: None,
+            top_blocks: None,
+            top_from_in: None,
+            hole_spacing_in: 12.0,
             labor: LaborRates::default(),
         }
     }
@@ -262,6 +300,13 @@ impl MoldSpec {
         ensure!(self.gap_in.is_finite() && self.gap_in >= 0.0, "gap must be >= 0, got {}", self.gap_in);
         pos(self.ring_in, "ring width")?;
         pos(self.hole_in, "hole size")?;
+        pos(self.hole_spacing_in, "hole spacing")?;
+        for (v, what) in [(self.blocks, "blocks"), (self.top_blocks, "top blocks")] {
+            ensure!(v.is_none_or(|n| (1..=200).contains(&n)), "{what} must be 1 to 200, got {v:?}");
+        }
+        if let Some(h) = self.top_from_in {
+            ensure!(h.is_finite() && h >= 0.0, "top blocks start must be >= 0, got {h}");
+        }
         ensure!(
             !self.half_canoe || self.templates(),
             "half canoe needs tracing templates: boards in the mold are each part of the mold"
@@ -274,12 +319,24 @@ impl MoldSpec {
             self.orientation != Orientation::Hybrid || self.templates(),
             "flat + upright keel needs tracing templates"
         );
+        if self.orientation == Orientation::Pancake {
+            ensure!(self.templates(), "pancake layers need tracing templates");
+            pos(self.max_step_in, "deepest step")?;
+            for &t in self.foam_in.iter().chain(&self.slice_in) {
+                pos(t, "slice thickness")?;
+                ensure!(
+                    ((t / PANCAKE_GRID_IN).round() * PANCAKE_GRID_IN - t).abs() < 1e-9,
+                    "pancake: foam and slice thicknesses must be whole 64ths of an inch, got {t}"
+                );
+            }
+        }
         let r = &self.labor;
         for (v, what) in [
             (r.trace_in_per_min, "tracing speed"),
             (r.cut_in2_per_min, "cutting rate"),
             (r.sand_in3_per_min, "sanding rate"),
             (r.finish_ft2_per_min, "finish sanding rate"),
+            (r.resaw_ft2_per_min, "resawing rate"),
         ] {
             pos(v, what)?;
         }
@@ -441,6 +498,8 @@ pub struct Layer {
     pub thick_in: f64,
     /// Thickness of the foam layer it belongs to (templates) or that sits on it (mold).
     pub foam_in: f64,
+    /// Pancake: the stock thickness this layer's foam is resawn from (None: stock as is).
+    pub resawn_from_in: Option<f64>,
     /// Stands upright across the canoe (pos_in is then the x of its bow face).
     pub upright: bool,
     /// Foam pieces (templates) or boards (mold) of the layer, bow to stern, in the layer frame.
@@ -485,8 +544,12 @@ pub struct Stack {
     pub foam_layers: usize,
     /// Foam pieces to cut (templates); boards (mold).
     pub foam_pieces: usize,
-    /// Blocks packing: x of the joints between blocks (the same in every layer), bow to stern.
+    /// Blocks packing: x of the joints between blocks (the same in every layer; with top blocks,
+    /// in every lower layer), bow to stern.
     pub joints_in: Vec<f64>,
+    /// Top blocks: height above the floor where the upper layers start, and their joints.
+    pub top_from_in: Option<f64>,
+    pub top_joints_in: Vec<f64>,
     /// Foam thickness of each foam layer in stack order (floor up, or bow to stern), and how
     /// far the stack runs past the mold.
     pub foam_order_in: Vec<f64>,
@@ -571,6 +634,12 @@ pub fn layout(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
     Ok(l)
 }
 
+/// The stack, layers and pieces of [`layout`] without the hardboard nesting and the comparison
+/// layouts (`sheets` and `alternatives` empty): the drawing sheets nest the foam themselves.
+pub fn stack_only(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Result<Layout> {
+    plan(hull, es, spec, false)
+}
+
 /// All flat, all upright, and flat + upright keel with slabs of each foam thickness on hand, of
 /// two of the thickest glued, and of the chosen thickness, each with this spec's stock, packing and rates, laid out but not packed on
 /// sheets (the slow part). Hybrid only for tracing templates.
@@ -587,6 +656,7 @@ fn alternatives(hull: &Hull, es: &ExportSpec, spec: &MoldSpec) -> Vec<Alternativ
         ("All upright".into(), Orientation::Vertical, None),
     ];
     if spec.templates() {
+        alts.push(("Pancake (flat, thinner where it curves)".into(), Orientation::Pancake, None));
         alts.extend(keels.iter().map(|&t| {
             let note = if spec.foam_in.contains(&t) {
                 String::new()
@@ -630,8 +700,9 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
     spec.validate()?;
     let wall = es.thickness_in.context("the mold needs the wall thickness (the inner surface)")?;
     let es = ExportSpec { pocket_in: None, filled: false, ..es.clone() };
-    let mesh = export::build_mesh(hull, &es)?;
-    let rows = mesh.inner_rows.context("this hull has no single hollow inner surface to build a mold on")?;
+    // The mold as cut and sanded (`export::mold_rows`): the wall's inner face, tapering into the
+    // ends to a stem line each end, the same surface the mold STEP export draws.
+    let rows = export::mold_rows(hull, &es)?;
     let z_top = rows[0].1[0].1;
     let (xa, xb) = (rows[0].0, rows[rows.len() - 1].0);
     let keel_min = rows.iter().map(|r| r.1.last().unwrap().1).fold(f64::INFINITY, f64::min);
@@ -644,6 +715,9 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
     let board = if tpl { 0.0 } else { spec.board_in };
     let facets = facets(&rows, z_top);
     let keel_t = spec.keel_foam_in.unwrap_or_else(|| spec.foam_in.iter().copied().fold(0.0, f64::max));
+    let pancake = (spec.orientation == Orientation::Pancake)
+        .then(|| pancake_order(&rows, z_top, total, &facets, spec))
+        .transpose()?;
     let hybrid_sand = |order: &[f64], switch: f64| {
         sand_in3(&facets, |f| if f.h > switch { keel_t * f.nx } else { layer_at(order, f.h) * f.nz })
     };
@@ -667,8 +741,15 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
                 (full[..k].to_vec(), full[..k].iter().sum::<f64>())
             }
         }
+    } else if let Some(p) = &pancake {
+        (p.iter().map(|l| l.0).collect(), f64::INFINITY)
     } else {
         (foam_order(&spec.foam_in, board, total, flat), f64::INFINITY)
+    };
+    // Pancake: the stock each layer is resawn from.
+    let resawn: Vec<Option<f64>> = match &pancake {
+        Some(p) => p.iter().map(|l| l.1).collect(),
+        None => vec![None; order.len()],
     };
     // Layer k starts at the sum of the layers (and boards) below / ahead of it.
     let start = |k: usize| order[..k.min(order.len())].iter().map(|t| t + board).sum::<f64>();
@@ -734,18 +815,38 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
         }
     }
     ensure!(!shapes.is_empty(), "the mold is thinner than one layer");
-    // Blocks: one set of joints for every flat layer.
-    let edges: Option<Vec<f64>> = if spec.packing == Packing::Blocks && flat {
-        let runs: Vec<&Vec<Pt>> = shapes
+    // Blocks: one set of joints for every flat layer, or with top blocks one for the lower
+    // layers and another, of varied lengths, from layer `split` up.
+    let flat_n = shapes.iter().take_while(|s| matches!(s.3, Shape::Flat { .. })).count();
+    let blocks = spec.packing == Packing::Blocks && flat;
+    let split = (blocks && spec.top_blocks.is_some() && flat_n > 0).then(|| {
+        let near = |h: f64| {
+            (0..flat_n).min_by(|&a, &b| (shapes[a].1 - h).abs().total_cmp(&(shapes[b].1 - h).abs())).unwrap()
+        };
+        match spec.top_from_in {
+            Some(h) => near(h),
+            None => resawn.iter().take(flat_n).position(|r| r.is_some()).unwrap_or_else(|| near(0.5 * total)),
+        }
+    });
+    let runs_of = |r: std::ops::Range<usize>| -> Vec<&Vec<Pt>> {
+        shapes[r]
             .iter()
             .flat_map(|(_, _, _, s)| match s {
                 Shape::Flat { runs, .. } => runs.iter().collect::<Vec<_>>(),
                 Shape::Upright { .. } => vec![],
             })
-            .collect();
-        Some(block_edges(&runs, spec)?)
-    } else {
-        None
+            .collect()
+    };
+    let lower = runs_of(0..split.unwrap_or(flat_n));
+    let edges: Option<Vec<f64>> =
+        if blocks && !lower.is_empty() { Some(block_edges(&lower, spec.blocks, spec)?) } else { None };
+    let top_edges: Option<Vec<f64>> = match (split, spec.top_blocks) {
+        (Some(k), Some(n)) => {
+            let z_hi = z_top - shapes[k].1;
+            let mid = spec.half_canoe.then_some(0.5 * (xa + xb));
+            Some(varied_edges(&rows, z_hi, keel_min, &runs_of(k..flat_n), n, mid, spec)?)
+        }
+        _ => None,
     };
     // Nested (not Blocks, whose joints are shared): layers narrow enough to sit inside a wide
     // layer's ring may be cut shorter so their pieces fit in the rings; wide layers keep their
@@ -772,6 +873,11 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
                 pos_in: *pos,
                 thick_in,
                 foam_in: *ft,
+                resawn_from_in: if matches!(shape, Shape::Flat { .. }) {
+                    resawn.get(li).copied().flatten()
+                } else {
+                    None
+                },
                 upright: matches!(shape, Shape::Upright { .. }),
                 foam: vec![],
                 foam_labels: vec![],
@@ -786,7 +892,8 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
                         } else {
                             label.clone()
                         };
-                        let cuts = match &edges {
+                        let e = if split.is_some_and(|k| li >= k) { &top_edges } else { &edges };
+                        let cuts = match e {
                             Some(e) => cuts_at(run, guide, &tag, e),
                             None => split_run(run, guide, &tag, max_len.filter(|_| shortened(shape)), spec)?,
                         };
@@ -908,7 +1015,9 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
         (ls, ps, sh)
     };
     let foam_pieces = layers.iter().map(|l| l.foam.len()).sum();
-    let joints: Vec<f64> = edges.as_ref().map_or(vec![], |e| e[1..e.len() - 1].to_vec());
+    let inner = |e: &Option<Vec<f64>>| e.as_ref().map_or(vec![], |e| e[1..e.len() - 1].to_vec());
+    let (joints, top_joints) = (inner(&edges), inner(&top_edges));
+    let top_from_in = split.map(|k| shapes[k].1);
     let n = layers.len();
     let keel_n = layers.iter().filter(|l| l.upright && hybrid).count();
     // With keel slabs the stack reaches the keel through them, not past it.
@@ -916,7 +1025,7 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
     let pitch_at = |o: &[f64], d: f64| layer_at(o, d) + board;
     let sw = if keel_n > 0 { switch } else { f64::INFINITY };
     let step = |f: &Facet| match spec.orientation {
-        Orientation::Flat => pitch_at(&order, f.h) * f.nz,
+        Orientation::Flat | Orientation::Pancake => pitch_at(&order, f.h) * f.nz,
         Orientation::Vertical => pitch_at(&order, f.x - xa) * f.nx,
         Orientation::Hybrid if f.h > sw => keel_t * f.nx,
         Orientation::Hybrid => layer_at(&order, f.h) * f.nz,
@@ -933,6 +1042,8 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
             foam_layers: foam_order_in.len(),
             foam_pieces,
             joints_in: joints.clone(),
+            top_from_in,
+            top_joints_in: top_joints.clone(),
             foam_order_in,
             over_in: over,
             switch_in: (keel_n > 0).then_some(switch),
@@ -950,6 +1061,8 @@ fn plan(hull: &Hull, es: &ExportSpec, spec: &MoldSpec, nest_sheets: bool) -> Res
             foam_layers: order.len(),
             foam_pieces,
             joints_in: joints.clone(),
+            top_from_in,
+            top_joints_in: top_joints.clone(),
             foam_order_in: order.clone(),
             over_in: over,
             switch_in: None,
@@ -1003,8 +1116,8 @@ fn half_at(half: &[(f64, f64)], z: f64) -> Option<f64> {
 
 /// The inner surface cut at height z: each run of stations it cuts, as the starboard chain
 /// (x increasing, y >= 0) from the centreline back to the centreline. Where the keel rises
-/// through z the run ends on the centreline between stations; at the end of the hollow run it
-/// ends square (the bulkhead to the solid end).
+/// through z the run ends on the centreline between stations; at the mold's stem lines it ends
+/// on the centreline (a tip). A surface without stem lines would end square at its last row.
 fn waterline(rows: &[NetRow], z: f64) -> Vec<Vec<Pt>> {
     let keel = |i: usize| rows[i].1.last().unwrap().1;
     let at = |i: usize| {
@@ -1345,13 +1458,14 @@ fn piece_fits(chain: &[Pt], spec: &MoldSpec) -> bool {
 
 /// Block joints (Blocks packing): the fewest equal lengths over all the layers' runs for which
 /// every layer's piece in every block fits.
-fn block_edges(runs: &[&Vec<Pt>], spec: &MoldSpec) -> Result<Vec<f64>> {
+fn block_edges(runs: &[&Vec<Pt>], count: Option<usize>, spec: &MoldSpec) -> Result<Vec<f64>> {
     let x0 = runs.iter().map(|r| r[0][0]).fold(f64::INFINITY, f64::min);
     let x1 = runs.iter().map(|r| r[r.len() - 1][0]).fold(f64::NEG_INFINITY, f64::max);
     let edges = |n: usize| -> Vec<f64> {
         (0..=n).map(|k| if k == n { x1 } else { x0 + (x1 - x0) * k as f64 / n as f64 }).collect()
     };
-    (1..=200)
+    let (lo, hi) = count.map_or((1, 200), |n| (n, n));
+    (lo..=hi)
         .map(edges)
         .find(|e| {
             runs.iter()
@@ -1359,11 +1473,140 @@ fn block_edges(runs: &[&Vec<Pt>], spec: &MoldSpec) -> Result<Vec<f64>> {
         })
         .with_context(|| {
             format!(
-                "the mold ({:.1} in long) does not split into blocks that fit {}",
+                "the mold ({:.1} in long) does not split into {}blocks that fit {}",
                 x1 - x0,
+                count.map_or(String::new(), |n| format!("{n} ")),
                 fit_what(spec)
             )
         })
+}
+
+/// Joints for the upper layers in `n` blocks of varied length, x0 to x1 of their `runs`. Between
+/// two joints the hull is taken as the straight blend of its sections at the joints (how the
+/// block's ends guide the sanding); the joints are placed for the least worst miss of that blend
+/// (half-breadth every 1/4 in from `z_hi` down to `z_lo`, at every other hull station): short
+/// blocks where the hull changes fastest along its length, long ones where it barely changes.
+/// Bisection on the miss with a greedy pass (each block as long as the miss and a sheet allow),
+/// then the worst blocks split until there are `n`. Half canoe (`mid`), or a hull the same fore
+/// and aft: the bow half is placed and mirrored, the middle block (odd `n`) straddling midships.
+fn varied_edges(
+    rows: &[NetRow],
+    z_hi: f64,
+    z_lo: f64,
+    runs: &[&Vec<Pt>],
+    n: usize,
+    mid: Option<f64>,
+    spec: &MoldSpec,
+) -> Result<Vec<f64>> {
+    let x0 = runs.iter().map(|r| r[0][0]).fold(f64::INFINITY, f64::min);
+    let x1 = runs.iter().map(|r| r[r.len() - 1][0]).fold(f64::NEG_INFINITY, f64::max);
+    ensure!(x1 > x0, "the upper layers have no outline to cut into blocks");
+    let nz = (((z_hi - z_lo) / 0.25).ceil() as usize).max(1);
+    let zs: Vec<f64> = (0..=nz).map(|k| z_hi - (z_hi - z_lo) * k as f64 / nz as f64).collect();
+    // Sample points: the run ends (tips: nothing there) and every other station between.
+    let mut pts: Vec<(f64, Vec<f64>)> = vec![(x0, vec![0.0; zs.len()])];
+    for (x, half) in rows.iter().filter(|r| r.0 > x0 + 1e-9 && r.0 < x1 - 1e-9).step_by(2) {
+        pts.push((*x, zs.iter().map(|&z| half_at(half, z).unwrap_or(0.0)).collect()));
+    }
+    pts.push((x1, vec![0.0; zs.len()]));
+    // A hull the same fore and aft gets mirrored joints too (placed from the bow they would not be).
+    let k = pts.len();
+    let xc = 0.5 * (x0 + x1);
+    let same = (0..k).all(|i| {
+        let (a, b) = (&pts[i], &pts[k - 1 - i]);
+        (a.0 + b.0 - 2.0 * xc).abs() < 1e-6
+            && a.1.iter().zip(&b.1).all(|(u, v)| (u - v).abs() <= SAME_SHAPE_IN)
+    });
+    let mid = mid.or(same.then_some(xc));
+    // Worst miss of the straight blend between sample points a and b (either order).
+    let dev = |a: usize, b: usize| -> f64 {
+        let (lo, hi) = (a.min(b), a.max(b));
+        let (pa, pb) = (&pts[lo], &pts[hi]);
+        pts[lo + 1..hi]
+            .iter()
+            .flat_map(|(x, y)| {
+                let s = (x - pa.0) / (pb.0 - pa.0);
+                y.iter().zip(pa.1.iter().zip(&pb.1)).map(move |(y, (a, b))| (y - (a + s * (b - a))).abs())
+            })
+            .fold(0.0, f64::max)
+    };
+    let usable = spec.sheets.iter().map(|s| s[0].max(s[1])).fold(0.0, f64::max) - 2.0 * spec.gap_in;
+    let long = spec.foam_sheets.iter().map(|s| s[0].max(s[1])).fold(0.0, f64::max).min(usable);
+    // The points in placing order, the blocks to place, and the first block's length limit.
+    let (ord, m, first): (Vec<usize>, usize, f64) = match mid {
+        None => ((0..pts.len()).collect(), n, long),
+        Some(xm) => {
+            let c = (0..pts.len())
+                .min_by(|&a, &b| (pts[a].0 - xm).abs().total_cmp(&(pts[b].0 - xm).abs()))
+                .unwrap();
+            ((0..=c).rev().collect(), n.div_ceil(2), if n % 2 == 1 { 0.5 * long } else { long })
+        }
+    };
+    let last = ord.len() - 1;
+    let len = |p: usize, q: usize| (pts[ord[q]].0 - pts[ord[p]].0).abs();
+    let greedy = |eps: f64| -> Vec<usize> {
+        let mut b = vec![0];
+        while *b.last().unwrap() < last {
+            let p = *b.last().unwrap();
+            let lim = if b.len() == 1 { first } else { long };
+            let mut q = p + 1;
+            while q < last && len(p, q + 1) <= lim && dev(ord[p], ord[q + 1]) <= eps {
+                q += 1;
+            }
+            b.push(q);
+        }
+        b
+    };
+    let fewest = greedy(f64::INFINITY).len() - 1;
+    ensure!(
+        fewest <= m,
+        "the upper layers need at least {} top blocks to fit {}",
+        if mid.is_some() { 2 * fewest - n % 2 } else { fewest },
+        fit_what(spec)
+    );
+    let (mut lo, mut hi) = (0.0, dev(ord[0], ord[last]));
+    for _ in 0..40 {
+        let eps = 0.5 * (lo + hi);
+        if greedy(eps).len() - 1 <= m { hi = eps } else { lo = eps }
+    }
+    let mut b = greedy(hi);
+    // Fewer than asked (the miss allows fewer): split the worst block at its best point.
+    let block_dev = |b: &[usize], i: usize| dev(ord[b[i]], ord[b[i + 1]]);
+    while b.len() - 1 < m {
+        let worst = (0..b.len() - 1)
+            .filter(|&i| b[i + 1] - b[i] >= 2)
+            .max_by(|&i, &j| block_dev(&b, i).total_cmp(&block_dev(&b, j)).then(j.cmp(&i)));
+        let Some(i) = worst else { break };
+        let f = |s: usize| dev(ord[b[i]], ord[s]).max(dev(ord[s], ord[b[i + 1]]));
+        let s = (b[i] + 1..b[i + 1]).min_by(|&s, &t| f(s).total_cmp(&f(t))).unwrap();
+        b.insert(i + 1, s);
+    }
+    let xs: Vec<f64> = b.iter().map(|&p| pts[ord[p]].0).collect();
+    let edges = match mid {
+        None => xs,
+        Some(xm) => {
+            // Bow half placed from midships: ascending, its last joint exactly at midships, then
+            // mirrored aft; an odd count drops the midships joint (one block across it).
+            let mut bow: Vec<f64> = xs.iter().rev().copied().collect();
+            *bow.last_mut().unwrap() = xm;
+            let mut e = bow.clone();
+            e.extend(bow.iter().rev().skip(1).map(|x| 2.0 * xm - x));
+            if n % 2 == 1 {
+                e.remove(bow.len() - 1);
+            }
+            e[0] = e[0].min(x0);
+            let k = e.len() - 1;
+            e[k] = e[k].max(x1);
+            e
+        }
+    };
+    ensure!(
+        runs.iter()
+            .all(|r| edges.windows(2).all(|w| clip(r, w[0], w[1]).is_none_or(|c| piece_fits(&c, spec)))),
+        "the upper layers in {n} top blocks have a piece that does not fit {}: use more top blocks",
+        fit_what(spec)
+    );
+    Ok(edges)
 }
 
 /// A run cut at the block joints: one cut per block it reaches, labelled `<tag>-<block>`.
@@ -1516,10 +1759,11 @@ fn flat_piece(c: &Cut, layer: usize, half: bool, traces: Vec<String>, spec: &Mol
     let n = traces.len();
     // Alignment holes at the stations: on the centreline, or 1 in off it on a half template.
     let mut stations = vec![];
-    let mut t = (c0 / TICK_IN).floor() * TICK_IN + TICK_IN;
+    let sp = spec.hole_spacing_in;
+    let mut t = (c0 / sp).floor() * sp + sp;
     while t < c1 - 1e-9 {
         stations.push([t, if half { 1.0 } else { 0.0 }]);
-        t += TICK_IN;
+        t += sp;
     }
     let holes = hole_spots(&outline, &stations, spec);
     Piece {
@@ -1655,6 +1899,17 @@ fn labor(layers: &[Layer], pieces: &[Piece], sand_in3: f64, surface_ft2: f64, sp
         }
     }
     let foam_pieces = layers.iter().map(|l| l.foam.len()).sum::<usize>();
+    // Each resawn layer's foam blanks (piece bounding boxes) go through the saw once.
+    let resaw_in2: f64 = layers
+        .iter()
+        .filter(|l| l.resawn_from_in.is_some())
+        .flat_map(|l| &l.foam)
+        .map(|f| {
+            let (lo, hi) = bbox(f);
+            (hi[0] - lo[0]) * (hi[1] - lo[1])
+        })
+        .fold(0.0, |a, b| a + b);
+    let resaw_hr = resaw_in2 / 144.0 / r.resaw_ft2_per_min / 60.0;
     let trace_hr = (trace_in / r.trace_in_per_min + traces as f64 * r.place_min) / 60.0;
     let cut_hr = cut_min / 60.0;
     let sand_hr = (sand_in3 / r.sand_in3_per_min + surface_ft2 / r.finish_ft2_per_min) / 60.0;
@@ -1664,7 +1919,8 @@ fn labor(layers: &[Layer], pieces: &[Piece], sand_in3: f64, surface_ft2: f64, sp
         cut_hr,
         sand_hr,
         assemble_hr,
-        total_hr: trace_hr + cut_hr + sand_hr + assemble_hr,
+        resaw_hr,
+        total_hr: trace_hr + cut_hr + sand_hr + assemble_hr + resaw_hr,
         traces,
         trace_in,
         cut_in,
@@ -1673,7 +1929,114 @@ fn labor(layers: &[Layer], pieces: &[Piece], sand_in3: f64, surface_ft2: f64, sp
         sand_in3,
         surface_ft2,
         foam_pieces,
+        resaw_ft2: resaw_in2 / 144.0,
     }
+}
+
+/// Pancake layers, floor up: each one of the foam thicknesses on hand, or a `slice_in` resawn
+/// from the thinnest stock thicker than it (`Some(stock)`). Chosen by dynamic programming over
+/// the height in [`PANCAKE_GRID_IN`] steps for the least estimated labor at the shop's rates
+/// ([`labor`]: tracing, cutting, gluing and resawing each layer, sized by the waterline at its
+/// underside, plus sanding its steps, [`sand_in3`]), with no facet it covers stepped deeper than
+/// `max_step_in`. Thin layers go where the hull flattens out (the bottom and keel, at the top of
+/// the upside-down mold), thick ones up the steep sides. Err if no stack keeps the steps.
+fn pancake_order(
+    rows: &[NetRow],
+    z_top: f64,
+    total: f64,
+    facets: &[Facet],
+    spec: &MoldSpec,
+) -> Result<Vec<(f64, Option<f64>)>> {
+    let g = PANCAKE_GRID_IN;
+    let n = ((total / g - 1e-9).ceil() as usize).max(1);
+    let cells = |t: f64| (t / g).round() as usize;
+    // (thickness, resawn from), thickest first; a slice that is also stock is stock.
+    let mut opts: Vec<(f64, Option<f64>)> = spec.foam_in.iter().map(|&t| (t, None)).collect();
+    for &t in &spec.slice_in {
+        if spec.foam_in.iter().any(|&s| cells(s) == cells(t)) {
+            continue;
+        }
+        let stock = spec.foam_in.iter().copied().filter(|&s| s > t).fold(f64::INFINITY, f64::min);
+        ensure!(stock.is_finite(), "pancake: a {t} in slice needs thicker foam on hand to resaw it from");
+        opts.push((t, Some(stock)));
+    }
+    opts.sort_by(|a, b| b.0.total_cmp(&a.0));
+    opts.dedup_by(|a, b| cells(a.0) == cells(b.0));
+    // Per height cell: half the facet area x vertical normal (the sanding a layer there leaves
+    // per inch of thickness), summed up the height, and the flattest facet (deepest step).
+    let mut sand_cum = vec![0.0; n + 1];
+    let mut nz = vec![0.0f64; n];
+    for f in facets {
+        let i = ((f.h / g).floor().max(0.0) as usize).min(n - 1);
+        sand_cum[i + 1] += 0.5 * f.area * f.nz;
+        nz[i] = nz[i].max(f.nz);
+    }
+    for i in 0..n {
+        sand_cum[i + 1] += sand_cum[i];
+    }
+    // Per start cell, the layer's underside waterline: outline length, foam pieces (runs cut to
+    // the longest foam sheet), blank area (each run's bounding box), runs.
+    let long = spec.foam_sheets.iter().map(|s| s[0].max(s[1])).fold(0.0, f64::max);
+    let geo: Vec<[f64; 4]> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let mut out = [0.0; 4];
+            for run in waterline(rows, z_top - i as f64 * g - 1e-9) {
+                let len = run[run.len() - 1][0] - run[0][0];
+                let half = run.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>();
+                out[0] += 2.0 * half;
+                out[1] += (len / long).ceil().max(1.0);
+                out[2] += len * 2.0 * run.iter().map(|p| p[1]).fold(0.0, f64::max);
+                out[3] += 1.0;
+            }
+            out
+        })
+        .collect();
+    let r = &spec.labor;
+    let layer_min = |i: usize, t: f64, resawn: bool| -> Option<f64> {
+        let j = (i + cells(t)).min(n);
+        if nz[i..j].iter().fold(0.0f64, |a, &b| a.max(b)) * t > spec.max_step_in + 1e-9 {
+            return None;
+        }
+        let [per, pieces, blank, runs] = geo[i];
+        let resaw = if resawn { blank / 144.0 / r.resaw_ft2_per_min } else { 0.0 };
+        Some(
+            per / r.trace_in_per_min
+                + pieces * (r.place_min + r.assemble_min)
+                + (per + runs * std::f64::consts::TAU * r.curve_radius_in) * t / r.cut_in2_per_min
+                + resaw
+                + t * (sand_cum[j] - sand_cum[i]) / r.sand_in3_per_min,
+        )
+    };
+    // best[i]: least minutes to stack the first i cells (minutes, layers, previous cell, option).
+    let mut best: Vec<Option<(f64, usize, usize, usize)>> = vec![None; n + 1];
+    best[0] = Some((0.0, 0, 0, 0));
+    for i in 0..n {
+        let Some((c0, l0, _, _)) = best[i] else { continue };
+        for (oi, &(t, from)) in opts.iter().enumerate() {
+            let Some(c) = layer_min(i, t, from.is_some()) else { continue };
+            let j = (i + cells(t)).min(n);
+            let cand = (c0 + c, l0 + 1, i, oi);
+            if best[j].is_none_or(|b| cand.0 < b.0 - 1e-9 || (cand.0 < b.0 + 1e-9 && cand.1 < b.1)) {
+                best[j] = Some(cand);
+            }
+        }
+    }
+    ensure!(
+        best[n].is_some(),
+        "pancake: no stack of {} in layers keeps every step within {} in (a flat bottom steps a whole layer): list a thinner slice or allow a deeper step",
+        opts.iter().map(|o| o.0.to_string()).collect::<Vec<_>>().join(", "),
+        spec.max_step_in
+    );
+    let mut out = vec![];
+    let mut j = n;
+    while j > 0 {
+        let (_, _, i, oi) = best[j].unwrap();
+        out.push(opts[oi]);
+        j = i;
+    }
+    out.reverse();
+    Ok(out)
 }
 
 /// Foam left to sand off, in^3, estimated: layers stacked across a facet leave steps as deep as
@@ -2436,6 +2799,7 @@ pub fn to_dxf(l: &Layout, k: usize) -> Result<String> {
             Orientation::Flat => "flat layers,",
             Orientation::Vertical => "upright ribs,",
             Orientation::Hybrid => "flat layers and keel slabs,",
+            Orientation::Pancake => "pancake layers,",
         },
         l.spec.board_in,
         sl,
@@ -2878,6 +3242,8 @@ mod tests {
                 foam_layers: 1,
                 foam_pieces: 2,
                 joints_in: vec![],
+                top_from_in: None,
+                top_joints_in: vec![],
                 foam_order_in: vec![2.0],
                 over_in: 0.0,
                 switch_in: None,

@@ -56,6 +56,300 @@ pub struct Params {
     /// canoe name at the stern), not at the lowest point of the whole hull.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lettering: Option<Lettering>,
+    /// Present = title block, BOM factors and view switches of the engineering drawing sheets
+    /// (src/drawing.rs, src/sheets.rs). Never read by the search; carried into result.json so a
+    /// re-export of the design reproduces the same sheets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<Drawing>,
+}
+
+/// Engineering drawing sheets: title block text, revisions, BOM factors and view switches.
+/// Every field has a default (shown in examples/canoe.toml) so a partial table works; the text
+/// the title block cannot do without (`canoe_name`, `school`, `official_school_name`,
+/// `drawn_by`, `drawn_date`) is checked when the sheets are exported, where a missing one is an
+/// error naming it. Factors are visible inputs, never constants in the code.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields, default)]
+pub struct Drawing {
+    pub canoe_name: String,
+    /// School name as it goes in the title block.
+    pub school: String,
+    /// The school's official name (the RFP's): export warns when `school` or the hull
+    /// lettering's school name differs from it.
+    pub official_school_name: String,
+    /// Optional logo for the title block: PNG (8-bit gray, RGB or palette, no transparency) or
+    /// JPEG. Relative to the canoe.toml.
+    pub logo: Option<PathBuf>,
+    pub drawn_by: String,
+    pub drawn_date: String,
+    pub checked_by: String,
+    pub checked_date: String,
+    /// Free-text note line of the title block.
+    pub note: String,
+    /// "D" (34 x 22 in, the competition sheet) or "B" (17 x 11 in, draft checks).
+    pub sheet_size: SheetSize,
+    /// Revision table of sheet 1 (canoe) and sheet 2 (mold).
+    pub revisions: Vec<Revision>,
+    pub mold_revisions: Vec<Revision>,
+    /// Decimal places: overall dimensions (and offsets), laminate dimensions.
+    pub precision_overall: u32,
+    pub precision_laminate: u32,
+    /// Optional views of sheet 1 (the sheet composes without them).
+    pub body_plan: bool,
+    pub offsets_table: bool,
+    pub stands_diagram: bool,
+    /// Load case whose static waterline is drawn (race displacement). None = the heaviest crew.
+    pub waterline_case: Option<String>,
+    /// Offsets table and body plan: stations evenly spaced bow to stern (tips included), and
+    /// the waterline spacing of the table's columns, in.
+    pub offset_stations: usize,
+    pub offset_waterline_step_in: f64,
+    /// Body plan buttock line spacing, in.
+    pub buttock_step_in: f64,
+    /// Bow / stern taper length: tip to where the gunwale half-breadth first reaches this
+    /// fraction of its maximum.
+    pub taper_fraction: f64,
+    /// Concrete waste (0.10 = order 10% over the wall volume).
+    pub concrete_waste: f64,
+    /// Mesh overlap at laps (0.10 = 10% over the developed area).
+    pub mesh_overlap: f64,
+    pub mesh_description: String,
+    /// Sealer: coverage, coats and sides coated (1 = outside, 2 = inside and out).
+    pub sealer_coverage_ft2_per_gal: f64,
+    pub sealer_coats: u32,
+    pub sealer_sides: u32,
+    pub sealer_description: String,
+    /// Lettering and graphics vinyl: waste, and sides of the hull each graphic is on.
+    pub vinyl_waste: f64,
+    pub lettering_sides: u32,
+    pub vinyl_description: String,
+    /// Graphics placed on the hull besides `[lettering]` (vinyl area, placement dimensions).
+    #[serde(rename = "graphic")]
+    pub graphics: Vec<Graphic>,
+    /// Hand-entered rows of the canoe BOM and the mold BOM.
+    pub bom_rows: Vec<BomRow>,
+    pub mold_bom_rows: Vec<BomRow>,
+    /// Per-row overrides of computed quantities (recorded in the files' metadata).
+    pub bom_overrides: Vec<BomOverride>,
+    /// Foam board thickness of the male mold, in. None = `search.mold_board_in`.
+    pub mold_board_in: Option<f64>,
+    /// Foam sheet [length, width], in, the layer outlines are nested on.
+    pub foam_sheet_in: [f64; 2],
+    /// Cut width between nested pieces and margin kept clear at the sheet edges, in.
+    pub kerf_in: f64,
+    pub edge_margin_in: f64,
+    pub foam_description: String,
+    /// Adhesive between foam layers: glued area covered per unit, and the unit.
+    pub adhesive_coverage_ft2_per_unit: f64,
+    pub adhesive_unit: String,
+    pub adhesive_description: String,
+    /// Mold surface treatment (release / seal coat): coverage and coats.
+    pub surface_coverage_ft2_per_gal: f64,
+    pub surface_coats: u32,
+    pub surface_description: String,
+}
+
+impl Default for Drawing {
+    fn default() -> Self {
+        Drawing {
+            canoe_name: String::new(),
+            school: String::new(),
+            official_school_name: String::new(),
+            logo: None,
+            drawn_by: String::new(),
+            drawn_date: String::new(),
+            checked_by: String::new(),
+            checked_date: String::new(),
+            note: String::new(),
+            sheet_size: SheetSize::D,
+            revisions: Vec::new(),
+            mold_revisions: Vec::new(),
+            precision_overall: 2,
+            precision_laminate: 3,
+            body_plan: true,
+            offsets_table: true,
+            stands_diagram: true,
+            waterline_case: None,
+            offset_stations: 21,
+            offset_waterline_step_in: 1.0,
+            buttock_step_in: 3.0,
+            taper_fraction: 0.99,
+            concrete_waste: 0.10,
+            mesh_overlap: 0.10,
+            mesh_description: "REINFORCEMENT MESH".into(),
+            sealer_coverage_ft2_per_gal: 200.0,
+            sealer_coats: 2,
+            sealer_sides: 2,
+            sealer_description: "CONCRETE SEALER".into(),
+            vinyl_waste: 0.15,
+            lettering_sides: 2,
+            vinyl_description: "LETTERING / GRAPHICS VINYL".into(),
+            graphics: Vec::new(),
+            bom_rows: Vec::new(),
+            mold_bom_rows: Vec::new(),
+            bom_overrides: Vec::new(),
+            mold_board_in: None,
+            foam_sheet_in: [96.0, 48.0],
+            kerf_in: 0.125,
+            edge_margin_in: 0.5,
+            foam_description: "FOAM BOARD".into(),
+            adhesive_coverage_ft2_per_unit: 40.0,
+            adhesive_unit: "CAN".into(),
+            adhesive_description: "FOAM ADHESIVE".into(),
+            surface_coverage_ft2_per_gal: 300.0,
+            surface_coats: 1,
+            surface_description: "MOLD SURFACE TREATMENT".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum SheetSize {
+    /// ANSI D, 34 x 22 in landscape.
+    #[default]
+    D,
+    /// ANSI B, 17 x 11 in landscape.
+    B,
+}
+
+/// One row of a revision table.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Revision {
+    pub rev: String,
+    pub date: String,
+    pub description: String,
+    pub by: String,
+}
+
+/// A graphic on the hull side: from `x_in` behind the bow, `length_in` long, `height_in` tall,
+/// its top `below_gunwale_in` under the gunwale, on `sides` sides of the hull.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Graphic {
+    pub name: String,
+    pub x_in: f64,
+    pub length_in: f64,
+    pub height_in: f64,
+    #[serde(default = "one")]
+    pub below_gunwale_in: f64,
+    #[serde(default = "two_sides")]
+    pub sides: u32,
+}
+
+fn two_sides() -> u32 {
+    2
+}
+
+/// A hand-entered BOM row.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BomRow {
+    pub part_no: String,
+    pub qty: f64,
+    pub unit: String,
+    pub description: String,
+}
+
+/// Replaces a computed BOM row's quantity and/or description (at least one).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BomOverride {
+    pub part_no: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qty: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+impl Drawing {
+    /// Numbers and switches (text is checked at export, `drawing::require`).
+    pub fn validate(&self) -> Result<()> {
+        let nonneg = |v: f64| v.is_finite() && v >= 0.0;
+        let pos = |v: f64| v.is_finite() && v > 0.0;
+        for (name, v) in [
+            ("concrete_waste", self.concrete_waste),
+            ("mesh_overlap", self.mesh_overlap),
+            ("vinyl_waste", self.vinyl_waste),
+            ("kerf_in", self.kerf_in),
+            ("edge_margin_in", self.edge_margin_in),
+        ] {
+            if !nonneg(v) {
+                bail!("drawing.{name} must be >= 0, got {v}");
+            }
+        }
+        for (name, v) in [
+            ("sealer_coverage_ft2_per_gal", self.sealer_coverage_ft2_per_gal),
+            ("adhesive_coverage_ft2_per_unit", self.adhesive_coverage_ft2_per_unit),
+            ("surface_coverage_ft2_per_gal", self.surface_coverage_ft2_per_gal),
+            ("offset_waterline_step_in", self.offset_waterline_step_in),
+            ("buttock_step_in", self.buttock_step_in),
+            ("foam_sheet_in length", self.foam_sheet_in[0]),
+            ("foam_sheet_in width", self.foam_sheet_in[1]),
+        ] {
+            if !pos(v) {
+                bail!("drawing.{name} must be > 0, got {v}");
+            }
+        }
+        if self.mold_board_in.is_some_and(|b| !pos(b)) {
+            bail!("drawing.mold_board_in must be > 0");
+        }
+        if self.edge_margin_in < self.kerf_in {
+            bail!(
+                "drawing.edge_margin_in ({}) must be at least kerf_in ({}): the cut runs inside the margin",
+                self.edge_margin_in,
+                self.kerf_in
+            );
+        }
+        if 2.0 * self.edge_margin_in + 1.0 >= self.foam_sheet_in[0].min(self.foam_sheet_in[1]) {
+            bail!("drawing.edge_margin_in {} leaves no room on the foam sheet", self.edge_margin_in);
+        }
+        if self.precision_overall > 4 || self.precision_laminate > 4 {
+            bail!("drawing: precision_overall and precision_laminate are 0 to 4 decimals");
+        }
+        if !(3..=61).contains(&self.offset_stations) {
+            bail!("drawing.offset_stations must be 3 to 61, got {}", self.offset_stations);
+        }
+        if !(self.taper_fraction > 0.0 && self.taper_fraction <= 1.0) {
+            bail!("drawing.taper_fraction must be in (0, 1], got {}", self.taper_fraction);
+        }
+        if self.sealer_sides == 0 || self.sealer_sides > 2 || self.lettering_sides > 2 {
+            bail!("drawing: sealer_sides is 1 or 2, lettering_sides 0 to 2");
+        }
+        for g in &self.graphics {
+            if !(nonneg(g.x_in) && pos(g.length_in) && pos(g.height_in) && nonneg(g.below_gunwale_in))
+                || g.sides > 2
+                || g.name.trim().is_empty()
+            {
+                bail!(
+                    "drawing.graphic '{}': need a name, x_in >= 0, length_in and height_in > 0, \
+                     below_gunwale_in >= 0, sides 0 to 2",
+                    g.name
+                );
+            }
+        }
+        let mut parts: Vec<&str> = Vec::new();
+        for r in self.bom_rows.iter().chain(&self.mold_bom_rows) {
+            if r.part_no.trim().is_empty() || !nonneg(r.qty) {
+                bail!("drawing BOM row '{}': need a part_no and qty >= 0", r.part_no);
+            }
+            if parts.contains(&r.part_no.trim()) {
+                bail!("drawing BOM: part_no '{}' used twice", r.part_no);
+            }
+            parts.push(r.part_no.trim());
+        }
+        for o in &self.bom_overrides {
+            if o.qty.is_none() && o.description.is_none() {
+                bail!("drawing.bom_overrides '{}': give qty and/or description", o.part_no);
+            }
+            if o.qty.is_some_and(|q| !nonneg(q)) {
+                bail!("drawing.bom_overrides '{}': qty must be >= 0", o.part_no);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Hull lettering (the RFP's freeboard check: the letters must stay visible). The school name
@@ -771,6 +1065,22 @@ impl Punching {
         }
     }
 
+    /// The casting schedule the punching check's d comes from, for drawing the wall buildup:
+    /// (equal passes, meshes laid after these passes, mold), with the same default as
+    /// [`Punching::d_over_t`] (2 passes, mesh after 1, male) when no layer field is given. Err
+    /// with an explicit `d_over_t` (no pass count) or an incomplete set of layer fields.
+    pub fn schedule(&self) -> Result<(u32, Vec<u32>, Mold)> {
+        self.d_over_t()?;
+        match (self.d_over_t, self.layers, &self.mesh_after_layer, self.mold) {
+            (Some(_), ..) => bail!(
+                "punching gives d_over_t, not the casting passes: give layers, mesh_after_layer and mold instead"
+            ),
+            (None, None, None, None) => Ok((2, vec![1], Mold::Male)),
+            (None, Some(n), Some(k), Some(m)) => Ok((n, k.passes().to_vec(), m)),
+            _ => bail!("punching: layers, mesh_after_layer and mold must be given together"),
+        }
+    }
+
     pub fn d_over_t(&self) -> Result<f64> {
         let layer_fields = self.layers.is_some() || self.mesh_after_layer.is_some() || self.mold.is_some();
         if let Some(r) = self.d_over_t {
@@ -1162,6 +1472,11 @@ impl Params {
         if p.material.mix_data.is_relative() {
             p.material.mix_data = base_dir.join(&p.material.mix_data);
         }
+        if let Some(logo) = p.drawing.as_mut().and_then(|d| d.logo.as_mut())
+            && logo.is_relative()
+        {
+            *logo = base_dir.join(&*logo);
+        }
         // shape_search.symmetric is the shape-search form of hull.doubly_symmetric: either sets both.
         if let Some(ss) = &mut p.shape_search {
             let sym = ss.symmetric || p.hull.doubly_symmetric;
@@ -1468,6 +1783,9 @@ impl Params {
         if let Some(l) = &self.lettering {
             l.validate()?;
         }
+        if let Some(d) = &self.drawing {
+            d.validate()?;
+        }
         if !(self.gates.dc_search <= self.gates.dc_verify && self.gates.dc_verify <= 1.0) {
             bail!("gates: need dc_search <= dc_verify <= 1.0");
         }
@@ -1707,6 +2025,41 @@ mod tests {
         let unknown = text.replacen("load_case = \"2M\"", "load_case = \"9X\"", 1);
         let e = Params::parse(&unknown, Path::new("examples")).unwrap_err().to_string();
         assert!(e.contains("no load case named '9X'") && e.contains("2M, 2F"), "{e}");
+    }
+
+    /// The commented [drawing] block of examples/canoe.toml parses and shows the real defaults.
+    #[test]
+    fn example_drawing_block_shows_the_defaults() {
+        let text = std::fs::read_to_string("examples/canoe.toml").unwrap().replace("\r\n", "\n");
+        let block: String = text
+            .lines()
+            .skip_while(|l| *l != "# [drawing]")
+            .take_while(|l| l.starts_with('#'))
+            .filter_map(|l| l.strip_prefix("# "))
+            .filter(|l| !l.starts_with('#'))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let p = Params::parse(&format!("{text}\n{block}"), Path::new("examples")).unwrap();
+        let d = p.drawing.unwrap();
+        let text_fields = Drawing {
+            canoe_name: d.canoe_name.clone(),
+            school: d.school.clone(),
+            official_school_name: d.official_school_name.clone(),
+            drawn_by: d.drawn_by.clone(),
+            drawn_date: d.drawn_date.clone(),
+            revisions: d.revisions.clone(),
+            ..Drawing::default()
+        };
+        assert_eq!(d, text_fields, "every other value in the example is the default");
+        let bad = |extra: &str| {
+            Params::parse(&format!("{text}\n[drawing]\n{extra}"), Path::new("examples")).is_err()
+        };
+        assert!(
+            bad("bogus = 1")
+                && bad("kerf_in = 1.0")
+                && bad("concrete_waste = -0.1")
+                && bad("sheet_size = \"A\"")
+        );
     }
 
     #[test]

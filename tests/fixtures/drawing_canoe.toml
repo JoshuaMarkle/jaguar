@@ -1,0 +1,87 @@
+# Small board-mold design for the drawing-sheet tests (tests/drawing.rs): one pinned hull shape,
+# 1.875 in mold boards (curved bottom, rocker and mold depth in whole boards), stands, lettering,
+# three lifts with two meshes, and the [drawing] title block.
+
+[hull]
+stations = 61
+stem_radius_in = 2.0
+
+[[load_case]]
+name = "2M"
+weights_lb = [175.0, 165.0]
+
+[[load_case]]
+name = "2F"
+weights_lb = [140.0, 130.0]
+
+[material]
+strength_model = "fit"
+mix_data = "../../examples/mix_tests.csv"
+flex_over_split = 1.0
+density_extrapolation_pcf = 4.0
+factor_of_safety = 1.5
+dynamic_load_factor = 1.2
+knee_patch_in = 3.0
+
+[search]
+thickness_in = [0.375, 0.375, 0.125]
+density_pcf = [58.0, 64.0, 2.0]
+depth_in = [10.0, 18.0, 1.0]
+mold_board_in = 1.875
+
+[gates]
+dc_search = 0.93
+dc_verify = 0.95
+freeboard_min_in = 6.0
+thickness_min_buildable_in = 0.375
+
+[punching]
+method = "aci_22_6"
+knees = 2
+knee_spacing_in = 8.0
+pad_in = 0.0
+layers = 3
+mesh_after_layer = [1, 2]
+mold = "male"
+
+[stability]
+crew_cg_in = 12.0
+gm_min_in = 0.25
+
+[objective]
+kind = "weight"
+speed_mps = 2.5
+
+[stands]
+pad_in = 6.0
+
+[lettering]
+school = "University of Virginia"
+canoe_name = "Jaguar"
+height_in = 4.0
+end_margin_in = 24.0
+
+[shape_search]
+length_in = [216.0, 216.0]
+beam_in = [29.0, 30.0]
+draft_in = [5.0, 8.5]
+fore_wp = [0.8, 0.8]
+aft_wp = [0.8, 0.8]
+section = [0.6, 0.6]
+fore_rocker = [0.0, 2.0]
+aft_rocker = [0.0, 2.0]
+fore_len_frac = [0.45, 0.45]
+aft_len_frac = [0.45, 0.45]
+rocker_in = [1.875, 1.875]
+symmetric = true
+samples = 1
+refine_rounds = 0
+seed = 1
+
+[drawing]
+canoe_name = "Jaguar"
+school = "University of Virginia"
+official_school_name = "University of Virginia"
+drawn_by = "Test"
+drawn_date = "2026-10-21"
+revisions = [{ rev = "A", date = "2026-10-21", description = "First issue", by = "T" }]

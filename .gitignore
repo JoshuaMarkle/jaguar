@@ -8,3 +8,6 @@ venv/
 Thumbs.db
 .claude/settings.local.json
 runs/
+/prefs.toml
+*.bak
+claudePromptResources/

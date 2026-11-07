@@ -14,9 +14,10 @@ jaguar mix    [data/mix_tests.csv]             print lab points and the strength
 jaguar gen-hull shape.toml [-o hull.json]      parametric hull (Michlet Series 7), see docs/HULLS.md
 jaguar import-michlet off1.mlt out.mlt [-o hull.json]
 jaguar import-mesh canoe.step|canoe.stp|canoe.stl|canoe.obj [-o hull.json] [--units ..] [--canoe canoe.toml [--analysis a.toml] [--thickness in] [--density pcf]]
-jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets] [--filled]
-jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical | --hybrid [--switch in] [--keel-foam in]] [--packing blocks|continuous|tight|fewest-shapes] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--kerf in] [--dxf-marks] [--half-canoe] [--labor rates.json]
+jaguar export result.json|hull.json [-o canoe.step|canoe.stl] [--thickness in] [--depth in] [--flare deg] [--no-pockets] [--filled | --mold]
+jaguar mold   [result.json] [-o mold/] [--in-mold] [--vertical | --hybrid [--switch in] [--keel-foam in] | --pancake [--slice in,in] [--max-step in]] [--packing blocks|continuous|tight|fewest-shapes] [--blocks n] [--top-blocks n [--top-from in]] [--foam in,in] [--foam-sheet LxW,LxW] [--board in] [--sheet LxW,LxW] [--gap in] [--nest-inside [--ring in]] [--no-holes] [--hole in] [--hole-spacing in] [--kerf in] [--dxf-marks] [--half-canoe] [--labor rates.json]
 jaguar race   [result.json] [--params canoe.toml] [-o race.json] [--measured "EVENT=SECONDS"]
+jaguar drawing [result.json] [-o drawings/] [--spec canoe.toml] [--size d|b]
 jaguar serve  [canoe.toml] [-p 8000] [--prefs <path>]  web UI: 3D canoe, edit params, run + watch live
 ```
 `serve`: the form is the only editor. Each edit is autosaved (validated, absolute paths) to
@@ -58,7 +59,7 @@ Downloads: `.github/workflows/release.yml` builds `JAGUAR-windows.zip` (JAGUAR.e
 `examples/canoe.toml` is the canonical, commented example; the schema is `src/params.rs`.
 Sections: `[hull]`, one or more `[[load_case]]`, `[material]`, `[search]`, `[gates]`, `[punching]`,
 `[stability]`, `[objective]`, optional `[shape_search]`, optional `[flotation]`, optional `[turning]`,
-optional `[zones]`, optional `[stands]`, `[seats]`,
+optional `[zones]`, optional `[stands]`, `[seats]`, optional `[drawing]` (drawing sheets only),
 optional `[race]` (read only by `jaguar race`). Paths are relative to the toml.
 Unknown keys are errors, so a typo never becomes a silent default.
 
@@ -516,11 +517,21 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
   (and a planar end over a station that is not a stem line), one solid with no wall or pockets:
   for measuring freeboard and displacement in CAD. STEP: the outer B-spline faces and the deck
   plane as a `MANIFOLD_SOLID_BREP`. Its volume is the analysis grid's to the mold depth within 1%.
-* `GET /api/export?format=step|stl[&shell=pockets|wall|filled]` in the web UI exports the last
+* **Mold** (`--mold`, `export::build_mold`): the male mold as cut and sanded, the canoe less its
+  wall: the wall's inner face (the mitred inward offset above) at every station where it still has
+  breadth, so it tapers into the ends like the canoe, closing on a stem line where the two walls
+  meet, never nearer a tip than t (the stem is a wall too); filled in to the mold depth by a flat
+  deck at the gunwale plane (the shop floor: the mold is built upside down). STEP: one solid of two
+  smooth B-spline halves and the deck plane (validated in OpenCASCADE: valid, closed, volume within
+  0.1% of the mesh; about 1/25 the size of facets); STL: the facets. Air pockets ignored. Its rows
+  (`export::mold_rows`) are the surface `jaguar mold` cuts the foam to and the mold drawing sheet
+  draws, and the canoe sheet's inner keel and solid tips.
+* `GET /api/export?format=step|stl[&shell=pockets|wall|filled|mold]` in the web UI exports the last
   run's winner. The Export STEP / Export STL buttons give the complete shelled canoe with its air
   pockets (`pockets`, the default; stations refined below the pocket length); their dropdown arrow
   also gives the shelled wall without pockets (`wall`, as `--no-pockets`, file `<hull>_no_pockets`)
-  and the unshelled canoe (`filled`, as `--filled`, file `<hull>_filled`).
+  the unshelled canoe (`filled`, as `--filled`, file `<hull>_filled`) and the male mold (`mold`,
+  as `--mold`, file `<hull>_mold`).
 * **PDF report** (web UI only, `Export PDF` beside STEP/STL): built in the browser from the last
   result and printed via the print dialog's "Save as PDF" (no server endpoint, no dependency).
   Page 1: snapshot of the 3D canoe top left, weight and verification, winner stats, checks, load
@@ -547,11 +558,12 @@ analysis grid, both sides mirrored, each station's girth resampled to `--girth` 
 
 ## Mold hardboard (`src/manufacture.rs`)
 `jaguar mold` and the web Manufacture tab cut hardboard on the water jet for the winner's MALE
-foam mold. The mold surface is the canoe's inner wall (the export's inner face: hull offset inward
-by t, solid concrete ends left out, no air pocket bulkheads), built upside down with the gunwale on
+foam mold. The mold surface is the canoe's inner wall as cut and sanded (`export::mold_rows`, the
+`--mold` export: hull offset inward by t, tapering into the ends to a stem line at least t inside
+each tip, no air pocket bulkheads), built upside down with the gunwale on
 the floor from foam sheets, cut and sanded by hand. `--foam` lists the thicknesses on hand
 (default 2 in; e.g. `1.5,2`): the layers use the count of each that covers the mold (flat: floor
-to the inner keel; upright: the hollow run, boards included in the mold) with the least left over,
+to the inner keel; upright: the mold's length, boards included in the mold) with the least left over,
 then the fewest layers, thickest on the floor and thinnest at the keel (upright: thin slabs at the
 two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam sheet sizes
 (default 96x48): every foam piece fits one of them.
@@ -568,10 +580,11 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
 * **Flat** (default): outlines are waterlines of the inner surface, symmetric about the
   centreline, layers until the keel; a centripetal Catmull-Rom spline through the waterline at the
   hull table stations (the loft's linear blend between stations kinks it near the keel), tapering
-  to a point at a tip, square at the solid-end bulkhead. A layer is cut across
+  to a point at each tip (until 2026-10-21 the layers stopped square where the wall's offset
+  first closed up, leaving the tapered ends to be shaped by hand). A layer is cut across
   into equal lengths (`L3-1`, `L3-2`, ... bow to stern).
-* **Upright** (`--vertical`): layers stand across the canoe like ribs from the bow end xa of the
-  hollow run, every foam (+ board) thickness, each a cross-section closed by the gunwale line on
+* **Upright** (`--vertical`): layers stand across the canoe like ribs from the bow tip xa of the
+  mold, every foam (+ board) thickness, each a cross-section closed by the gunwale line on
   the floor (`R1`, `R2`, ...): templates take the bigger of the slab's two faces (the other etched),
   boards the section at their mid-plane.
 * **Flat + upright keel** (`--hybrid`, tracing templates): flat layers from the floor up to the
@@ -584,17 +597,27 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   (layer thickness x the surface normal's component along the stacking) per unit area; flat
   layers step a flat bottom by a whole layer, upright slabs barely. Half canoe: aft slabs reuse
   their bow mirror's template.
+* **Pancake** (`--pancake`, tracing templates): flat layers of varying thickness, each one of the
+  `--foam` thicknesses or a `--slice` (default 1,0.5) resawn from the thinnest stock thicker
+  than it (`layers[].resawn_from_in`). The thicknesses, floor up, are chosen by dynamic
+  programming over the height in 1/64 in steps (every thickness a whole 64th) for the least
+  estimated labor at the shop rates: per layer, tracing, cutting, gluing and resawing sized by
+  the waterline at its underside, plus sanding its steps; with no facet stepped deeper than
+  `--max-step` (default 1 in: layer thickness x the surface normal's vertical component). So thin
+  layers go where the hull flattens out toward the keel, stock up the steep sides. Err if no
+  stack keeps the steps. Half canoe and every packing apply as for flat layers.
 * **Labor estimate** (`labor`, every layout; shop packet, CLI): hours of tracing (each template
   trace: outline / trace speed + placing it), cutting (each foam piece: (outline + curve allowance)
   x foam thickness / cut rate, the curve allowance `curve_radius_in` per radian turned along smooth
   stretches, so a radius-R curve cuts like (1 + curve_radius_in / R) times its length; plus each
-  corner over 30 deg), sanding (`stack.sand_ft3` / removal rate + mold surface / finish rate) and
-  assembly (per foam piece). Rates in `MoldSpec.labor` (web: labor rates; CLI `--labor` JSON);
-  defaults 60 in/min, 0.5 min, 40 in^2/min, 12 in, 0.25 min, 10 in^3/min, 0.5 ft^2/min, 2 min are
-  guesses to calibrate. `stack.max_step_in`: the deepest step before sanding (accuracy).
-* **Compare layouts** (`alternatives`; shop packet table, CLI): all flat, all upright, and flat +
+  corner over 30 deg), sanding (`stack.sand_ft3` / removal rate + mold surface / finish rate),
+  assembly (per foam piece) and resawing (pancake slices: each foam piece's bounding box /
+  `resaw_ft2_per_min`). Rates in `MoldSpec.labor` (web: labor rates; CLI `--labor` JSON);
+  defaults 60 in/min, 0.5 min, 40 in^2/min, 12 in, 0.25 min, 10 in^3/min, 0.5 ft^2/min, 2 min,
+  4 ft^2/min are guesses to calibrate. `stack.max_step_in`: the deepest step before sanding (accuracy).
+* **Compare layouts** (`alternatives`; shop packet table, CLI): all flat, all upright, pancake, and flat +
   upright keel with slabs of each foam thickness on hand, of two of the thickest glued and of the
-  chosen thickness (keel rows for tracing templates only), each with the same stock, packing, half
+  chosen thickness (pancake and keel rows for tracing templates only), each with the same stock, packing, half
   canoe and rates, laid out but not packed on sheets: labor, foam to sand, deepest step, templates
   and their area, or why it cannot be built.
 * **Packing** (`--packing`): `blocks` (default) cuts every flat layer at the same joints, the
@@ -602,6 +625,16 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   fits (foam and hardboard): the joints line up from floor to keel, so the mold comes apart in
   whole blocks for demolding (pieces `L3-2` = layer 3, block 2; a layer that does not reach a
   block has no piece there; joints in `stack.joints_in`; upright layers: as continuous);
+  `--blocks n` sets the count (Err if a piece does not fit). `--top-blocks n` cuts the upper
+  layers (from `--top-from`, rounded to a layer underside; default pancake: the first resawn
+  layer, else mid-height; `stack.top_from_in`) into n blocks of their own, of varied length
+  (`stack.top_joints_in`): between two joints the hull is taken as the straight blend of its
+  sections at the joints, and the joints minimise the worst miss of that blend (half-breadth
+  every 1/4 in down the upper layers, every other station), by bisection with a greedy pass
+  (blocks no longer than a foam or hardboard sheet), the worst blocks then split until there are
+  n. So blocks are short where the hull changes fastest along its length and long through the
+  parallel middle. Half canoe, or a hull the same fore and aft within 0.02 in: the bow half is
+  placed and mirrored (odd n: one block across midships). Err if n blocks cannot fit the sheets;
   `continuous` cuts each layer into the fewest lengths whose
   foam pieces fit a foam sheet (quarter turns) and whose hardboard pieces fit a hardboard sheet
   (any angle); `tight` also tries shorter lengths (down to a quarter of the sheet) and keeps the
@@ -625,11 +658,11 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   5 deg (lowest-spot-first can tilt a piece into a spot that blocks others, so both are kept and
   the fewer sheets win). Err if a piece fits no sheet. Deterministic.
 * **Half canoe** (`--half-canoe`, off; flat tracing templates only): for a canoe the same fore and
-  aft, a piece wholly aft of midships (of the hollow run) reuses the template of its mirror image
+  aft, a piece wholly aft of midships (of the mold's length) reuses the template of its mirror image
   at the bow (within 0.02 in), turned end for end, so only the bow half is cut; Err naming the
   piece if it has none. A piece across midships is cut whole.
 * **Alignment holes** (on; `--no-holes`, `--hole` size, default 1/4 in): cut in every template at
-  the 12 in stations from the bow end of the hull, on the centreline (half templates 1 in off it;
+  stations every `--hole-spacing` (default 12 in) from the bow end of the hull, on the centreline (half templates 1 in off it;
   upright slabs on the centreline 1 and 4 in above the floor), where at least the hole radius plus
   3/8 in from the edge: the same places in every layer, to mark the foam or dowel the stack.
 * **Cutting**: each sheet's parts in [`cut_order`]: pieces cut out of others first (deepest
@@ -648,6 +681,55 @@ two ends); `stack.foam_order_in`, `stack.over_in`. `--foam-sheet` lists the foam
   12 in station ticks and sanding line (etch or skip), SHEET = the sheet edge. `-o` also gets
   `mold.json` (`jaguar-mold/1`: spec, stack, layers with their foam pieces, pieces with what they
   trace, sheets).
+
+## Drawing sheets (`src/drawing.rs`, `src/sheets.rs`, `src/drafting.rs`)
+`jaguar drawing` and the web "Drawings" button (`GET/POST /api/drawing`) draw a finished winner
+(a failing design is refused) as two sheets, each vector PDF (true scale), SVG and DXF R12:
+sheet 1 the canoe (the competition sheet), sheet 2 the male foam mold. Post-processing only.
+* **Inputs** `[drawing]` (`params::Drawing`, every field shown in examples/canoe.toml): title block
+  text, revisions per sheet, ANSI D (34 x 22) or B (17 x 11), decimals (overall, laminate), view
+  switches (body plan, offsets table, stands diagram), the waterline load case (default the
+  heaviest crew), offsets stations and waterline step, every BOM factor (waste, overlap, coverage,
+  coats, sides), extra graphics, hand BOM rows and per-row overrides, foam sheet, kerf, edge margin.
+  Source: the design file's saved `drawing` (written when an export edits the inputs, so a
+  re-export reproduces the sheets; the rest of the file is kept as is), else its params', else
+  the canoe.toml's, else defaults. canoe_name, school, official_school_name, drawn_by and drawn_date
+  are required (the error names the missing ones). A school name (title block or `[lettering]`)
+  other than `official_school_name` is a WARNING on every export (CLI stderr, web header, file
+  metadata). An unverified design draws with a note and a warning.
+* **Model** (nothing typed): outlines from the analysis surface (`Grid::build_topsides_at`, fine
+  grid plus the table stations; stem radius included), inner wall and Section A-A from the export's
+  offset surface; static waterline = the load case's draft and trim; wall buildup = the punching
+  check's casting schedule (`Punching::schedule`: lifts t/n from the mold face, meshes after lift k,
+  covers; d = `d_over_t` x t; an explicit `d_over_t` has no lifts: error); concrete per mix = the
+  section areas the hull weight comes from, at the search stations (volume x density = hull weight;
+  zoned walls split by the zoned weights); mesh = developed area x meshes; stands = the stands
+  check's position (the stands diagram needs `[stands]`); lettering = the freeboard gate's spans.
+* **Board mold**: board = `drawing.mold_board_in`, else `search.mold_board_in` (else an error);
+  depth - t must be whole boards and so must the rocker (the shape search's own measure; a fixed
+  hull's lofted keel within 1/32 in), else an error naming the board. Layers =
+  `manufacture::stack_only` flat tracing templates of that board, blocks packing (L1 on the floor);
+  the foam pieces are nested on the foam sheets in quarter turns (`manufacture::nest`) with the kerf
+  between pieces and the edge margin clear.
+* **Sheet 1**: elevation and plan (1:25; LOA, max beam and its station, tapers to `taper_fraction`
+  of the beam, mix boundary stations as phantom ordinates, waterline and lowest freeboard, Section
+  A-A cut, Detail C bubble, lettering placement), isometric shaded by mix (do not scale), Section A-A
+  (1:10, hatched), Detail B wall buildup (1:4), Detail C bow end (1:10), end view and body plan
+  (1:15), offsets table (half-breadths at each waterline, keel height, gunwale), stands diagram
+  (1:50), BOM (C-0n concrete, M-01 mesh, S-01 sealer, V-01 vinyl, F-01 foam; (O) overridden and (H)
+  hand rows), notes, scale bar, revisions, title block. **Sheet 2**: layer stack elevation, layer
+  profiles with CL, 12 in station ticks, dowel holes and sanding line, nesting with per-sheet
+  utilization, layer schedule, alignment detail (datums A floor, B CL, C bow station 0), mold BOM
+  (F-01, A-01 adhesive, T-01 surface treatment).
+* **Layout**: views pack in rows left of the BOM / title column; when they do not fit, every scale
+  steps to the next standard one together (then table text shrinks); each view states its scale.
+  ASME Y14.2 lines (thick visible, thin hidden / centre / phantom, thick phantom cutting plane).
+  Border zones and centre marks on four edges; `JAGUAR <version> <commit>[-dirty] (<branch>)`
+  (build.rs) by the border.
+* **Files**: deterministic (no dates or IDs; same design and inputs = same bytes). PDF marks each
+  dimension `/Dim <</V text /M model /S scale /A axis /P [...]>>` (SVG `g.dim` data attributes);
+  BOM overrides and hand rows are listed in the metadata (PDF Info `JaguarBOMRecord`, SVG metadata,
+  DXF 999 comments). DXF is the sheet at paper scale; the logo is PDF / SVG only.
 
 ## Race simulator (`src/race.rs`)
 `jaguar race` races the winner of a result.json (its hull, `hull_weight_lb`, depth and flare;

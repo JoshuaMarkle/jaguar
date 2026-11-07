@@ -281,15 +281,49 @@ fn offset_inward(p: &[(f64, f64)], t: f64, z_top: f64, scale: &[f64]) -> Vec<(f6
         .collect()
 }
 
-/// Build the export mesh for `hull`.
-pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
-    ensure!(spec.depth_in.is_finite() && spec.depth_in > 0.0, "depth must be > 0, got {}", spec.depth_in);
-    ensure!(spec.stations >= 3, "need >= 3 stations");
-    ensure!(spec.girth >= 5 && spec.girth % 2 == 1, "girth points must be odd and >= 5, got {}", spec.girth);
-    if let Some(t) = spec.thickness_in {
-        ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
-        ensure!(!spec.filled, "a filled (unshelled) export has no wall thickness");
+/// The inner wall's half girth at row `r` of `rows` (resampled outer half girths, sheer to keel):
+/// each outer point offset inward by `t` ([`offset_inward`], stretched where the hull tapers along
+/// x so the wall is t thick normal to the surface). Points pushed onto or through the centreline
+/// (a V keel narrower than the wall) are dropped and the girth runs straight to its centreline
+/// point. None at the end rows, where fewer than `min_kept` points keep their breadth, or where
+/// the keel point reaches the top: there the wall is solid concrete.
+fn inner_offset(rows: &[NetRow], r: usize, t: f64, z_top: f64, min_kept: usize) -> Option<Vec<(f64, f64)>> {
+    let nr = rows.len();
+    if r == 0 || r + 1 >= nr {
+        return None;
     }
+    let half = &rows[r].1;
+    let scale: Vec<f64> = (0..half.len())
+        .map(|j| {
+            let (ja, jb) = (j.saturating_sub(1), (j + 1).min(half.len() - 1));
+            let (gy, gz) = (half[jb].0 - half[ja].0, half[jb].1 - half[ja].1);
+            let (pa, pb) = (&rows[r - 1], &rows[r + 1]);
+            let tx = [pb.0 - pa.0, pb.1[j].0 - pa.1[j].0, pb.1[j].1 - pa.1[j].1];
+            let n = cross([0.0, gy, gz], tx);
+            let l = norm(n);
+            if l < 1e-12 { 1.0 } else { (1.0 / (1.0 - (n[0] / l).powi(2)).sqrt()).min(1.5) }
+        })
+        .collect();
+    let q = offset_inward(half, t, z_top, &scale);
+    // Every inner point is the mitred offset of its own outer point, so each inner facet is
+    // parallel to its outer one at distance t (re-resampling the inner girth by arc length would
+    // cut its corners and thicken the wall at the bilge). Only the tail pushed onto the
+    // centreline is respread along its last segment.
+    let (keel, sides) = q.split_last()?;
+    let kept = sides.iter().take_while(|p| p.0 > 1e-6).count();
+    let ok = kept >= min_kept.max(1) && keel.1 < z_top - 1e-6;
+    ok.then(|| {
+        let mut inner = q[..kept].to_vec();
+        let tail = resample(&[q[kept - 1], *keel], q.len() - kept + 1);
+        inner.extend_from_slice(&tail[1..]);
+        inner
+    })
+}
+
+/// The outer surface as rows: (mold depth z_top, one row per exported station, x and the
+/// starboard half girth resampled to `girth / 2 + 1` points, sheer first, keel last), with a stem
+/// line at each end when the hull has one, and the analysis grid's station xs.
+fn station_rows(hull: &Hull, spec: &ExportSpec) -> Result<(f64, Vec<NetRow>, Vec<f64>)> {
     // The export draws what it is given; buildability limits were the run's to apply.
     let ts = crate::hull::Topsides {
         flare_deg: spec.flare_deg,
@@ -359,12 +393,25 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
         };
         rows.push((grid.x[i], half));
     }
+    Ok((z_top, rows, grid.x.clone()))
+}
+
+/// Build the export mesh for `hull`.
+pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
+    ensure!(spec.depth_in.is_finite() && spec.depth_in > 0.0, "depth must be > 0, got {}", spec.depth_in);
+    ensure!(spec.stations >= 3, "need >= 3 stations");
+    ensure!(spec.girth >= 5 && spec.girth % 2 == 1, "girth points must be odd and >= 5, got {}", spec.girth);
+    if let Some(t) = spec.thickness_in {
+        ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
+        ensure!(!spec.filled, "a filled (unshelled) export has no wall thickness");
+    }
+    let (z_top, mut rows, grid_x) = station_rows(hull, spec)?;
     // Air pocket bulkheads: rows at the four bulkhead faces (bow inner/outer, stern inner/outer).
     let mut cuts: Option<[usize; 4]> = None;
     if let (Some(b), Some(l)) = (spec.bulkhead_in(), spec.pocket_in) {
         ensure!(l.is_finite() && l >= 0.0, "air pocket length must be >= 0, got {l}");
         if l > 0.0 {
-            let (x0, xn) = (grid.x[0], *grid.x.last().unwrap());
+            let (x0, xn) = (grid_x[0], *grid_x.last().unwrap());
             let xs = [x0 + l, x0 + l + b, xn - l - b, xn - l];
             ensure!(
                 xs[1] < xs[2],
@@ -435,42 +482,8 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
     if let Some(t) = spec.thickness_in {
         // Inner rows only where the offset wall is a proper U (no point clamped onto the
         // centreline); the narrow ends before/after are solid concrete.
-        let inner_half: Vec<Option<Vec<(f64, f64)>>> = rows
-            .iter()
-            .enumerate()
-            .map(|(r, (_, half))| {
-                if r == 0 || r == nr - 1 {
-                    return None;
-                }
-                let scale: Vec<f64> = (0..half.len())
-                    .map(|j| {
-                        let (ja, jb) = (j.saturating_sub(1), (j + 1).min(half.len() - 1));
-                        let (gy, gz) = (half[jb].0 - half[ja].0, half[jb].1 - half[ja].1);
-                        let (pa, pb) = (&rows[r - 1], &rows[r + 1]);
-                        let tx = [pb.0 - pa.0, pb.1[j].0 - pa.1[j].0, pb.1[j].1 - pa.1[j].1];
-                        let n = cross([0.0, gy, gz], tx);
-                        let l = norm(n);
-                        if l < 1e-12 { 1.0 } else { (1.0 / (1.0 - (n[0] / l).powi(2)).sqrt()).min(1.5) }
-                    })
-                    .collect();
-                let q = offset_inward(half, t, z_top, &scale);
-                // Points pushed onto/through the centreline (V keel narrower than the wall) are
-                // dropped; the inner girth then runs straight to its centreline point.
-                // Every inner point is the mitred offset of its own outer point, so each inner
-                // facet is parallel to its outer one at distance t (re-resampling the inner girth
-                // by arc length would cut its corners and thicken the wall at the bilge).
-                // Only the tail pushed onto the centreline is respread along its last segment.
-                let (keel, sides) = q.split_last().unwrap();
-                let kept = sides.iter().take_while(|p| p.0 > 1e-6).count();
-                let ok = kept >= 2 && keel.1 < z_top - 1e-6;
-                ok.then(|| {
-                    let mut inner = q[..kept].to_vec();
-                    let tail = resample(&[q[kept - 1], *keel], q.len() - kept + 1);
-                    inner.extend_from_slice(&tail[1..]);
-                    inner
-                })
-            })
-            .collect();
+        let inner_half: Vec<Option<Vec<(f64, f64)>>> =
+            (0..nr).map(|r| inner_offset(&rows, r, t, z_top, 2)).collect();
         // The hollow part is the longest run of stations with a valid offset U (ties: first);
         // everything fore and aft of it is solid concrete.
         let (mut ra, mut rb, mut best) = (0, 0, 0);
@@ -635,6 +648,113 @@ pub fn build_mesh(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
             }
         }
     } else if outward_flip(&mesh) {
+        for t in &mut mesh.tris {
+            t.swap(1, 2);
+        }
+    }
+    Ok(mesh)
+}
+
+/// The mold's surface as station rows (x, starboard half girth from the sheer on the deck at the
+/// mold depth to the keel on the centreline): the wall's inner face ([`inner_offset`]) wherever
+/// it has breadth, tapering into the ends, a stem line (all y = 0) first and last, never nearer
+/// a tip than the wall thickness ([`build_mold`]). The surface `build_mold`, `manufacture.rs` and
+/// the mold drawing sheet all use. Needs `thickness_in`.
+pub fn mold_rows(hull: &Hull, spec: &ExportSpec) -> Result<Vec<NetRow>> {
+    let t = spec.thickness_in.context("the mold is the canoe less its wall: give the wall thickness")?;
+    ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
+    ensure!(spec.stations >= 3, "need >= 3 stations");
+    ensure!(spec.girth >= 5 && spec.girth % 2 == 1, "girth points must be odd and >= 5, got {}", spec.girth);
+    let wall = ExportSpec { pocket_in: None, filled: false, thickness_in: Some(t), ..spec.clone() };
+    let (z_top, rows, _) = station_rows(hull, &wall)?;
+    let nr = rows.len();
+    let inner: Vec<Option<Vec<(f64, f64)>>> = (0..nr).map(|r| inner_offset(&rows, r, t, z_top, 1)).collect();
+    // The mold: the longest run of stations where the inner offset has breadth (ties: first).
+    let (mut ra, mut rb, mut best) = (0, 0, 0);
+    let mut r = 0;
+    while r < nr {
+        if inner[r].is_none() {
+            r += 1;
+            continue;
+        }
+        let s = r;
+        while r < nr && inner[r].is_some() {
+            r += 1;
+        }
+        if r - s > best {
+            (ra, rb, best) = (s, r - 1, r - s);
+        }
+    }
+    // The stem is a wall too: the mold ends at least t inside each tip (the canoe's stem lines).
+    let (x0, xn) = (rows[0].0, rows[nr - 1].0);
+    while ra <= rb && rows[ra].0 <= x0 + t + 1e-6 {
+        ra += 1;
+    }
+    while rb >= ra && rows[rb].0 >= xn - t - 1e-6 {
+        rb -= 1;
+    }
+    ensure!(rb > ra, "wall thickness {t} in leaves no hollow section: there is no mold");
+    let h = rows[0].1.len();
+    let keel_z = |r: usize| inner[r].as_ref().and_then(|v| v.last()).map_or(z_top, |p| p.1);
+    // inner_offset is None at the first and last rows, so ra >= 1 and rb + 1 < nr.
+    let stem = |x: f64, zk: f64| -> NetRow { (x, resample(&[(0.0, z_top), (0.0, zk.min(z_top))], h)) };
+    let (bow, stern) = (rows[ra - 1].0.max(x0 + t), rows[rb + 1].0.min(xn - t));
+    let mut net: Vec<NetRow> = vec![stem(bow, keel_z(ra))];
+    for (r, half) in inner.iter().enumerate().take(rb + 1).skip(ra) {
+        let mut half = half.clone().context("inner row")?;
+        // The sheer lies on the deck (the offset of a flared side can sit a hair under it).
+        if let Some(p) = half.first_mut() {
+            p.1 = z_top;
+        }
+        net.push((rows[r].0, half));
+    }
+    net.push(stem(stern, keel_z(rb)));
+    Ok(net)
+}
+
+/// The male mold: the canoe less its wall, as cut and sanded. Its surface is the wall's inner
+/// face ([`inner_offset`]: the outer surface offset inward by `thickness_in`, the same mitred
+/// offset as the STEP wall's inner face) at every station where that offset still has breadth,
+/// so it tapers into the ends like the canoe; where the two walls meet (the solid concrete tip)
+/// it closes on a stem line at the next station, never nearer a tip than t (the stem is a wall
+/// too). Filled in to the mold depth by a flat deck at the gunwale plane (the shop floor: the
+/// mold is built upside down). One closed solid; its rows go to the STEP as a smooth B-spline
+/// trough and the deck plane (as `filled`). Air pockets are ignored. Err without a thickness.
+pub fn build_mold(hull: &Hull, spec: &ExportSpec) -> Result<Mesh> {
+    let t = spec.thickness_in.context("the mold is the canoe less its wall: give the wall thickness")?;
+    ensure!(t.is_finite() && t > 0.0, "thickness must be > 0, got {t}");
+    ensure!(spec.depth_in.is_finite() && spec.depth_in > 0.0, "depth must be > 0, got {}", spec.depth_in);
+    ensure!(spec.stations >= 3, "need >= 3 stations");
+    ensure!(spec.girth >= 5 && spec.girth % 2 == 1, "girth points must be odd and >= 5, got {}", spec.girth);
+    let net = mold_rows(hull, spec)?;
+    let z_top = net.first().and_then(|r| r.1.first()).map_or(spec.depth_in, |p| p.1);
+    let full = |half: &[(f64, f64)]| -> Vec<(f64, f64)> {
+        half.iter().copied().chain(half.iter().rev().skip(1).map(|&(y, z)| (-y, z))).collect()
+    };
+    let m = 2 * net.first().map_or(0, |r| r.1.len()) - 1;
+    let mut verts: Vec<[f64; 3]> = vec![];
+    let mut start = vec![];
+    for (x, half) in &net {
+        start.push(verts.len());
+        verts.extend(full(half).iter().map(|&(y, z)| [*x, y, z]));
+    }
+    let mut tris: Vec<[u32; 3]> = vec![];
+    let quad = |tris: &mut Vec<[u32; 3]>, a: usize, b: usize, c: usize, d: usize| {
+        tris.push([a as u32, b as u32, c as u32]);
+        tris.push([a as u32, c as u32, d as u32]);
+    };
+    for w in start.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        for j in 0..m - 1 {
+            quad(&mut tris, a + j, b + j, b + j + 1, a + j + 1);
+        }
+        // Deck at the gunwale plane, sheer to sheer (the stem lines collapse to a point there).
+        quad(&mut tris, a, a + m - 1, b + m - 1, b);
+    }
+    let brep = Some(Brep { z_top, outer: net, inner: None, voids: vec![] });
+    let mut mesh = clean(Mesh { verts, tris, closed: true, brep, inner_rows: None });
+    orient(&mut mesh)?;
+    if mesh.volume() < 0.0 {
         for t in &mut mesh.tris {
             t.swap(1, 2);
         }
@@ -1315,6 +1435,80 @@ mod tests {
         let (lo, hi) = m.bbox();
         assert!((hi[2] - 12.0).abs() < 1e-9 && lo[2].abs() < 1e-9);
         assert!((hi[1] + lo[1]).abs() < 1e-9, "symmetric");
+    }
+
+    #[test]
+    fn mold_is_the_canoe_less_its_wall() {
+        let (t, d) = (0.375, 12.0);
+        let spec = ExportSpec {
+            depth_in: d,
+            thickness_in: Some(t),
+            flare_deg: 0.0,
+            gunwale_radius_in: None,
+            stations: 81,
+            girth: 31,
+            pocket_in: Some(20.0),
+            layers: Some(2),
+            filled: false,
+        };
+        let h = off1();
+        let m = build_mold(&h, &spec).unwrap();
+        assert!(m.closed && m.volume() > 0.0);
+        let wall = build_mesh(&h, &ExportSpec { pocket_in: None, ..spec.clone() }).unwrap();
+        let hollow = wall.inner_rows.unwrap();
+        let net = &m.brep.as_ref().expect("smooth: rows for the B-spline STEP").outer;
+        // Over the hollow run the mold IS the wall's inner face, row for row.
+        for (x, half) in &hollow {
+            let row = net.iter().find(|r| (r.0 - x).abs() < 1e-9).expect("same stations");
+            for (p, q) in row.1.iter().zip(half) {
+                assert!((p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-6, "x {x}: {p:?} vs {q:?}");
+            }
+        }
+        // It runs on into the ends past the hollow run (no flat end) and closes on stem lines,
+        // inside the canoe.
+        let (lo, hi) = m.bbox();
+        let (xa, xb) = (hollow.first().unwrap().0, hollow.last().unwrap().0);
+        assert!(lo[0] < xa - 1e-6 && hi[0] > xb + 1e-6, "{} {} vs {xa} {xb}", lo[0], hi[0]);
+        assert!(
+            lo[0] >= t - 1e-9 && hi[0] <= h.length - t + 1e-9,
+            "a wall inside each stem: {} {}",
+            lo[0],
+            hi[0]
+        );
+        for end in [net.first().unwrap(), net.last().unwrap()] {
+            assert!(end.1.iter().all(|p| p.0.abs() < 1e-12), "stem line at x {}", end.0);
+        }
+        assert!((hi[2] - d).abs() < 1e-9);
+        let keel = hollow.iter().map(|r| r.1.last().unwrap().1).fold(f64::INFINITY, f64::min);
+        assert!((lo[2] - keel).abs() < 1e-9 && keel >= t - 1e-9, "inner keel {keel}");
+        // Vertical sides: t narrower than the hull each side at the gunwale.
+        let outer = Grid::build(&h, d, 161);
+        let beam = (0..outer.nx()).map(|i| outer.y(i, outer.nz() - 1)).fold(0.0, f64::max);
+        assert!((hi[1] - (beam - t)).abs() < 0.01, "{} vs {}", hi[1], beam - t);
+        assert!((lo[1] + hi[1]).abs() < 1e-9, "symmetric");
+        // Volume: its sections (closed at the deck) integrated along it.
+        let area = |half: &[(f64, f64)]| {
+            let p: Vec<(f64, f64)> =
+                half.iter().copied().chain(half.iter().rev().skip(1).map(|&(y, z)| (-y, z))).collect();
+            let n = p.len();
+            0.5 * (0..n).map(|i| p[i].0 * p[(i + 1) % n].1 - p[(i + 1) % n].0 * p[i].1).sum::<f64>().abs()
+        };
+        let v: f64 = net.windows(2).map(|w| 0.5 * (area(&w[0].1) + area(&w[1].1)) * (w[1].0 - w[0].0)).sum();
+        assert!((m.volume() / v - 1.0).abs() < 0.01, "{} vs {v}", m.volume());
+        let filled =
+            build_mesh(&h, &ExportSpec { thickness_in: None, filled: true, pocket_in: None, ..spec.clone() })
+                .unwrap();
+        assert!(m.volume() < filled.volume());
+        assert!(build_mold(&h, &ExportSpec { thickness_in: None, ..spec }).is_err(), "needs the wall");
+        // STEP: one smooth solid (two B-spline halves and the deck), far smaller than facets.
+        let step = to_step(&m, "mold");
+        assert!(
+            step.contains("MANIFOLD_SOLID_BREP") && step.matches("B_SPLINE_SURFACE_WITH_KNOTS").count() == 2
+        );
+        assert_eq!(step.matches("ADVANCED_FACE").count(), 3);
+        let facets = to_step(&Mesh { brep: None, ..m.clone() }, "mold");
+        assert!(step.len() * 5 < facets.len(), "{} vs {}", step.len(), facets.len());
+        assert_eq!(to_stl(&m, "mold").len(), 84 + 50 * m.tris.len());
     }
 
     #[test]

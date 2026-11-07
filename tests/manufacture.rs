@@ -403,6 +403,128 @@ fn hybrid_flat_layers_then_keel_slabs_on_top() {
     assert!(from_result(&ex, &MoldSpec { boards: Boards::Mold, ..spec }).is_err());
 }
 
+#[test]
+fn pancake_thins_the_layers_toward_the_keel() {
+    let ex = example();
+    let spec = MoldSpec { orientation: Orientation::Pancake, ..MoldSpec::default() };
+    let l = from_result(&ex, &spec).unwrap();
+    let st = &l.stack;
+    let order = &st.foam_order_in;
+    // Every layer is stock (2 in) or a slice resawn from it, and the stack covers the mold.
+    for ly in &l.layers {
+        assert!(!ly.upright);
+        match ly.resawn_from_in {
+            Some(from) => assert!(from == 2.0 && [1.0, 0.5].contains(&ly.foam_in), "{}", ly.label),
+            None => assert_eq!(ly.foam_in, 2.0, "{}", ly.label),
+        }
+    }
+    let sum: f64 = order.iter().sum();
+    assert!(sum >= st.height_in - 1e-9 && st.over_in < 0.5, "{order:?}");
+    // Stock on the floor (steep sides), the thinnest slice at the keel (flat bottom).
+    assert_eq!((order[0], *order.last().unwrap()), (2.0, 0.5), "{order:?}");
+    assert!(l.layers.iter().any(|ly| ly.resawn_from_in.is_some()));
+    // Within the step limit, and better than all flat on labor, sanding and precision.
+    assert!(st.max_step_in <= spec.max_step_in + 1e-9, "{}", st.max_step_in);
+    let f = flat();
+    assert!(l.labor.total_hr < f.labor.total_hr && st.sand_ft3 < f.stack.sand_ft3);
+    assert!(l.labor.resaw_hr > 0.0 && l.labor.resaw_ft2 > 0.0);
+    check_sheets(&l);
+    // Its comparison row is this layout.
+    let cur: Vec<_> = l.alternatives.iter().filter(|a| a.current).collect();
+    assert_eq!(cur.len(), 1);
+    assert!((cur[0].result.as_ref().unwrap().labor.total_hr - l.labor.total_hr).abs() < 1e-9);
+    // A finer step limit takes more, thinner layers; same input, same layout.
+    let fine = MoldSpec { max_step_in: 0.5, ..spec.clone() };
+    let fl = from_result(&ex, &fine).unwrap();
+    assert!(fl.stack.foam_layers > st.foam_layers && fl.stack.max_step_in <= 0.5 + 1e-9);
+    assert_eq!(from_result(&ex, &spec).unwrap().stack.foam_order_in, *order);
+    // No slice thin enough for the step limit, boards in the mold, or odd thicknesses: errors.
+    let err = |s: MoldSpec| format!("{:#}", from_result(&ex, &s).unwrap_err());
+    assert!(err(MoldSpec { slice_in: vec![1.0], max_step_in: 0.5, ..spec.clone() }).contains("step"));
+    assert!(err(MoldSpec { boards: Boards::Mold, ..spec.clone() }).contains("tracing templates"));
+    assert!(err(MoldSpec { slice_in: vec![0.3], ..spec.clone() }).contains("64ths"));
+    assert!(err(MoldSpec { slice_in: vec![3.0], ..spec }).contains("thicker foam"));
+}
+
+/// The stack and pieces of `spec` for the example winner, not packed on sheets (quick).
+fn stack(spec: &MoldSpec) -> anyhow::Result<Layout> {
+    let (hull, mut es) = jaguar::export::from_result(&example(), 481, 61).unwrap();
+    es.pocket_in = None;
+    jaguar::manufacture::stack_only(&hull, &es, spec)
+}
+
+#[test]
+fn top_blocks_vary_in_length_over_equal_lower_blocks() {
+    let spec = MoldSpec {
+        orientation: Orientation::Pancake,
+        blocks: Some(4),
+        top_blocks: Some(16),
+        ..MoldSpec::default()
+    };
+    let l = stack(&spec).unwrap();
+    let st = &l.stack;
+    // The upper layers start at the first resawn layer.
+    let first = l.layers.iter().find(|ly| ly.resawn_from_in.is_some()).unwrap();
+    assert_eq!(st.top_from_in, Some(first.pos_in));
+    // 4 equal lower blocks, 16 upper ones.
+    assert_eq!((st.joints_in.len(), st.top_joints_in.len()), (3, 15));
+    let gaps: Vec<f64> = st.joints_in.windows(2).map(|w| w[1] - w[0]).collect();
+    assert!(gaps.iter().all(|g| (g - gaps[0]).abs() < 1e-6), "{:?}", st.joints_in);
+    // Each layer's pieces end on its own joints: lower ones on the lower, upper on the upper.
+    for ly in &l.layers {
+        let top = ly.pos_in >= first.pos_in - 1e-9;
+        let joints = if top { &st.top_joints_in } else { &st.joints_in };
+        let n = ly
+            .foam_labels
+            .iter()
+            .map(|t| t.rsplit('-').next().unwrap().parse::<usize>().unwrap())
+            .max()
+            .unwrap();
+        assert!(n <= joints.len() + 1, "{}: block {n}", ly.label);
+        let all: Vec<Pt> = ly.foam.concat();
+        let (lx, hx) = bbox(&all);
+        for f in &ly.foam {
+            let (lo, hi) = bbox(f);
+            for x in [lo[0], hi[0]] {
+                let tip = (x - lx[0]).abs() < 1e-6 || (x - hx[0]).abs() < 1e-6;
+                assert!(tip || joints.iter().any(|j| (j - x).abs() < 1e-6), "{}: end {x}", ly.label);
+            }
+        }
+    }
+    // Varied: short blocks at the ends, long ones midships; mirrored on this double-ended hull.
+    let tj = &st.top_joints_in;
+    let lens: Vec<f64> = tj.windows(2).map(|w| w[1] - w[0]).collect();
+    let (short, long) =
+        (lens.iter().copied().fold(f64::INFINITY, f64::min), lens.iter().copied().fold(0.0, f64::max));
+    assert!(short < 0.4 * long, "{lens:?}");
+    assert!(lens[0] < lens[lens.len() / 2] && lens[lens.len() - 1] < lens[lens.len() / 2], "{lens:?}");
+    let mid = 0.5 * (tj[0] + tj[tj.len() - 1]);
+    for (a, b) in tj.iter().zip(tj.iter().rev()) {
+        assert!((a + b - 2.0 * mid).abs() < 1e-6, "{tj:?}");
+    }
+    // Odd counts leave one block across midships; too few blocks to fit a sheet is an error.
+    let odd = stack(&MoldSpec { top_blocks: Some(15), ..spec.clone() }).unwrap();
+    assert_eq!(odd.stack.top_joints_in.len(), 14);
+    assert!(odd.stack.top_joints_in.iter().all(|j| (j - mid).abs() > 1.0));
+    let few = format!("{:#}", stack(&MoldSpec { top_blocks: Some(2), ..spec.clone() }).unwrap_err());
+    assert!(few.contains("at least"), "{few}");
+    // Without top blocks every layer shares the lower joints.
+    let same = stack(&MoldSpec { top_blocks: None, ..spec }).unwrap();
+    assert!(same.stack.top_from_in.is_none() && same.stack.top_joints_in.is_empty());
+    assert_eq!(same.stack.joints_in.len(), 3);
+}
+
+#[test]
+fn hole_spacing_sets_the_stations() {
+    let base = stack(&MoldSpec::default()).unwrap();
+    let wide = stack(&MoldSpec { hole_spacing_in: 24.0, ..MoldSpec::default() }).unwrap();
+    let holes = |l: &Layout| l.pieces.iter().flat_map(|p| p.holes.clone()).collect::<Vec<_>>();
+    let (h12, h24) = (holes(&base), holes(&wide));
+    assert!(!h24.is_empty() && h24.len() < h12.len());
+    assert!(h24.iter().all(|h| ((h[0] / 24.0) - (h[0] / 24.0).round()).abs() < 1e-9));
+    assert!(stack(&MoldSpec { hole_spacing_in: 0.0, ..MoldSpec::default() }).is_err());
+}
+
 /// The default all-flat layout's sanding estimate.
 fn flat_sand(_ex: &str) -> f64 {
     flat().stack.sand_ft3
@@ -412,7 +534,8 @@ fn flat_sand(_ex: &str) -> f64 {
 fn labor_estimate_adds_up_and_follows_the_layout() {
     let l = flat();
     let lb = &l.labor;
-    let parts = lb.trace_hr + lb.cut_hr + lb.sand_hr + lb.assemble_hr;
+    let parts = lb.trace_hr + lb.cut_hr + lb.sand_hr + lb.assemble_hr + lb.resaw_hr;
+    assert_eq!((lb.resaw_hr, lb.resaw_ft2), (0.0, 0.0), "nothing resawn without pancake");
     assert!((lb.total_hr - parts).abs() < 1e-9 && lb.total_hr > 0.0);
     assert_eq!(lb.traces, l.pieces.iter().map(|p| p.traces.len()).sum::<usize>());
     assert_eq!(lb.foam_pieces, l.stack.foam_pieces);
@@ -436,6 +559,7 @@ fn alternatives_compare_the_other_layouts() {
         [
             "All flat",
             "All upright",
+            "Pancake (flat, thinner where it curves)",
             "Flat + 2 in keel slabs",
             "Flat + 4 in keel slabs (two 2 in sheets glued)"
         ]
@@ -446,7 +570,7 @@ fn alternatives_compare_the_other_layouts() {
     let r = cur[0].result.as_ref().unwrap();
     assert!((r.labor.total_hr - l.labor.total_hr).abs() < 1e-9 && r.templates == l.pieces.len());
     // Keel slab rows say where they switch, and sand less than all flat.
-    for a in &l.alternatives[2..] {
+    for a in &l.alternatives[3..] {
         let ar = a.result.as_ref().unwrap();
         assert!(ar.switch_in.is_some() && ar.sand_ft3 < r.sand_ft3, "{}", a.name);
     }

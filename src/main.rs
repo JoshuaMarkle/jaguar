@@ -123,8 +123,28 @@ enum Cmd {
         #[arg(long)]
         no_pockets: bool,
         /// Unshelled: the outer hull filled in to the mold depth, one solid (no wall, no pockets)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "mold")]
         filled: bool,
+        /// The male mold: the canoe less its wall (the inner surface filled in to the mold depth,
+        /// solid concrete ends left out), one solid
+        #[arg(long)]
+        mold: bool,
+    },
+    /// Engineering drawing sheets of the winner (src/sheets.rs): sheet 1 the canoe, sheet 2 the
+    /// male foam mold, each as PDF, SVG and DXF.
+    Drawing {
+        #[arg(default_value = "result.json")]
+        result: PathBuf,
+        /// Folder for the sheet files (created if missing)
+        #[arg(short, long, default_value = "drawings")]
+        out: PathBuf,
+        /// A canoe.toml whose [drawing] table (title block, BOM factors, views) is used; it is
+        /// saved into the result so a re-export reproduces the same sheets
+        #[arg(long)]
+        spec: Option<PathBuf>,
+        /// Sheet size d (34 x 22) | b (17 x 11); saved into the result like --spec
+        #[arg(long)]
+        size: Option<String>,
     },
     /// Hardboard for the winner's male foam mold, packed onto sheets, one DXF per sheet for the
     /// water jet: tracing templates for the foam layers, or boards between them (src/manufacture.rs).
@@ -138,12 +158,22 @@ enum Cmd {
         #[arg(long)]
         in_mold: bool,
         /// Layers standing upright across the canoe (ribs) instead of laid flat
-        #[arg(long, conflicts_with = "hybrid")]
+        #[arg(long, conflicts_with_all = ["hybrid", "pancake"])]
         vertical: bool,
         /// Flat layers up to a switch height, then upright keel slabs across the canoe on top
         /// (flat layers follow the sides, upright slabs the flat bottom: less sanding)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "pancake")]
         hybrid: bool,
+        /// Flat layers of varying thickness: stock foam up the sides, thinner resawn slices where
+        /// the bottom flattens out, for the least labor with every step within --max-step
+        #[arg(long)]
+        pancake: bool,
+        /// With --pancake: thinner layers you can resaw from the --foam stock, in, comma separated
+        #[arg(long, value_delimiter = ',', default_value = "1,0.5")]
+        slice: Vec<f64>,
+        /// With --pancake: deepest step a layer may leave before sanding, in (precision)
+        #[arg(long, default_value_t = 1.0)]
+        max_step: f64,
         /// With --hybrid: height above the floor where the flat layers stop, in (rounded to a
         /// layer top; default: the one leaving the least foam to sand)
         #[arg(long)]
@@ -156,6 +186,18 @@ enum Cmd {
         /// flipped and shared)
         #[arg(long, default_value = "blocks")]
         packing: String,
+        /// Blocks packing: equal blocks along the canoe for the lower layers (default: the fewest
+        /// that fit)
+        #[arg(long)]
+        blocks: Option<usize>,
+        /// Blocks packing: cut the upper layers into this many blocks of varied length, short
+        /// where the hull changes fastest along its length
+        #[arg(long)]
+        top_blocks: Option<usize>,
+        /// With --top-blocks: height above the floor where the upper layers start, in (rounded to
+        /// a layer; default: pancake, the first resawn layer, else mid-height)
+        #[arg(long)]
+        top_from: Option<f64>,
         /// Foam sheet thicknesses on hand, in, comma separated (e.g. 1.5,2): layers mix them
         #[arg(long, value_delimiter = ',', default_value = "2")]
         foam: Vec<f64>,
@@ -183,6 +225,9 @@ enum Cmd {
         /// Alignment hole size, in
         #[arg(long, default_value_t = 0.25)]
         hole: f64,
+        /// Alignment holes every this many inches along the canoe
+        #[arg(long, default_value_t = 12.0)]
+        hole_spacing: f64,
         /// Water-jet cut width to allow for, in (0: the water-jet software compensates)
         #[arg(long, default_value_t = 0.0)]
         kerf: f64,
@@ -447,6 +492,7 @@ fn main() -> Result<()> {
             girth,
             no_pockets,
             filled,
+            mold,
         } => {
             use jaguar::export;
             let text = std::fs::read_to_string(&input)?;
@@ -496,7 +542,8 @@ fn main() -> Result<()> {
             let fmt = format
                 .or_else(|| out.extension().map(|e| e.to_string_lossy().to_lowercase()))
                 .unwrap_or_else(|| "step".into());
-            let mesh = export::build_mesh(&hull, &spec)?;
+            let mesh =
+                if mold { export::build_mold(&hull, &spec)? } else { export::build_mesh(&hull, &spec)? };
             match fmt.as_str() {
                 "step" | "stp" => std::fs::write(&out, export::to_step(&mesh, &hull.name))?,
                 "stl" => std::fs::write(&out, export::to_stl(&mesh, &hull.name))?,
@@ -506,7 +553,9 @@ fn main() -> Result<()> {
             println!(
                 "wrote {} ({}, {} facets, {:.1} x {:.1} x {:.1} in{})",
                 out.display(),
-                if spec.filled {
+                if mold {
+                    "male mold, canoe less the wall"
+                } else if spec.filled {
                     "filled hull"
                 } else if mesh.closed {
                     "solid"
@@ -517,13 +566,13 @@ fn main() -> Result<()> {
                 hi[0] - lo[0],
                 hi[1] - lo[1],
                 hi[2] - lo[2],
-                match (spec.filled, mesh.closed) {
+                match (spec.filled || mold, mesh.closed) {
                     (true, _) => format!(", volume to the mold depth {:.0} in^3", mesh.volume()),
                     (false, true) => format!(", wall volume {:.0} in^3", mesh.volume()),
                     _ => String::new(),
                 }
             );
-            if let (Some(l), Some(b)) = (pockets, spec.bulkhead_in()) {
+            if let (false, Some(l), Some(b)) = (mold, pockets, spec.bulkhead_in()) {
                 let one = match spec.layers {
                     Some(n) => format!("one of {n} casting layers"),
                     None => "the whole wall: punching gives no layer count".into(),
@@ -533,15 +582,52 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Cmd::Drawing { result, out, spec, size } => {
+            use jaguar::{drawing, sheets};
+            let text =
+                std::fs::read_to_string(&result).with_context(|| format!("reading {}", result.display()))?;
+            let v: serde_json::Value = serde_json::from_str(&text).context("parsing the result")?;
+            let mut d = match &spec {
+                Some(p) => drawing::spec_from_toml(p)?
+                    .with_context(|| format!("{} has no [drawing]", p.display()))?,
+                None => drawing::spec_of(&v, None)?,
+            };
+            if let Some(s) = &size {
+                d.sheet_size = match s.to_ascii_lowercase().as_str() {
+                    "d" => jaguar::params::SheetSize::D,
+                    "b" => jaguar::params::SheetSize::B,
+                    s => anyhow::bail!("unknown sheet size '{s}' (d | b)"),
+                };
+            }
+            let dw = sheets::render(&text, d.clone(), sheets::STAMP)?;
+            for w in &dw.warnings {
+                eprintln!("{w}");
+            }
+            let files = sheets::write(&dw, &out)?;
+            if spec.is_some() || size.is_some() {
+                std::fs::write(&result, drawing::with_spec(&text, &d)?)
+                    .with_context(|| format!("writing {}", result.display()))?;
+                println!("drawing inputs saved into {}", result.display());
+            }
+            for f in files {
+                println!("wrote {}", out.join(f).display());
+            }
+        }
         Cmd::Mold {
             result,
             out,
             in_mold,
             vertical,
             hybrid,
+            pancake,
+            slice,
+            max_step,
             switch,
             keel_foam,
             packing,
+            blocks,
+            top_blocks,
+            top_from,
             foam,
             foam_sheet,
             board,
@@ -551,6 +637,7 @@ fn main() -> Result<()> {
             ring,
             no_holes,
             hole,
+            hole_spacing,
             kerf,
             dxf_marks,
             half_canoe,
@@ -563,11 +650,19 @@ fn main() -> Result<()> {
                     Orientation::Vertical
                 } else if hybrid {
                     Orientation::Hybrid
+                } else if pancake {
+                    Orientation::Pancake
                 } else {
                     Orientation::Flat
                 },
                 switch_in: switch,
                 keel_foam_in: keel_foam,
+                slice_in: slice,
+                max_step_in: max_step,
+                blocks,
+                top_blocks,
+                top_from_in: top_from,
+                hole_spacing_in: hole_spacing,
                 packing: match packing.as_str() {
                     "blocks" => Packing::Blocks,
                     "continuous" => Packing::Continuous,
@@ -610,6 +705,8 @@ fn main() -> Result<()> {
                     "standing upright"
                 } else if hybrid {
                     "flat + upright keel"
+                } else if pancake {
+                    "laid flat, thinner where the hull flattens"
                 } else {
                     "laid flat"
                 },
@@ -630,14 +727,34 @@ fn main() -> Result<()> {
                     println!("foam layers {} in ({:.2} in over the mold)", join(&s.foam_order_in), s.over_in)
                 }
             }
+            let resawn: Vec<String> = l
+                .layers
+                .iter()
+                .filter_map(|ly| {
+                    ly.resawn_from_in.map(|f| format!("{} ({} in from {f} in)", ly.label, ly.foam_in))
+                })
+                .collect();
+            if !resawn.is_empty() {
+                println!("resaw: {}", resawn.join(", "));
+            }
+            let fmt = |v: &[f64]| v.iter().map(|x| format!("{x:.1}")).collect::<Vec<_>>().join(", ");
+            if let Some(h) = s.top_from_in {
+                println!(
+                    "blocks: {} lower (joints at {} in), {} upper from {h:.3} in above the floor (joints at {} in)",
+                    s.joints_in.len() + 1,
+                    fmt(&s.joints_in),
+                    s.top_joints_in.len() + 1,
+                    fmt(&s.top_joints_in)
+                );
+            }
             println!(
                 "about {:.2} ft3 of foam to sand off after cutting (deepest step {:.2} in)",
                 s.sand_ft3, s.max_step_in
             );
             let lb = &l.labor;
             println!(
-                "labor about {:.1} h: tracing {:.1}, cutting {:.1}, sanding {:.1}, assembly {:.1} (estimate)",
-                lb.total_hr, lb.trace_hr, lb.cut_hr, lb.sand_hr, lb.assemble_hr
+                "labor about {:.1} h: tracing {:.1}, cutting {:.1}, sanding {:.1}, assembly {:.1}, resawing {:.1} (estimate)",
+                lb.total_hr, lb.trace_hr, lb.cut_hr, lb.sand_hr, lb.assemble_hr, lb.resaw_hr
             );
             println!("compare (same stock, packing and rates):");
             for alt in &l.alternatives {
