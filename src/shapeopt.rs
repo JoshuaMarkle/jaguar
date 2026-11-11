@@ -212,6 +212,27 @@ pub fn planned_shapes(ss: &ShapeSearch) -> usize {
     ss.samples + ss.refine_rounds.min(TYPICAL_ROUNDS) * K_BEST * 2 * free_dims(ss).len()
 }
 
+/// The search cut to about `budget` planned shapes ([`planned_shapes`]), as (samples,
+/// refine_rounds); unchanged when it already fits. The phone app's "phone-sized" run (docs/SPEC.md
+/// "Phone app"). Refinement gets at most half the budget (it is what converges, but each round
+/// costs `K_BEST` x 2 x free factors shapes), the samples the rest; never more than the search
+/// asked for, never fewer than [`MIN_SIZED_SAMPLES`] samples.
+pub fn sized(ss: &ShapeSearch, budget: usize) -> (usize, usize) {
+    if planned_shapes(ss) <= budget {
+        return (ss.samples, ss.refine_rounds);
+    }
+    let per_round = K_BEST * 2 * free_dims(ss).len();
+    let rounds = match per_round {
+        0 => ss.refine_rounds,
+        r => ss.refine_rounds.min(TYPICAL_ROUNDS).min(budget / 2 / r),
+    };
+    let samples = budget.saturating_sub(rounds * per_round).max(MIN_SIZED_SAMPLES).min(ss.samples);
+    (samples, rounds)
+}
+
+/// Fewest samples [`sized`] leaves: below this the space is barely covered.
+pub const MIN_SIZED_SAMPLES: usize = 16;
+
 /// Refine rounds a search typically runs before [`MIN_STEP`] stops it (the team's 2026-10-20
 /// settings, 7 free factors: 19).
 const TYPICAL_ROUNDS: usize = 24;

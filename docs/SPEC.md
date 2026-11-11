@@ -870,6 +870,12 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
   fixed hull's worker is ended and Resume runs it again from the start (the progress the page has
   seen is not repeated). End: a shape search scores no new shapes and verifies the best so far
   (`ended_early`); a fixed hull is cancelled (state "stopped", the last result stays).
+* **Phone-sized shape search:** Run on a shape search estimates its time here (planned shapes x
+  seconds per shape / workers; seconds per shape measured by this device's last shape search, else
+  20 s). Over 1.5 x 15 min it asks: **Phone-sized** (`shapeopt::sized`: the same bounds and seed,
+  samples and refine rounds cut so about 15 min of shapes are planned; refinement at most half of
+  them, at least 16 samples), **Full search**, or **Cancel** (409, nothing run). The run's
+  result.json records the samples and rounds it used; the form and canoe.toml keep theirs.
 * **API:** every `/api/...` request of the page, through `web/pwa/shim.js` (loaded first by the
   PWA build only), with `serve`'s JSON, status codes and download names. `open-folder` and `quit`
   answer 403 as in `jaguar serve` (`session.desktop` is false; their buttons stay hidden).

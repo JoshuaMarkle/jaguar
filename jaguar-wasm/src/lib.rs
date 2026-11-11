@@ -229,6 +229,40 @@ pub extern "C" fn shape_step(ptr: *mut u8, len: usize) -> u64 {
     })
 }
 
+/// `{toml, base_dir, budget}` -> `{shape_search: false}` for a fixed hull, else the search's
+/// `{samples, refine_rounds, planned}` and `sized`: the same for the phone-sized search of about
+/// `budget` shapes (`shapeopt::sized`) with its canoe.toml text (only those two values changed).
+#[unsafe(no_mangle)]
+pub extern "C" fn shape_size(ptr: *mut u8, len: usize) -> u64 {
+    call(ptr, len, |h, _| {
+        let text: String = field(&h, "toml")?;
+        let base: String = field(&h, "base_dir")?;
+        let budget: usize = field(&h, "budget")?;
+        let p = Params::parse(&text, Path::new(&base))?;
+        let Some(ss) = p.shape_search.as_ref().filter(|_| p.hull.file.is_none()) else {
+            return Ok(json!({ "shape_search": false }));
+        };
+        let (samples, rounds) = jaguar::shapeopt::sized(ss, budget);
+        let cut = jaguar::params::ShapeSearch { samples, refine_rounds: rounds, ..ss.clone() };
+        let mut table: toml::Table = toml::from_str(&text)?;
+        let s = table.get_mut("shape_search").and_then(|s| s.as_table_mut()).context("[shape_search]")?;
+        s.insert("samples".into(), toml::Value::Integer(samples as i64));
+        s.insert("refine_rounds".into(), toml::Value::Integer(rounds as i64));
+        Ok(json!({
+            "shape_search": true,
+            "samples": ss.samples,
+            "refine_rounds": ss.refine_rounds,
+            "planned": jaguar::shapeopt::planned_shapes(ss),
+            "sized": {
+                "samples": samples,
+                "refine_rounds": rounds,
+                "planned": jaguar::shapeopt::planned_shapes(&cut),
+                "toml": toml::to_string(&table)?,
+            },
+        }))
+    })
+}
+
 /// `{toml, base_dir, job: ShapeJob}` -> `ShapeEval`.
 #[unsafe(no_mangle)]
 pub extern "C" fn shape_score(ptr: *mut u8, len: usize) -> u64 {

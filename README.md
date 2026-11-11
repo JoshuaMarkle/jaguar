@@ -23,7 +23,8 @@ status line shows the time left). For a quick look set **Samples** to 96 (about 
 the home screen (iPhone: Share > Add to Home Screen; Android: Install app). It then runs with no
 network, on the phone itself. **Save project** keeps a zip backup of the canoe folder (the browser
 may clear its storage); **Open project** loads one, also a zip of a desktop JAGUAR folder. Runs
-take several times longer than on a laptop: for the shape search set **Samples** low. Build it
+take several times longer than on a laptop: a long shape search is offered **Phone-sized**
+(about 15 minutes, fewer samples) or in full. Build it
 yourself: `make pwa` (folder `target/pwa`, any HTTPS host).
 
 The first open shows a security warning because the app is not signed by a paid certificate.

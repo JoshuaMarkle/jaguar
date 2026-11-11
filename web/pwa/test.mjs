@@ -128,6 +128,19 @@ await test('parity: small shape search stepped over two engines = native', async
   assert(!d.length, d.join('\n     '));
 });
 
+await test('phone-sized: the starter shape search cut to a budget', async () => {
+  const starter = readFileSync(join(repo, 'packaging', 'starter', 'canoe.toml'), 'utf8');
+  const e = await Engine.create(module, { fs: canoeFolder() });
+  const s = e.json('shape_size', { toml: starter, base_dir: DIR, budget: 450 });
+  assert(s.shape_search && s.samples === 4000 && s.planned > 4000, `full: ${JSON.stringify({ ...s, sized: null })}`);
+  assert(s.sized.planned <= 450 && s.sized.planned >= 400, `sized planned ${s.sized.planned}`);
+  assert(s.sized.samples < s.samples && s.sized.refine_rounds <= s.refine_rounds, 'cut');
+  const again = e.json('shape_size', { toml: s.sized.toml, base_dir: DIR, budget: 450 });
+  assert(again.samples === s.sized.samples && again.refine_rounds === s.sized.refine_rounds, 'the cut text parses to the cut');
+  const fixed = e.json('shape_size', { toml: readFileSync(join(repo, 'examples', 'canoe.toml'), 'utf8'), base_dir: DIR, budget: 450 });
+  assert(fixed.shape_search === false, 'a fixed hull is not sized');
+});
+
 await test('api: prefs, host run, result kept, exports, history', async () => {
   const fs = canoeFolder();
   const api = await Engine.create(module, { fs });

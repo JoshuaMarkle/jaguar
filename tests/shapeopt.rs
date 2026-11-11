@@ -386,3 +386,24 @@ fn stepped_shape_search_ended_keeps_what_was_scored() {
     assert_eq!(r.candidates.len(), 3);
     assert!(r.ended_early.as_deref().is_some_and(|m| m.contains("after 3 shapes")), "{:?}", r.ended_early);
 }
+
+/// The phone app's phone-sized search (`shapeopt::sized`): fits the budget, refinement at most
+/// half of it, never larger than asked, unchanged when it fits.
+#[test]
+fn sized_search_fits_the_budget() {
+    use jaguar::shapeopt::{MIN_SIZED_SAMPLES, planned_shapes, sized};
+    let p = Params::load(Path::new("packaging/starter/canoe.toml")).unwrap();
+    let ss = p.shape_search.clone().unwrap();
+    let full = planned_shapes(&ss);
+    assert_eq!(sized(&ss, full), (ss.samples, ss.refine_rounds), "fits: unchanged");
+    for budget in [100, 450, 1000, 3000] {
+        let (samples, rounds) = sized(&ss, budget);
+        let cut = jaguar::params::ShapeSearch { samples, refine_rounds: rounds, ..ss.clone() };
+        let planned = planned_shapes(&cut);
+        assert!(planned <= budget.max(MIN_SIZED_SAMPLES), "{budget}: {planned} planned");
+        assert!(planned >= budget * 9 / 10, "{budget}: uses the budget ({planned})");
+        assert!(planned - samples <= budget / 2, "{budget}: refinement at most half");
+        assert!(samples <= ss.samples && rounds <= ss.refine_rounds && samples >= MIN_SIZED_SAMPLES);
+    }
+    assert_eq!(sized(&ss, 1), (MIN_SIZED_SAMPLES, 0), "a tiny budget still samples");
+}

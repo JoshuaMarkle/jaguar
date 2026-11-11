@@ -72,8 +72,15 @@
     if (url.origin !== location.origin || at < 0) return realFetch(input, init);
     const path = url.pathname.slice(at) + url.search;
     const method = (init.method || req?.method || 'GET').toUpperCase();
-    const body = await bytesOf(init.body ?? (req && method !== 'GET' ? await req.arrayBuffer() : null));
+    let body = await bytesOf(init.body ?? (req && method !== 'GET' ? await req.arrayBuffer() : null));
     await booted;
+    if (method === 'POST' && path.split('?')[0] === '/api/run' && !run) {
+      const text = await phoneSized(new TextDecoder().decode(body));
+      if (text === null) {
+        return new Response(JSON.stringify({ error: 'not run (cancelled)' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      body = new TextEncoder().encode(text).buffer;
+    }
     const r = await api('request', { method, url: path, body }, [body]);
     const headers = { 'Content-Type': r.head.content_type };
     if (r.head.filename) headers['Content-Disposition'] = `attachment; filename="${r.head.filename}"`;
@@ -85,6 +92,45 @@
     if (status === 200 && what) control(what);
     return new Response(status === 204 ? null : r.body, { status, headers });
   };
+
+  // ---------- phone-sized shape search ----------
+  // A shape search that would take well over BUDGET_S here is offered cut to about that long
+  // (shapeopt::sized: same bounds and seed, fewer samples and refine rounds), or in full.
+  // Seconds per shape per worker: measured on this device by earlier shape searches, else a
+  // first guess: a laptop's browser measured 9.6 s per shape per worker on the team's starter
+  // settings (6 workers), a phone is slower; too high a guess only offers the cut too readily.
+  const BUDGET_S = 15 * 60;
+  const GUESS_S = 20;
+  const RATE = 'shape-rate';
+  async function phoneSized(text) {
+    const measured = await getState(RATE);
+    const rate = measured?.s > 0 ? measured.s : GUESS_S;
+    let info;
+    try {
+      info = await api('sizeRun', { toml: text, budget: Math.max(1, Math.floor(BUDGET_S * WORKERS / rate)) });
+    } catch (e) {
+      return text; // the server reports what is wrong with it
+    }
+    if (!info.shape_search || info.sized.planned >= info.planned) return text;
+    const full = info.planned * rate / WORKERS, cut = info.sized.planned * rate / WORKERS;
+    if (full <= 1.5 * BUDGET_S) return text;
+    const n = x => x.toLocaleString('en-US');
+    const how = measured?.s > 0 ? `about ${rate.toFixed(1)} s per shape on each of ${WORKERS} workers, measured here`
+      : `${WORKERS} workers; a first guess of ${GUESS_S} s per shape until a shape search has run here`;
+    const pick = await dialog('Phone-sized shape search?', [
+      `This hull shape search plans about ${n(info.planned)} shapes: about ${dur(full)} on this device (${how}).`,
+      `Phone-sized keeps your bounds and seed with ${n(info.sized.samples)} samples and ${info.sized.refine_rounds} refine rounds (canoe.toml: ${n(info.samples)} and ${info.refine_rounds}): about ${dur(cut)}. Fewer samples cover the shape space less finely; the desktop app runs the full search far faster.`,
+    ], [['sized', `Phone-sized (about ${dur(cut)})`, 'primary'], ['full', `Full search (about ${dur(full)})`, 'soft'], ['cancel', 'Cancel', 'soft']]);
+    return pick === 'sized' ? info.sized.toml : pick === 'full' ? text : null;
+  }
+  const dur = s => (s < 90 ? '1 min' : s < 3600 ? `${Math.round(s / 60)} min` : `${Math.floor(s / 3600)} h ${String(Math.round(s % 3600 / 60)).padStart(2, '0')} min`);
+
+  /** Seconds per shape per worker, from one run's shape times (kept for the next estimate). */
+  function noteRate(times) {
+    if (times.length < 4) return;
+    const s = times.reduce((a, b) => a + b, 0) / times.length / 1000;
+    setState(RATE, { s, n: times.length, at: Date.now() });
+  }
 
   // ---------- runs ----------
   let run = null;
@@ -99,7 +145,7 @@
     files.set(id, j.files);
     run = {
       id, toml: j.job, dir: j.dir, shape: j.shapeSearch, paused: false, stopped: false,
-      evals: resume?.evals ?? [], forwarded: 0, workers: [], ended: false, gen: 0, gate: null, open: null,
+      evals: resume?.evals ?? [], forwarded: 0, workers: [], ended: false, gen: 0, gate: null, open: null, times: [],
     };
     await saveCheckpoint();
     wakeLock(true);
@@ -118,6 +164,7 @@
     for (const w of r.workers) w.stop();
     files.delete(r.id);
     if (run === r) run = null;
+    noteRate(r.times);
     await api('finish', { outcome });
     await clearCheckpoint();
     wakeLock(false);
@@ -165,7 +212,10 @@
             while (r.paused && !r.stopped && !r.ended) await r.gate;
             if (r.stopped || r.ended || !queue.length) return;
             const job = queue.shift();
+            const t = performance.now();
             const { eval: e } = await w.call('shapeScore', { ...args(), job });
+            r.times.push(performance.now() - t);
+            if (r.times.length % 10 === 0) noteRate(r.times);
             r.evals.push(e);
             report(r, e, total);
             saveShape(e);
@@ -355,12 +405,52 @@
     document.body ? show() : addEventListener('DOMContentLoaded', show);
     return b;
   }
+  /** A modal choice: resolves with the key of the button pressed ('cancel' on Escape). */
+  function dialog(title, paragraphs, buttons) {
+    return new Promise(resolve => {
+      const veil = document.createElement('div');
+      veil.className = 'pwa-veil';
+      const card = document.createElement('div');
+      card.className = 'pwa-dialog';
+      card.setAttribute('role', 'dialog');
+      card.setAttribute('aria-modal', 'true');
+      const h = document.createElement('b');
+      h.textContent = title;
+      card.appendChild(h);
+      for (const t of paragraphs) {
+        const p = document.createElement('p');
+        p.textContent = t;
+        card.appendChild(p);
+      }
+      const row = document.createElement('div');
+      row.className = 'pwa-row';
+      const done = key => { veil.remove(); removeEventListener('keydown', esc, true); resolve(key); };
+      const esc = ev => { if (ev.key === 'Escape') { ev.stopPropagation(); done('cancel'); } };
+      for (const [key, label, kind] of buttons) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `btn ${kind}`;
+        b.textContent = label;
+        b.onclick = () => done(key);
+        row.appendChild(b);
+      }
+      card.appendChild(row);
+      veil.appendChild(card);
+      document.body.appendChild(veil);
+      addEventListener('keydown', esc, true);
+      row.firstChild.focus();
+    });
+  }
   function fatal(text) {
     banner(text, [['Reload', () => location.reload()]]);
   }
   const css = `.pwa-banner{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:1000;display:flex;gap:8px;align-items:center;
-    max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hairline,#e0e0e0);border-radius:8px;font:inherit}
-    .pwa-banner span{flex:1}`;
+    max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hair,#e0e0e0);border-radius:var(--r-md,8px);font:inherit}
+    .pwa-banner span{flex:1}
+    .pwa-veil{position:fixed;inset:0;z-index:1001;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(20,20,20,.3)}
+    .pwa-dialog{max-width:520px;width:100%;padding:16px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hair,#e0e0e0);border-radius:var(--r-md,8px)}
+    .pwa-dialog p{margin:8px 0 0;color:var(--muted,#707070)}
+    .pwa-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}`;
   addEventListener('DOMContentLoaded', () => {
     const style = document.createElement('style');
     style.textContent = css;

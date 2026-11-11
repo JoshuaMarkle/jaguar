@@ -119,8 +119,8 @@ Open:
   iPhone and an Android phone, airplane mode, cold start from the home screen, run
   `examples/canoe.toml`, Save project + open it on the desktop, a shape search backgrounded and
   resumed. Record the phone's time for canoe.toml here.
-- **E8. Phone-sized search.** The team's starter shape search is too long for a phone; a lighter
-  preset (fewer samples / refine rounds) to run there, the full one on the desktop.
+- **E8. Phone-sized search: done** (SPEC "Phone-sized shape search"). Open: the 20 s/shape first
+  guess is from a laptop browser (9.6 s); replace it with a phone's measurement from E7.
 - **E9. Phone layout.** The page is the desktop layout (no viewport tag): usable with pinch-zoom.
   A narrow-screen layout is a web/ task (docs/DESIGN.md).
 - Enable GitHub Pages (Settings > Pages > Source: GitHub Actions) before the first tag with the

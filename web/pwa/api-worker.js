@@ -68,6 +68,8 @@ const ops = {
   progress({ event }) { api.json('api_progress', event); },
   async finish({ outcome }) { api.json('api_finish', outcome); await persist(); },
   control() { return api.json('api_control', {}); },
+  /** A run's shape search and its phone-sized cut (jaguar-wasm `shape_size`). */
+  sizeRun({ toml, budget }) { return api.json('shape_size', { toml, base_dir: DIR, budget }); },
   /** The canoe folder and prefs, for "Download project". */
   exportFiles() { return { files: fs.snapshot(DIR).concat(fs.snapshot('/config')) }; },
   /** Replace the canoe folder (and prefs when given) with `files`; restart the server. */
