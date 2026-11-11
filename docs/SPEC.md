@@ -119,7 +119,7 @@ ports is opened instead of starting another. The page shows "Open folder" and "Q
 stops on Quit, or 5 min after the last request while no run is going (the open page pings every
 30 s). Windows: a console window the double-click created is closed. Errors show in a dialog.
 Downloads: `.github/workflows/release.yml` builds `JAGUAR-windows.zip` (JAGUAR.exe) and
-`JAGUAR-mac.zip` (JAGUAR.app, universal, ad-hoc signed; `packaging/`) and publishes them on a `v*` tag.
+`JAGUAR-mac.zip` (JAGUAR.app, universal, ad-hoc signed; `packaging/`) and publishes them on a `v*` tag, with the phone app (see "Phone app") on GitHub Pages and as `JAGUAR-phone.zip`.
 
 ## Inputs
 
@@ -850,6 +850,47 @@ geometry the rules leave to the site marked as assumptions.
   measured time. Calibrate before trusting absolute times; the weightings depend on it less.
 * Neglected: wind, current, yaw acceleration, stroke pulsation, heel. Drag is the rank-only
   model of the drag objective, so absolute times need the calibration.
+
+## Phone app (offline PWA, `jaguar-wasm/`, `web/pwa/`)
+The same web UI (`web/index.html`) installed from an HTTPS page (GitHub Pages, from the release
+workflow) as a Progressive Web App: no server, no network after the first visit. The desktop app,
+`serve` and the CLI are unchanged.
+* **Engine:** the `jaguar` crate built for `wasm32-wasip1` (`jaguar-wasm/`, a thin second workspace
+  member) on an in-memory file system (`web/pwa/wasi.js`), so the code is the desktop's, file
+  access included. One engine runs the HTTP API (`serve::Embedded`: the same handler and answers as
+  `serve`, no socket, no threads) in a Web Worker; runs go to 2..6 compute workers
+  (`navigator.hardwareConcurrency` - 1), one single-threaded engine each. No SharedArrayBuffer, no
+  COOP/COEP headers, no rayon threads in wasm.
+* **Runs:** `POST /api/run` starts nothing in the API engine; the page takes the job
+  (`Embedded::take_job`). A fixed hull is one call on one worker (`examples/canoe.toml`: 10 s on
+  a laptop), its progress streamed to the API. A shape search is stepped (`jaguar::run_shape_step`):
+  the search is replayed with the shapes scored so far and asks for the next batch, which the
+  workers score (`shapeopt::score_shape`); the result is the same as `jaguar::run`'s whatever the
+  order shapes finish. Pause: a shape search hands out no new shapes (those in progress finish); a
+  fixed hull's worker is ended and Resume runs it again from the start (the progress the page has
+  seen is not repeated). End: a shape search scores no new shapes and verifies the best so far
+  (`ended_early`); a fixed hull is cancelled (state "stopped", the last result stays).
+* **API:** every `/api/...` request of the page, through `web/pwa/shim.js` (loaded first by the
+  PWA build only), with `serve`'s JSON, status codes and download names. `open-folder` and `quit`
+  answer 403 as in `jaguar serve` (`session.desktop` is false; their buttons stay hidden).
+* **Files:** the canoe folder (`/JAGUAR`: canoe.toml, hulls, mix CSV, result.json, `runs/`) and
+  the form's prefs live in IndexedDB (persistent storage requested). The first launch writes the
+  desktop's starter files (packaging/starter/canoe.toml, off1_hull.json, data/mix_tests.csv).
+  **Save project** writes the folder as a zip (`JAGUAR/...`, the prefs as
+  `JAGUAR/phone-settings.toml`); **Open project** replaces the folder from such a zip, or from a
+  zip of a desktop JAGUAR folder (it needs a canoe.toml). Downloads (STEP, STL, DXF, PDF, CSV,
+  zip) go to the share sheet on a touch screen, else to a download.
+* **Phone life:** the screen is kept awake while a run is going (Screen Wake Lock, where the
+  browser has it). A shape search saves every scored shape; a run cut off by the app being closed
+  is offered on the next launch (**Resume** / **Discard**): Resume skips the saved shapes (a fixed
+  hull starts over) and gives the same result as an uninterrupted run.
+* **Offline and updates:** a service worker caches every file at install, one cache per build
+  (version + content hash). A new build waits until the page's "Reload" (refused while a run goes).
+* **Same answers as native** (`make wasm-test`, every release): wasm brings its own libm, so the
+  last bits of sin/exp/pow can differ. Measured on `examples/canoe.toml`: same structure and
+  winner, worst relative difference 3e-14 over 43 064 numbers. Gate: same structure and strings
+  (file paths by name), every number within 1e-9 relative; a governing position may be the mirror
+  station (x <-> L - x) of a symmetric hull, where the governing value ties to the last bits.
 
 ## Performance
 `examples/canoe.toml` (686 candidates, 161 stations) runs in about 0.5 s on a laptop (release; drag of every candidate and the seat corners).

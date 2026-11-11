@@ -19,6 +19,13 @@ race-time objective, 4000 shapes: about 12 minutes on a recent laptop, longer on
 status line shows the time left). For a quick look set **Samples** to 96 (about a minute).
 **Pause** holds a run; **End** finishes it early with the best hull found so far.
 
+**On a phone (offline):** open the JAGUAR page from the release (GitHub Pages) once and add it to
+the home screen (iPhone: Share > Add to Home Screen; Android: Install app). It then runs with no
+network, on the phone itself. **Save project** keeps a zip backup of the canoe folder (the browser
+may clear its storage); **Open project** loads one, also a zip of a desktop JAGUAR folder. Runs
+take several times longer than on a laptop: for the shape search set **Samples** low. Build it
+yourself: `make pwa` (folder `target/pwa`, any HTTPS host).
+
 The first open shows a security warning because the app is not signed by a paid certificate.
 Windows: **More info** > **Run anyway**. Mac: System Settings > Privacy & Security > **Open
 Anyway** (macOS 14 and earlier: Control-click > Open). Details: the `Read me.txt` in each zip

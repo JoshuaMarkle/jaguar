@@ -1,0 +1,16 @@
+[package]
+name = "jaguar-wasm"
+version = "0.5.6"
+edition = "2024"
+publish = false
+description = "JAGUAR's engine for the phone app: a wasm32-wasip1 reactor driven by web/pwa (docs/SPEC.md \"Phone app\")"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+jaguar = { path = ".." }
+anyhow = "1.0.104"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"

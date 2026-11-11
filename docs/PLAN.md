@@ -100,6 +100,33 @@ Built as designed (docs/SPEC.md "Roster", `src/roster.rs`). Open: fit `k_track` 
 `steer_penalty` from timed practice runs (like `race --measured`); use height (kneeling CG) for
 the reported GM; an optional cap on races per paddler if fatigue matters.
 
+## E. Phone app, offline PWA (built 2026-11-11, docs/SPEC.md "Phone app")
+
+Built as specified, simpler than first planned: the crate builds for `wasm32-wasip1` and runs on
+an in-memory WASI file system, so `serve`'s own handler answers the phone's API (no JS port of it,
+no `Params::from_str` refactor, no `desktop` feature: clap and tiny_http compile on WASI). No new
+crates on either side (no wasm-bindgen; the JS is hand-written, no npm). Only the shape search
+needed splitting (`run_shape_step`); a fixed hull is fast enough on one worker.
+
+Measured (E0, 2026-11-11, laptop): `examples/canoe.toml` 10.2 s in wasm on one thread (native: 8.7 s
+one thread, 1.8 s all cores); wasm vs native result.json: worst relative difference 3e-14 over
+43 064 numbers, same winner. Headless Chrome, 6 workers: the same run in 8 s; the team's starter
+canoe.toml (a shape search planned at 4000 shapes) scored about 2.5 shapes/s (~25 min to the end
+on that laptop, several times longer on a phone).
+
+Open:
+- **E7. Acceptance on real phones** (not done; no device here): install from the Pages URL on an
+  iPhone and an Android phone, airplane mode, cold start from the home screen, run
+  `examples/canoe.toml`, Save project + open it on the desktop, a shape search backgrounded and
+  resumed. Record the phone's time for canoe.toml here.
+- **E8. Phone-sized search.** The team's starter shape search is too long for a phone; a lighter
+  preset (fewer samples / refine rounds) to run there, the full one on the desktop.
+- **E9. Phone layout.** The page is the desktop layout (no viewport tag): usable with pinch-zoom.
+  A narrow-screen layout is a web/ task (docs/DESIGN.md).
+- Enable GitHub Pages (Settings > Pages > Source: GitHub Actions) before the first tag with the
+  phone job; a private repo needs a paid plan for Pages (else host JAGUAR-phone.zip elsewhere: any
+  HTTPS static host).
+
 ## Team task list: status
 
 Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to_fix.docx`).

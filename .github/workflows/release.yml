@@ -1,6 +1,8 @@
 # Builds the downloads for people without Rust: JAGUAR-windows.zip (JAGUAR.exe) and
-# JAGUAR-mac.zip (JAGUAR.app, Apple silicon + Intel). Push a tag `v*` to publish them as a
-# GitHub release; run it by hand (Actions > release > Run workflow) to only build them.
+# JAGUAR-mac.zip (JAGUAR.app, Apple silicon + Intel), and the phone app (docs/SPEC.md "Phone app"):
+# tested against the native build, published on GitHub Pages and as JAGUAR-phone.zip. Push a tag
+# `v*` to publish them; run it by hand (Actions > release > Run workflow) to only build them.
+# GitHub Pages must be set to "GitHub Actions" once (Settings > Pages > Source).
 name: release
 on:
   push:
@@ -9,6 +11,35 @@ on:
 permissions:
   contents: write
 jobs:
+  phone:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "wasm32-wasip1" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: make wasm-test
+      - run: cd target/pwa && zip -qr ../../JAGUAR-phone.zip .
+      - uses: actions/upload-artifact@v4
+        with: { name: JAGUAR-phone, path: JAGUAR-phone.zip }
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: target/pwa }
+
+  pages:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [phone]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
   windows:
     runs-on: windows-latest
     steps:
@@ -54,7 +85,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, mac]
+    needs: [windows, mac, phone]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

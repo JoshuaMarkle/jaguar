@@ -207,6 +207,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "jaguar-wasm"
+version = "0.5.6"
+dependencies = [
+ "anyhow",
+ "jaguar",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"

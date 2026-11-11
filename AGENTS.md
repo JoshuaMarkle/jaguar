@@ -5,7 +5,8 @@ Read this file fully. Open work is in `docs/PLAN.md`.
 ## What this is
 A terminal program that finds the **lightest concrete canoe wall** (thickness, mix density, mold depth)
 for a given hull that passes every check under the crew, optionally searching the hull shape too.
-`jaguar serve canoe.toml` is an optional web UI (view the canoe, start a run, watch it live).
+`jaguar serve canoe.toml` is an optional web UI (view the canoe, start a run, watch it live); the
+same UI runs offline on a phone as a PWA (`make pwa`, docs/SPEC.md "Phone app").
 If a feature is not in `docs/SPEC.md`, do not add it.
 
 ## Layout
@@ -43,6 +44,9 @@ src/launch.rs       desktop app (`jaguar`, no command): Documents/JAGUAR starter
 src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.html, no build step;
                     web/vendor/three.min.js r128 embedded, so it works offline)
 src/main.rs         CLI: (none = desktop app) | run | check | mix | import-michlet | import-mesh | gen-hull | export | mold | drawing | race | serve
+jaguar-wasm/        phone engine: the crate as a wasm32-wasip1 reactor (C ABI over serve::Embedded, runs)
+web/pwa/            phone app: in-memory WASI fs, API + compute workers, fetch shim, service worker,
+                    build.mjs (-> target/pwa), test.mjs (wasm vs native)
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
@@ -71,6 +75,8 @@ make hooks     # once per clone: enables the pre-commit hook (runs make check)
 make check     # fmt + clippy -D warnings + tests. MUST pass before every commit.
 make run       # cargo run --release -- run examples/canoe.toml
 make serve     # web UI at http://127.0.0.1:8000
+make pwa       # phone app in target/pwa (rustup target add wasm32-wasip1; Node 22)
+make wasm-test # phone engine vs native: parity, stepped shape search, API (run when touching serve/shapeopt/web/pwa)
 git tag v0.5.6 && git push origin v0.5.6   # release: builds and publishes the Windows + Mac zips
 ```
 
@@ -96,6 +102,9 @@ git tag v0.5.6 && git push origin v0.5.6   # release: builds and publishes the W
 9. **Dependencies:** ask before adding a crate.
 10. **Keep docs true, not long.** If you change behavior, fix the doc that describes it in the same
     commit. Don't add new docs for things the code and its comments already say.
+11. **The phone runs this code on wasm32-wasip1.** Everything but `launch`, `main` and `serve`'s
+    socket/thread parts must not call `std::process::id`, spawn threads or run commands (they
+    panic there); files, clocks and rayon (one thread) work. `make wasm-test` catches it.
 
 ## Physics notes
 * The search gates at `dc_search` (0.93); the winner is re-run at 2n-1 and 4n-3 stations and its
