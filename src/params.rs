@@ -52,6 +52,10 @@ pub struct Params {
     /// (src/stands.rs). Never a search gate: run once on the winner, it fails verification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands: Option<Stands>,
+    /// Not an input: set by the seating screen (`seating`) so the float solver may trim past
+    /// +/- half the depth (`equilibrium::solve_trim`). Design runs leave it false.
+    #[serde(skip)]
+    pub wide_trim: bool,
     /// Present = the freeboard gate is checked where the lettering sits (school name at the bow,
     /// canoe name at the stern), not at the lowest point of the whole hull.
     #[serde(default, skip_serializing_if = "Option::is_none")]

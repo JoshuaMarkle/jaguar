@@ -11,3 +11,5 @@ runs/
 /prefs.toml
 *.bak
 claudePromptResources/
+# the team's roster (people) never goes in the repo
+roster*.csv

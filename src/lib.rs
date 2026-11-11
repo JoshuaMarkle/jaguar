@@ -38,6 +38,8 @@ pub mod params;
 pub mod race;
 pub mod report;
 pub mod resistance;
+pub mod roster;
+pub mod seating;
 pub mod seats;
 pub mod section;
 pub mod serve;

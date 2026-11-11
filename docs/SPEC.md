@@ -31,6 +31,74 @@ opens one as the current result (charts, export, PDF, race) or deletes it. HTTP 
 3D view: left-drag orbits, right-, middle- or Shift-drag pans, the wheel zooms; a view cube in the
 top right turns with the camera (faces BOW, STERN, PORT, STBD, TOP, BOTTOM) and a click on a face,
 edge or corner turns the view there; Home returns to the starting view.
+**Seating** (top bar; `src/seating.rs`, `/api/seating`): race-day crew placement on the canoe of the
+current result (its winner, or the closest design, marked; not two-mix walls). It starts with the
+run's load cases at the seats the run chose; crews, paddlers (name, weight) and knees (dragged on a
+side view drawn to true scale, or typed, ft or in from the bow) can be added, removed and edited,
+kept per canoe in the browser. For the crew shown, at 2n-1 stations with the run's checks
+(`optimize::eval_envelope`): every check's D/C, freeboard and loaded GM at exactly these knees, with
+no `seats.variance_in` (the run's allowance for not knowing where paddlers kneel; here the knees
+are known and the bands show how far each may move); **safe** = every D/C <= 1 (`material.method`, no `dc_search`/`dc_verify`
+margin). Freeboard is the judges' staging check (crew at the marked seats): the RFP minimum
+`gates.freeboard_min_in` (without `freeboard_margin_in`) is reported (`freeboard_ok`, and `safe` =
+code checks and freeboard, what Best seating and the Roster use for marked seats) but does not shape
+the states or bands; only water over the gunwale fails. Loaded GM is shown, never a verdict: it barely depends on where the
+paddlers kneel, so seating cannot fix it (the run gates it). On this screen only
+(`Params::wide_trim`, `equilibrium::solve_trim`) the float solver brackets the trim within +/- half
+the mold depth, then up to +/- 2x the depth, so a paddler can slide until the canoe swamps or the
+concrete gives out; design runs keep +/- half the depth (their auto seats probe extreme crews, and
+wider floats would move their results). The page states how
+safety enters (`seating::Safety`, from `material`): the load and strength factors, D/C = factored
+load / reduced strength, and what D/C = 1 leaves on the paddlers' load (crew factor / strength
+factor, e.g. LRFD 1.5 / 0.60 = 2.5x; 1.5 / 0.75 = 2x for punching). Past the code limit it does
+not stop at "fails": every check is also run with no safety factor (the same check as
+`material.method = "asd"`, `factor_of_safety = 1`, dynamic factor kept: real load against the tested
+strength, whatever the design method), giving each check's `dc_true` and the **safety factor left**
+= 1 / the highest `dc_true` (for biaxial, an interaction ratio). Three states: **safe** (code checks
+pass), **reduced** (a code check over, the canoe still holds at the real load; the safety factor
+left is shown), **fails** (a `dc_true` >= 1, water over the gunwale anywhere, or no equilibrium:
+no safety factor left). Each paddler's bands, to 1 in (walked in 4 in steps, each change then
+found by halving), with the others where they are: the
+**full-margin band** (safe) and the wider **holding band** (not failing), and what ends each at each
+end (a check, the hull end, or an equilibrium that cannot be solved: failing, never skipped). The
+gauges draw the code D/C with the code limit (1.00) and a red tick where that check fails. Under the
+side view, on its length scale: **shear V**, **bending moment M** and **D/C along the hull** (highest
+of the four per-station checks) at these knees (`seating::Plots`, from `optimize::case_diagrams`),
+solid for the code's factored loads, dashed for the real load where it differs (LRFD); knee
+markers; hovering reads all three at that x, a click pins a reading. Clearance and spacing (`[seats]`, editable for the screen only) give
+warnings, not verdicts. Each paddler may be pinned to a seat (1 = bow ... k = stern, like
+`load_case.positions`, read from the run's load cases): **Best seating** (`seats::auto` for this crew
+on this wall with those rules, no variance, at most 4 free paddlers) keeps pinned paddlers there, and
+knees that put a pinned paddler in another seat give a warning.
+A table checks every crew; "Print seating sheet" lists each crew bow to stern with knees from bow and
+stern and safe ranges. "Use these crews as load cases" replaces the Inputs load cases (names,
+weights and pins) so the next run sizes the wall for them; nothing else here changes the design.
+**Roster** (top bar; `src/roster.rs`, `/api/roster`): who races which `[[race.event]]` on the canoe
+of the current result. People live in the browser only (localStorage; CSV export / import with
+columns name, gender, weight_lb, height_in, watts_1min, watts_4min, steer_stern, steer_bow),
+never in the repo; it starts with 10 blank rows, rows can be added and removed, rows without a
+weight are skipped. Per event: men and women (default from the event's load case name, "2M, 2F",
+else its own name, else its crew size and "women's" / "men's" / "co-ed"), the bow rudder
+allowed or not, and who must race / is not available. **Assign** gives each event, independently
+(a paddler may race any number), the fastest eligible crew that is safe at its best knees:
+power per paddler = the 1-min watts for courses under 300 m, else the 4-min watts (missing: P = c
+m^(2/3), c fitted to that gender's tests, else everyone's, else `race.paddler_power_w` at the mean
+mass; marked "est."); sides alternate bow to stern and the crew switches sides together (no fixed
+side per paddler, no side preference); effective power = sum P - k_track |P_left - P_right| (the
+steerer's ruddering) - k_pace sum |P - mean P| (defaults 0.5, 0.1, editable); a steerer rated >= 1 in the stern (or the bow with the rudder), each rating step below 3
+adding `steer_penalty` (0.02) x the event's turning time; time = the race simulator on the event's
+path planned for its canoe.toml crew (`race::plan`, `race::crew_time`) with power per paddler =
+effective power / n. Candidates (every crew in its 6 most powerful arrangements) are tried fastest
+first; the first that `seating::best` (all pinned) + `seating::assess` find safe wins, or a safe one
+within 0.1 s with a lower D/C. An event with no eligible or no safe crew says why, never a fallback.
+Height is recorded, not used yet. **Sync with Seating** (both screens, browser side only): "Send crews
+to Seating" (and "Open in Seating" for one event) puts each assigned crew on the Seating screen as a
+crew named after its event, everyone pinned to their seat, each paddler linked to their roster row;
+"Update roster" copies the shown crew's linked paddlers' names and weights back to the roster (and
+to the other Seating crews they are in: one person has one weight everywhere).
+**Auto sync** (one switch, shown on both screens, off by default) does both as you go: every Assign
+sends its crews, and name / weight edits on either screen reach the other. Knee, seat and crew edits
+stay in Seating and mark that crew edited; replacing an edited crew asks first.
 While a run is going the top bar has **Pause** (workers hold before their next candidate or hull
 shape; **Resume** goes on) and **End** (`optimize::RunControl`). End on a shape search starts no new
 shapes, lets those in progress finish, then verifies and reports the best one with `ended_early`;

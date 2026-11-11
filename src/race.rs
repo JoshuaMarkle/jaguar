@@ -789,6 +789,40 @@ pub fn plan(top: &Hull, hull_lb: f64, rp: &RaceParams) -> Result<Plan> {
     Ok(Plan { paths })
 }
 
+impl Plan {
+    /// Events planned (`rp.events` order).
+    pub fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Length of event `i`'s planned path, m.
+    pub fn length_m(&self, i: usize) -> f64 {
+        self.paths[i].iter().map(|s| s.length_m).sum()
+    }
+}
+
+/// One crew (weights, power per paddler) on event `i`'s planned path (the roster's crew search):
+/// (time, time on the turns), s.
+pub fn crew_time(
+    top: &Hull,
+    hull_lb: f64,
+    rp: &RaceParams,
+    plan: &Plan,
+    i: usize,
+    crew_lb: &[f64],
+    power_w: f64,
+) -> Result<(f64, f64)> {
+    let segs = plan.paths.get(i).context("race plan has no such event")?;
+    let boat = Boat::untabled(top, hull_lb, crew_lb, power_w, rp)?;
+    let runs = simulate(&boat, segs, (1.0, 1.0), DS_M)?;
+    let turn = runs.iter().filter(|r| r.radius_m.is_some()).map(|r| r.time_s).sum();
+    Ok((total_time(&runs), turn))
+}
+
 /// Weighted race time (sum of event weight x time, s) of the canoe with
 /// topsides `top` and wall `hull_lb` on the planned paths. Events with the
 /// same crew and power share one boat.

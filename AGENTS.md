@@ -31,6 +31,8 @@ src/seats.rs        auto seats + crew order, seat-variance samples
 src/optimize.rs     wall grid search, verify at 2n-1 stations, progress events
 src/shapeopt.rs     outer hull-shape search (docs/SHAPE_SEARCH.md)
 src/lib.rs          jaguar::run: dispatches to optimize or shapeopt
+src/seating.rs      race-day seating on a finished canoe: crew at given knees, safe bands, best seats
+src/roster.rs       roster: fastest safe crew per race event (gym watts, side balance, steerers)
 src/report.rs       terminal summary, result.json, race summary + result.json reader for race
 src/export.rs       STEP / STL of the winner (CAD, mold shop)
 src/manufacture.rs  male foam mold: hardboard tracing templates (or boards), packed on sheets, DXF
@@ -44,7 +46,7 @@ src/main.rs         CLI: (none = desktop app) | run | check | mix | import-michl
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
-tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race
+tests/*.rs          end-to-end: example hulls, mixes, optimizer, shape search, race, seating, roster
 packaging/          what the release zips add: macOS Info.plist, read-me per platform, release-notes.md,
                     starter/canoe.toml (the team's settings, first-launch canoe.toml)
                     (.github/workflows/release.yml builds JAGUAR-windows.zip, JAGUAR-mac.zip)

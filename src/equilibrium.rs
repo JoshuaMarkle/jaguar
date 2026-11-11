@@ -33,6 +33,11 @@ pub struct Loads {
     pub self_weight: Vec<f64>,
 }
 
+/// The wider trim brackets tried, in multiples of the first one (half the depth), widest first:
+/// up to +/- 2x the depth end to end covers every float from one end just touching the water to
+/// the other end swamped.
+const TRIM_WIDE: [f64; 4] = [4.0, 3.0, 2.0, 1.5];
+
 fn trapz(f: &[f64], x: &[f64]) -> f64 {
     (1..x.len()).map(|i| 0.5 * (f[i] + f[i - 1]) * (x[i] - x[i - 1])).sum()
 }
@@ -104,8 +109,22 @@ pub fn solve(
     patch: f64,
     crew_cg_in: f64,
 ) -> Result<Loads> {
+    solve_trim(grid, sec, rho, crew, patch, crew_cg_in, false)
+}
+
+/// [`solve`], and with `wide` a crew far toward one end may trim past +/- half the depth (up to
+/// +/- 2x the depth: the seating screen's limits). Design runs use `wide = false`.
+pub fn solve_trim(
+    grid: &Grid,
+    sec: &Sections,
+    rho: f64,
+    crew: &[CrewLoad],
+    patch: f64,
+    crew_cg_in: f64,
+    wide: bool,
+) -> Result<Loads> {
     let w_hull: Vec<f64> = sec.area.iter().map(|a| a * rho / IN3_PER_FT3).collect();
-    solve_weights(grid, &w_hull, &sec.zbar, crew, patch, crew_cg_in)
+    solve_weights_trim(grid, &w_hull, &sec.zbar, crew, patch, crew_cg_in, wide)
 }
 
 /// [`solve`] for a wall given as self weight per station `w_hull` (lb/in) and the height of
@@ -117,6 +136,19 @@ pub fn solve_weights(
     crew: &[CrewLoad],
     patch: f64,
     crew_cg_in: f64,
+) -> Result<Loads> {
+    solve_weights_trim(grid, w_hull, zg, crew, patch, crew_cg_in, false)
+}
+
+/// [`solve_weights`] with the wide trim bracket when `wide` (see [`solve_trim`]).
+pub fn solve_weights_trim(
+    grid: &Grid,
+    w_hull: &[f64],
+    zg: &[f64],
+    crew: &[CrewLoad],
+    patch: f64,
+    crew_cg_in: f64,
+    wide: bool,
 ) -> Result<Loads> {
     let (x, z, n, nz) = (&grid.x, &grid.z, grid.nx(), grid.nz());
     let l = x[n - 1];
@@ -217,10 +249,23 @@ pub fn solve_weights(
     let (d0, th) = match newton() {
         Some(r) => r,
         None => {
-            if mres(-thmax)? > 0.0 || mres(thmax)? < 0.0 {
+            // Bracket the trim within +/- half the depth. With `wide` (the seating screen's
+            // limits; never a design run, whose auto seats probe extreme crews and would move),
+            // retry up to +/- 2x the depth: the high end out of the water, the low end under its
+            // gunwale (freeboard then goes negative and the canoe counts as swamped).
+            let inside = |lim: f64| -> Result<bool> { Ok(mres(-lim)? <= 0.0 && mres(lim)? >= 0.0) };
+            // The wide tries shrink: at an extreme trim the canoe may not float even with the
+            // midships at the gunwale (that end of the bracket cannot be evaluated).
+            let lim = if inside(thmax)? {
+                thmax
+            } else if let Some(&k) =
+                TRIM_WIDE.iter().filter(|_| wide).find(|&&k| inside(k * thmax).unwrap_or(false))
+            {
+                k * thmax
+            } else {
                 bail!("trim balance not bracketed");
-            }
-            let th = brent(mres, -thmax, thmax, 1e-9)?;
+            };
+            let th = brent(mres, -lim, lim, 1e-9)?;
             (draft_for(th)?, th)
         }
     };

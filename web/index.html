@@ -227,6 +227,89 @@
   #tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3) 0; }
   #tabs .tg { display: flex; align-items: center; }
   #tabs .seg button { flex: none; height: 22px; padding: 0 10px; }
+  /* ---------- Seating (race-day crew placement on the finished canoe, src/seating.rs) ---------- */
+  #seating { position: fixed; top: var(--top); left: 0; right: 0; bottom: 0; z-index: 30; background: var(--canvas);
+    display: grid; grid-template-columns: var(--side) minmax(0, 1fr) var(--res); }
+  #seating[hidden] { display: none; }
+  #seating > aside, #seating > section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #seating > aside:first-child { border-right: 1px solid var(--hair); }
+  #seating > aside:last-child { border-left: 1px solid var(--hair); }
+  #seating .body { padding: var(--s3) var(--s4); display: grid; gap: var(--s1); align-content: start; }
+  #seating h4 { margin: var(--s3) 0 var(--s1); font-weight: 650; font-size: 12px; }
+  #stcrews { margin: 0 var(--s4) var(--s2); flex-wrap: wrap; }
+  #stcrews button { flex: none; padding: 0 10px; }
+  .stp { display: grid; grid-template-columns: 20px minmax(0, 1fr) 50px 56px 74px 22px; align-items: center; gap: var(--s2); min-height: 30px; border-bottom: 1px solid var(--hair-soft); }
+  .stp.hd { color: var(--muted); min-height: 18px; border: 0; }
+  .stp.sel { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; margin-left: -9px; }
+  .stp input, .stp select { padding: 0 6px; }
+  .stp select { padding-right: 18px; background-position: right 6px center; }
+  .stn { width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--canvas); display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; cursor: pointer; }
+  .stp.sel .stn { background: var(--accent); }
+  .strow { display: grid; grid-template-columns: minmax(0, 1fr) 64px 22px; align-items: center; gap: var(--s2); min-height: var(--ctl-h); }
+  .strow > span:first-child { color: var(--ink-soft); }
+  #stview { position: relative; flex: 1; min-height: 0; padding: 0 var(--s4); overflow-y: auto; }
+  #stplots svg { display: block; user-select: none; margin-top: var(--s2); }
+  #stview svg { display: block; user-select: none; touch-action: none; }
+  #stlimits { padding: var(--s2) var(--s4) var(--s3); border-top: 1px solid var(--hair-soft); color: var(--ink-soft); display: grid; gap: 2px; }
+  .stv { display: grid; gap: 2px; padding: var(--s2) var(--s3); background: var(--soft); border-radius: var(--r-md); border-left: 3px solid var(--success); }
+  .stv.bad { border-left-color: var(--error); } .stv.near { border-left-color: var(--warning); } .stv b { font-weight: 650; }
+  .stg { display: grid; grid-template-columns: 104px minmax(0, 1fr) 76px; align-items: center; gap: var(--s2); min-height: 24px; }
+  .stg > span:first-child { color: var(--muted); }
+  .stg > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .sttrack { height: 6px; background: var(--soft); border-radius: var(--r-full); position: relative; }
+  .sttrack i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: var(--r-full); }
+  .sttrack i.v { background: transparent !important; border: 1px solid var(--faint); }
+  .sttrack .lim { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ink); }
+  #stsum { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  #stsum td, #stsum th { padding: 4px 4px 4px 0; border-bottom: 1px solid var(--hair-soft); text-align: left; font-weight: 450; }
+  #stsum th { color: var(--muted); } #stsum tr[data-c] { cursor: pointer; } #stsum tr[data-c]:hover { background: #fafafa; }
+  #stsum tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
+  @media (max-width: 900px) {
+    #seating { grid-template-columns: 1fr; overflow-y: auto; display: block; }
+    #seating[hidden] { display: none; }
+    #seating > aside, #seating > section { border: 0 !important; border-bottom: 1px solid var(--hair) !important; }
+    #stview { height: 260px; flex: none; }
+  }
+
+  /* ---------- Roster (who races which event, src/roster.rs) ---------- */
+  #roster { position: fixed; top: var(--top); left: 0; right: 0; bottom: 0; z-index: 31; background: var(--canvas);
+    display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+  #roster[hidden] { display: none; }
+  #roster > section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #roster > section:first-child { border-right: 1px solid var(--hair); }
+  #roster .body { padding: var(--s3) var(--s4); display: grid; gap: var(--s2); align-content: start; }
+  #roster h4 { margin: var(--s3) 0 0; font-weight: 650; font-size: 12px; }
+  .rtable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  #rtable { table-layout: fixed; min-width: 640px; }
+  .rtable th { color: var(--muted); font-weight: 450; text-align: left; padding: 0 4px 4px 0; white-space: nowrap; }
+  .rtable td { padding: 2px 4px 2px 0; border-top: 1px solid var(--hair-soft); vertical-align: middle; }
+  .rtable input, .rtable select { height: 24px; padding: 0 6px; }
+  .rtable select { padding-right: 18px; background-position: right 6px center; }
+  .rtable td.n { color: var(--muted); width: 18px; }
+  .rchips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .rchip { height: 20px; padding: 0 6px; border-radius: var(--r-xs); border: 1px solid var(--hair); background: var(--canvas); cursor: pointer; font-size: 11px; color: var(--muted); }
+  .rchip.in { background: var(--ink); border-color: var(--ink); color: var(--canvas); }
+  .rchip.out { text-decoration: line-through; color: var(--faint); background: var(--soft); border-color: transparent; }
+  .rchip.no { display: none; }
+  .rset { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s2); }
+  .rset label { display: grid; gap: 2px; color: var(--muted); }
+  .rcard { border: 1px solid var(--hair); border-radius: var(--r-md); padding: var(--s2) var(--s3); display: grid; gap: var(--s1); }
+  .rcard.bad { border-left: 3px solid var(--error); }
+  .rcard .rhead { display: flex; align-items: baseline; gap: var(--s2); }
+  .rcard .rhead b { font-weight: 650; }
+  .rcard .rhead .t { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .rcrew { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .rcrew td { padding: 2px 6px 2px 0; border-top: 1px solid var(--hair-soft); }
+  .rtag { display: inline-block; padding: 0 5px; border-radius: var(--r-xs); background: var(--soft); color: var(--ink-soft); font-size: 10px; }
+  .rtag.steer { background: var(--accent); color: var(--canvas); }
+  .rtag.est { background: #fdf3cd; color: #6b5400; }
+  @media (max-width: 900px) {
+    #roster { display: block; overflow-y: auto; }
+    #roster[hidden] { display: none; }
+    #roster > section:first-child { border-right: 0; border-bottom: 1px solid var(--hair); }
+    .rwrap { overflow-x: auto; }
+  }
 </style>
 <script src="/vendor/three.min.js"></script>
 </head>
@@ -240,6 +323,8 @@
   <label class="objpick" for="objective.kind" title="What best means among designs that pass every check. Weight = lightest hull. Drag = least water resistance at the race speed (matters with shape search). Race = shortest weighted race time over the [race] events (shape search only)."><span class="lbl">Optimize for</span>
     <select id="objective.kind"><option value="weight">min weight</option><option value="drag">min drag</option><option value="race">min race time</option></select></label>
   <div class="runbox"><div class="statusline"><span id="status">idle</span><span id="eta"></span></div><progress id="prog" value="0" max="1"></progress></div>
+  <button type="button" class="btn soft" id="seatbtn" title="Seating: place a crew on the finished canoe (the last result) and see every check, each paddler's safe range, and the best seats. Race-day tool: the wall is not changed.">Seating</button>
+  <button type="button" class="btn soft" id="rosterbtn" title="Roster: list the team (weight, gender, gym watts, steering) and fill every race event with its fastest crew that is safe on the finished canoe.">Roster</button>
   <button id="run" class="btn primary">Run optimization</button>
   <span id="runctl" hidden>
     <button type="button" class="btn soft" id="pauserun" title="Hold the run after the candidates or hull shapes being checked now. Resume carries on where it stopped.">Pause</button>
@@ -265,6 +350,83 @@
   <div class="scroll" id="rscroll"><div id="history" hidden></div><div id="err"></div><div id="winner"></div></div>
   <div class="gutter" id="gutter-res" title="Drag to resize. Double-click to reset."></div>
 </aside>
+<div id="seating" hidden>
+  <aside>
+    <div class="panehead"><b>Crew</b><div class="seg" id="stunit" style="margin-left:auto"><button type="button" data-u="ft">ft</button><button type="button" data-u="in">in</button></div></div>
+    <div class="seg" id="stcrews"></div>
+    <div class="scroll"><div class="body">
+      <div class="strow" style="grid-template-columns:auto minmax(0,1fr) auto"><input type="checkbox" class="switch" id="stsync" title="Auto sync: name and weight edits here go to the roster, and every Assign on the Roster updates its crews here."><label for="stsync">Auto sync with Roster</label><button type="button" class="btn soft" id="stpush" title="Copy the names and weights of this crew's roster paddlers back to the roster (and to their other crews here).">Update roster</button></div>
+      <div class="hint" id="stsyncnote"></div>
+      <div class="strow" style="grid-template-columns:minmax(0,1fr) auto"><input id="stname" title="Name of this crew (a load case of the run, or one you added)."><button type="button" class="btn soft" id="stdelcrew" title="Remove this crew from the seating screen.">Remove crew</button></div>
+      <div class="stp hd"><span></span><span>paddler</span><span>weight lb</span><span id="stxhd">knee</span><span title="Pin a paddler to a seat (1 = bow, the last = stern, e.g. who steers). Best seating keeps pinned paddlers there and arranges the others around them.">seat</span><span></span></div>
+      <div id="stlist"></div>
+      <div style="display:flex;gap:var(--s2);margin-top:var(--s2)"><button type="button" class="btn soft" id="stadd">+ Paddler</button><button type="button" class="btn soft" id="stnewcrew">+ Crew</button><button type="button" class="btn soft" id="streset" title="This crew's weights and seats as the run had them.">Reset to run</button></div>
+      <button type="button" class="btn primary" id="stbest" style="margin-top:var(--s3)">Best seating for this crew</button>
+      <div class="hint" id="stbestnote">Crew order and knees by the run's own seat picker (clearance, spacing, most margin at the knees themselves). Pinned paddlers keep their seat. The wall is not changed.</div>
+      <h4>Seat rules</h4>
+      <div class="strow"><span title="No knee closer than this to the bow tip (warning only here; Best seating keeps it).">Bow clearance</span><input type="number" step="any" id="strbow"><span class="hint stu"></span></div>
+      <div class="strow"><span title="No knee closer than this to the stern tip.">Stern clearance</span><input type="number" step="any" id="strstern"><span class="hint stu"></span></div>
+      <div class="strow"><span title="Minimum knee-to-knee distance between neighbouring paddlers.">Min knee spacing</span><input type="number" step="any" id="strsp"><span class="hint stu"></span></div>
+      <div class="hint">From the run's [seats]. Changes here apply to this screen only.</div>
+      <h4>Load cases</h4>
+      <button type="button" class="btn soft" id="stuse" title="Replace the load cases in Inputs with these crews (names and weights; seats left to the run). Saved with your settings: the NEXT run sizes the wall for them.">Use these crews as load cases</button>
+      <div class="hint">Crews and seats here are kept in this browser. They change the design only if you use them as load cases and run again.</div>
+    </div></div>
+  </aside>
+  <section>
+    <div class="panehead"><b>Side view</b><span class="hint" id="stviewnote">drag a knee or type its distance &middot; click a paddler to see where they can kneel</span></div>
+    <div id="stview"><svg id="stsvg"></svg><div id="stplots"></div></div>
+    <div id="stlimits"></div>
+  </section>
+  <aside>
+    <div class="panehead"><b>Demand</b><span class="hint" id="stmethod"></span></div>
+    <div class="scroll"><div class="body">
+      <div id="sterr" class="note-box error" hidden></div>
+      <div id="stverdict"></div>
+      <div id="stgauges" style="margin-top:var(--s2)"></div>
+      <div class="hint" id="stgnote"></div>
+      <div id="stsafety" class="note-box" style="margin-top:var(--s2)"></div>
+      <div id="stwarn"></div>
+      <h4>All crews</h4>
+      <table id="stsum"></table>
+      <button type="button" class="btn soft" id="stprint" style="margin-top:var(--s3)">Print seating sheet</button>
+    </div></div>
+  </aside>
+</div>
+<div id="roster" hidden>
+  <section>
+    <div class="panehead"><b>Roster</b><span class="hint">kept in this browser only, never in the repo &middot; blank rows are skipped</span></div>
+    <div class="scroll"><div class="body">
+      <div class="rwrap"><table class="rtable" id="rtable"></table></div>
+      <div style="display:flex;gap:var(--s2);flex-wrap:wrap">
+        <button type="button" class="btn soft" id="radd">+ Paddler</button>
+        <label class="btn soft file" style="justify-self:auto" title="Load a roster CSV (the columns of Export CSV).">Import CSV<input type="file" id="rimport" accept=".csv,text/csv"></label>
+        <button type="button" class="btn soft" id="rexport" title="Save the roster as a CSV to share with the team.">Export CSV</button>
+        <button type="button" class="btn soft" id="rclear" title="Back to 10 blank rows.">Clear roster</button>
+      </div>
+      <div class="hint">Watts: gym erg tests, 1-minute max average and 4-minute average. Steering: 0 can't, 1 learning, 2 solid, 3 best (stern = paddle, bow = rudder). Height is recorded, not used by the model yet.</div>
+      <h4>Events</h4>
+      <div class="hint">From [race] in canoe.toml. Click a name to cycle: may race &rarr; must race (dark) &rarr; not available (struck out).</div>
+      <div class="rwrap"><table class="rtable" id="revents"></table></div>
+      <h4>Synergy and steering</h4>
+      <div class="rset">
+        <label title="Power lost per watt of left/right imbalance: the steerer ruddering to keep the canoe straight.">Ruddering loss<input type="number" step="any" min="0" id="rktrack"></label>
+        <label title="Power lost per watt a paddler is off the crew's mean (holding a common pace).">Pace loss<input type="number" step="any" min="0" id="rkpace"></label>
+        <label title="Share of the turning time added per steering rating step below 3.">Steering penalty<input type="number" step="any" min="0" id="rksteer"></label>
+      </div>
+      <div class="hint">Rules of thumb until fitted from timed practice runs. Effective power = sum of watts &minus; ruddering &times; |left &minus; right| &minus; pace &times; sum |watts &minus; mean|. Sides alternate bow to stern and the crew switches sides together, so no one has a fixed side; seat orders with the two sides evenly matched need the least ruddering and win when that is faster.</div>
+    </div></div>
+  </section>
+  <section>
+    <div class="panehead"><b>Crews</b><span class="hint" id="rnote">fastest safe crew per event on the finished canoe</span></div>
+    <div class="scroll"><div class="body">
+      <div style="display:flex;align-items:center;gap:var(--s2)"><input type="checkbox" class="switch" id="rsync" title="Auto sync: every Assign updates the event crews on the Seating screen, and roster name and weight edits update them too; Seating name and weight edits come back here."><label for="rsync">Auto sync with Seating</label><button type="button" class="btn soft" id="rsend" style="margin-left:auto" title="Put every assigned crew on the Seating screen (one crew per event, everyone pinned to their seat).">Send crews to Seating</button></div>
+      <button type="button" class="btn primary" id="rassign">Assign crews</button>
+      <div id="rerr" class="note-box error" hidden></div>
+      <div id="rout"></div>
+    </div></div>
+  </section>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 // failing: result.closest when no design passed. Its design is then shown in place of a winner
@@ -3468,6 +3630,714 @@ async function desktopMode() {
   const s = await (await fetch('/api/status')).json();
   if (s.state === 'running') { cands = []; polling = true; $('run').disabled = true; poll(); }
 })();
+</script>
+<script>
+// ---------- Seating: race-day crew placement on the finished canoe (src/seating.rs, /api/seating) ----------
+// Crews start as the run's load cases (their seats as the run chose them); edits stay in this browser
+// (localStorage, per canoe) until "Use these crews as load cases" copies them into Inputs.
+const ST = { sum: null, crews: [], cur: 0, sel: 0, unit: 'ft', rules: null, a: null, sumA: [], seq: 0, key: '', drag: null, timer: 0 };
+const ST_NAMES = { bending_tension: 'Bending tension', bending_compression: 'Bending compr.', shear: 'Shear', punching: 'Knee punching', biaxial: 'Biaxial' };
+const stK = () => ST.unit === 'ft' ? 12 : 1;
+const stIn = x => ST.unit === 'ft' ? +(x / 12).toFixed(2) : +x.toFixed(1);
+const stLen = x => ST.unit === 'ft' ? `${(x / 12).toFixed(1)} ft` : `${x.toFixed(0)} in`;
+const stCrew = () => ST.crews[ST.cur];
+function stSave() { if (ST.key) store.set(ST.key, JSON.stringify({ crews: ST.crews, rules: ST.rules })); store.set('seating.unit', ST.unit); }
+function stFromRun(c) { return { name: c.name, run: c.name, p: c.weights_lb.map((w, i) => ({ name: `Paddler ${i + 1}`, lb: w, x: c.seats_in[i], pin: (c.positions || [])[i] || 0 })) }; }
+// Seat pins as load_case.positions (1 = bow ... k = stern, 0 = free); null when nobody is pinned.
+const stPins = c => c.p.some(q => q.pin > 0) ? c.p.map(q => q.pin || 0) : null;
+const stSeatName = (n, k) => n === 1 ? `1 bow` : n === k ? `${n} stern` : String(n);
+function stError(msg) { const e = $('sterr'); e.hidden = !msg; e.textContent = msg || ''; }
+function stBody(c, bands, plots) { return JSON.stringify({ weights_lb: c.p.map(q => Number(q.lb)), seats_in: c.p.map(q => Number(q.x)), rules: ST.rules, positions: stPins(c), bands, plots: !!plots }); }
+
+// Load the current canoe and this browser's crews for it (no drawing). False (ST.loadErr) if no canoe.
+async function stLoad() {
+  const r = await fetch('/api/seating');
+  const j = await r.json();
+  if (!r.ok) { ST.sum = null; ST.crews = []; ST.loadErr = `${j.error || r.status}`; return false; }
+  ST.loadErr = '';
+  ST.sum = j;
+  ST.key = `seating.${j.length_in.toFixed(2)}_${j.thickness_in}_${j.density_pcf}_${j.depth_in}`;
+  let saved = null; try { saved = JSON.parse(store.get(ST.key) || 'null'); } catch (e) { saved = null; }
+  ST.crews = saved && Array.isArray(saved.crews) && saved.crews.length ? saved.crews : j.cases.map(stFromRun);
+  ST.rules = saved && saved.rules ? saved.rules : { ...j.rules };
+  ST.unit = store.get('seating.unit') === 'in' ? 'in' : 'ft';
+  ST.cur = Math.max(0, Math.min(ST.cur, ST.crews.length - 1)); ST.sel = 0; ST.a = null; ST.sumA = [];
+  $('stmethod').textContent = 'D/C = factored load ÷ reduced strength';
+  return true;
+}
+// Seating's crews, loaded when the Seating screen has not been opened yet (sync from the Roster).
+async function stEnsure() { return ST.sum ? true : stLoad(); }
+async function openSeating() {
+  if (typeof closeRoster === 'function') closeRoster();
+  $('seating').hidden = false; $('seatbtn').textContent = 'Close seating';
+  stError('');
+  if (!(await stLoad())) { stRender(); stError(ST.loadErr); return; }
+  stRender(); stEval(); stEvalAll();
+}
+// A crew the roster put here: knee, seat and crew edits mark it edited (replacing it asks first).
+function stTouched() { const c = stCrew(); if (c && c.event && !c.edited) { c.edited = true; stSyncNote(); } }
+function stSyncNote() {
+  const c = stCrew(), on = rSyncOn();
+  $('stsync').checked = on;
+  $('stsyncnote').textContent = c && c.event
+    ? `From the Roster (${c.event})${c.edited ? ', seats edited here' : ''}. Name and weight edits go back to the roster ${on ? 'automatically' : 'with Update roster'}.`
+    : '';
+}
+function closeSeating() { $('seating').hidden = true; $('seatbtn').textContent = 'Seating'; }
+$('seatbtn').onclick = () => $('seating').hidden ? openSeating() : closeSeating();
+
+function stRender() {
+  const c = stCrew();
+  $('stcrews').innerHTML = ST.crews.map((k, i) => `<button type="button" class="${i === ST.cur ? 'on' : ''}" data-c="${i}">${esc(k.name)}</button>`).join('');
+  for (const b of $('stunit').children) b.classList.toggle('on', b.dataset.u === ST.unit);
+  $('stxhd').textContent = `knee, ${ST.unit} from bow`;
+  for (const u of document.querySelectorAll('#seating .stu')) u.textContent = ST.unit;
+  $('stname').value = c ? c.name : '';
+  $('stlist').innerHTML = c ? c.p.map((q, i) => `<div class="stp ${i === ST.sel ? 'sel' : ''}" data-i="${i}"><span class="stn" title="Show this paddler's safe range">${i + 1}</span>`
+    + `<input class="stpn" value="${esc(q.name)}"><input class="stpw" type="number" step="any" min="1" value="${q.lb}">`
+    + `<input class="stpx" type="number" step="any" min="0" value="${stIn(q.x)}">`
+    + `<select class="stpin" title="Pin to a seat (bow = 1). Best seating keeps a pinned paddler there.">${[0, ...c.p.map((_, j) => j + 1)].map(n => `<option value="${n}" ${(q.pin || 0) === n ? 'selected' : ''}>${n ? stSeatName(n, c.p.length) : 'any'}</option>`).join('')}</select><button type="button" class="btn x" data-del="${i}" title="Remove this paddler">×</button></div>`).join('') : '';
+  if (ST.rules) { $('strbow').value = stIn(ST.rules.bow_clear_in); $('strstern').value = stIn(ST.rules.stern_clear_in); $('strsp').value = stIn(ST.rules.spacing_min_in); }
+  $('streset').disabled = !c || !ST.sum || !ST.sum.cases.some(k => k.name === c.run);
+  for (const id of ['stadd', 'stbest', 'stdelcrew', 'stnewcrew', 'stuse', 'stprint']) $(id).disabled = !ST.sum;
+  stDraw(); stDemand(); stSummary(); stSyncNote();
+}
+function stSelectRow() { for (const r of $('stlist').children) r.classList.toggle('sel', Number(r.dataset.i) === ST.sel); }
+
+// Side view: hull profile (keel line, sheer at the mold depth), waterline, clearance zones, the
+// selected paddler's safe band, knees, and every paddler's band as a bar under the ruler.
+function stDraw() {
+  const svg = $('stsvg'), s = ST.sum, c = stCrew();
+  if (!s || !c) { svg.innerHTML = ''; $('stlimits').innerHTML = ''; return; }
+  // True scale: one pixel size for length and height (the canoe is long and shallow), drawn at the
+  // panel's pixel width so text stays readable.
+  const box = $('stview'), L = s.length_in, D = s.depth_in, n = c.p.length;
+  const W = Math.max(320, box.clientWidth - 32), X0 = 28, X1 = W - 28, k = (X1 - X0) / L;
+  const top = 64, bot = top + D * k, H = bot + 72 + 16 * n;
+  const sx = x => X0 + x * k, sz = z => bot - z * k;
+  ST.geo = { X0, X1, W };
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  const keelAt = x => {
+    const xs = s.x_in, j = Math.max(1, Math.min(xs.length - 1, xs.findIndex(v => v >= x)));
+    const t = (x - xs[j - 1]) / (xs[j] - xs[j - 1] || 1);
+    return s.keel_in[j - 1] + t * (s.keel_in[j] - s.keel_in[j - 1]);
+  };
+  const a = ST.a && ST.a.bands && ST.a.bands.length === n ? ST.a : null;
+  let o = `<defs><pattern id="sthatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="${C.bg}"/><line x1="0" y1="0" x2="0" y2="6" stroke="${C.hair}" stroke-width="3"/></pattern></defs>`;
+  const r = ST.rules, y0 = top - 26, hz = bot - y0 + 8;
+  o += `<rect x="${sx(0)}" y="${y0}" width="${sx(r.bow_clear_in) - sx(0)}" height="${hz}" fill="url(#sthatch)"/>`;
+  o += `<rect x="${sx(L - r.stern_clear_in)}" y="${y0}" width="${sx(L) - sx(L - r.stern_clear_in)}" height="${hz}" fill="url(#sthatch)"/>`;
+  o += `<g opacity="${ST.stale ? 0.3 : 1}">`;
+  const hb = a && a.bands[ST.sel] && a.bands[ST.sel].hold_in;
+  if (hb) {
+    o += `<rect x="${sx(hb[0])}" y="${y0}" width="${Math.max(1, sx(hb[1]) - sx(hb[0]))}" height="${hz}" fill="${C.warning}" opacity=".16"/>`;
+    for (const [x, anchor, dx] of [[hb[0], 'start', 4], [hb[1], 'end', -4]])
+      o += `<line x1="${sx(x)}" x2="${sx(x)}" y1="${y0}" y2="${bot + 8}" stroke="${C.error}" stroke-dasharray="3 3"/><text x="${sx(x) + dx}" y="${bot + 4}" font-size="11" fill="${C.error}" text-anchor="${anchor}">${stLen(x)}</text>`;
+  }
+  const b = a && a.bands[ST.sel] && a.bands[ST.sel].range_in;
+  if (b) {
+    o += `<rect x="${sx(b[0])}" y="${y0}" width="${Math.max(1, sx(b[1]) - sx(b[0]))}" height="${hz}" fill="${C.success}" opacity=".12"/>`;
+    for (const [x, anchor, dx] of [[b[0], 'start', 4], [b[1], 'end', -4]])
+      o += `<line x1="${sx(x)}" x2="${sx(x)}" y1="${y0}" y2="${bot + 8}" stroke="${C.success}"/><text x="${sx(x) + dx}" y="${y0 + 11}" font-size="11" fill="${C.success}" text-anchor="${anchor}">${stLen(x)}</text>`;
+  }
+  o += '</g>';
+  // Water under the waterline, then the hull over it (sheer at the mold depth, keel line).
+  if (ST.a && ST.a.waterline_in && ST.a.waterline_in.length === s.x_in.length) {
+    const w = ST.a.waterline_in, n1 = w.length - 1;
+    o += `<polygon points="${sx(0)},${sz(w[0])} ${sx(L)},${sz(w[n1])} ${sx(L)},${sz(0)} ${sx(0)},${sz(0)}" fill="${C.accent}" opacity=".07"/>`
+      + `<line x1="${sx(0) - 10}" y1="${sz(w[0])}" x2="${sx(L) + 10}" y2="${sz(w[n1])}" stroke="${C.accent}" stroke-width="1" stroke-dasharray="5 4"/>`
+      + `<text x="${sx(L) + 12}" y="${sz(w[n1]) + 4}" font-size="10" fill="${C.muted}">WL</text>`;
+  }
+  const keel = s.x_in.map((x, i) => `${sx(x).toFixed(1)},${sz(s.keel_in[i]).toFixed(1)}`);
+  o += `<polygon points="${sx(s.x_in[0])},${sz(D)} ${sx(L)},${sz(D)} ${keel.reverse().join(' ')}" fill="${C.bg}" fill-opacity=".6" stroke="${C.ink}" stroke-width="1.5" stroke-linejoin="round"/>`;
+  o += `<text x="${sx(0)}" y="14" font-size="11" fill="${C.muted}">BOW</text><text x="${sx(L)}" y="14" font-size="11" fill="${C.muted}" text-anchor="end">STERN</text>`;
+  o += `<text x="${sx(L)}" y="${bot + 44}" font-size="10" fill="${C.faint}" text-anchor="end">true scale</text>`;
+  const step = ST.unit === 'ft' ? 12 : (L > 150 ? 24 : 12), lab = ST.unit === 'ft' ? 24 : step * 2;
+  for (let x = 0; x <= L + 1e-9; x += step) o += `<line x1="${sx(x)}" x2="${sx(x)}" y1="${bot + 14}" y2="${bot + 19}" stroke="${C.faint}"/>`
+    + (Math.abs(x / lab - Math.round(x / lab)) < 1e-9 ? `<text x="${sx(x)}" y="${bot + 31}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit === 'ft' ? x / 12 : x}</text>` : '');
+  o += `<text x="${sx(L / 2)}" y="${bot + 45}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit} from bow \u00b7 bars: where each paddler can kneel (others in place): solid = full safety margin, amber = some margin left</text>`;
+  if (ST.stale) o += `<text x="${X1}" y="${bot + 60}" font-size="10" fill="${C.muted}" text-anchor="end">updating ranges\u2026</text>`;
+  o += `<g opacity="${ST.stale ? 0.3 : 1}">`;
+  c.p.forEach((q, i) => {
+    const bd = a && a.bands[i], bb = bd && bd.range_in, hh = bd && bd.hold_in, y = bot + 66 + 16 * i, col = i === ST.sel ? C.accent : C.ink;
+    o += `<text x="${X0 - 8}" y="${y + 4}" font-size="11" fill="${C.muted}" text-anchor="end">${i + 1}</text>`;
+    // Amber: holds with part of the margin gone; the solid bar: full margin.
+    if (hh) o += `<line x1="${sx(hh[0])}" x2="${sx(hh[1])}" y1="${y}" y2="${y}" stroke="${C.warning}" stroke-width="2" opacity="${i === ST.sel ? 1 : 0.6}" stroke-linecap="round"/>`;
+    o += bb ? `<line x1="${sx(bb[0])}" x2="${sx(bb[1])}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="4" opacity="${i === ST.sel ? 0.9 : 0.35}" stroke-linecap="round"/>`
+      : a && !hh ? `<text x="${sx(q.x)}" y="${y + 4}" font-size="10" fill="${C.error}" text-anchor="middle">fails here</text>` : '';
+    o += `<line x1="${sx(q.x)}" x2="${sx(q.x)}" y1="${y - 5}" y2="${y + 5}" stroke="${col}"/>`;
+  });
+  o += '</g>';
+  c.p.forEach((q, i) => {
+    const x = sx(q.x), col = i === ST.sel ? C.accent : C.ink;
+    const inZone = q.x < r.bow_clear_in || L - q.x < r.stern_clear_in;
+    // The knee: a dashed line from the marker down to the inside of the hull bottom, a dot there.
+    const yk = sz(keelAt(q.x)) - 2;
+    o += `<g data-k="${i}" style="cursor:grab"><line x1="${x}" x2="${x}" y1="${top - 12}" y2="${yk}" stroke="${col}" stroke-dasharray="2 3"/>`
+      + `<circle cx="${x}" cy="${yk}" r="3" fill="${col}"/>`
+      + `<rect x="${x - 16}" y="${top - 46}" width="32" height="${yk - top + 50}" fill="transparent"/>`
+      + `<circle cx="${x}" cy="${top - 24}" r="12" fill="${col}" ${inZone ? `stroke="${C.warning}" stroke-width="3"` : ''}/>`
+      + `<text x="${x}" y="${top - 20}" font-size="11" font-weight="600" fill="${C.bg}" text-anchor="middle" style="pointer-events:none">${i + 1}</text>`
+      + `<text x="${x}" y="${top - 40}" font-size="10" fill="${C.muted}" text-anchor="middle" style="pointer-events:none">${Number(q.lb).toFixed(0)} lb</text></g>`;
+  });
+  svg.innerHTML = o;
+  // Limits line for the selected paddler.
+  const q = c.p[ST.sel], bd = a && a.bands[ST.sel];
+  let t = '';
+  if (q && bd) {
+    const who = `<b>${esc(q.name)}</b> (${Number(q.lb).toFixed(0)} lb)`;
+    t = (bd.range_in
+      ? `<div>${who} keeps the full safety margin from <b>${stLen(bd.range_in[0])}</b> to <b>${stLen(bd.range_in[1])}</b> from the bow (others in place; ${stLen(L - bd.range_in[1])} to ${stLen(L - bd.range_in[0])} from the stern).</div>`
+        + `<div class="hint">Full margin ends forward at: ${esc(bd.fore_limit || '')} \u00b7 aft: ${esc(bd.aft_limit || '')}</div>`
+      : `<div>${who}: this seat does not keep the full safety margin.</div>`)
+      + (bd.hold_in
+        ? `<div style="color:${C.error}">${[bd.fore_fail === 'hull end' ? 'Holds all the way to the bow' : `No safety factor left past <b>${stLen(bd.hold_in[0])}</b> forward`, bd.aft_fail === 'hull end' ? 'all the way to the stern' : `past <b>${stLen(bd.hold_in[1])}</b> aft`].join(bd.fore_fail === 'hull end' && bd.aft_fail !== 'hull end' ? '; none left ' : bd.fore_fail !== 'hull end' && bd.aft_fail === 'hull end' ? '; holds ' : bd.fore_fail === 'hull end' ? ' and ' : ' or ')} (amber: holds, reduced margin).</div>`
+          + `<div class="hint">Forward it fails at: ${esc(bd.fore_fail || '')} \u00b7 aft: ${esc(bd.aft_fail || '')}</div>`
+        : `<div style="color:${C.error}">${who} fails here: no safety factor left.</div>`);
+  }
+  if (ST.a) t += `<div class="hint">Draft ${ST.a.draft_in.toFixed(2)} in, trim ${ST.a.trim_in.toFixed(2)} in (+ = stern down) at these seats. Canoe ${stLen(L)}, wall ${s.thickness_in} in at ${s.density_pcf} pcf${s.mix ? ' (' + esc(s.mix) + ')' : ''}.</div>`;
+  if (s.fails) t += `<div class="note-box error">This result has no winner: seating its ${esc(s.fails)}.</div>`;
+  $('stlimits').innerHTML = t;
+  stPlots();
+}
+// ---- graphs under the side view: shear, moment and D/C along the hull, same x scale ----
+// Solid: the code's loads (factored as the governing check); dashed: the real load (only drawn
+// when it differs: ASD factors strength, not loads). Hover reads every graph at that x; a click
+// pins the reading (click a pin again to remove it).
+function stInterp(xs, ys, x) {
+  if (x <= xs[0]) return ys[0];
+  for (let i = 1; i < xs.length; i++) if (xs[i] >= x) { const t = (x - xs[i - 1]) / (xs[i] - xs[i - 1] || 1); return ys[i - 1] + t * (ys[i] - ys[i - 1]); }
+  return ys[ys.length - 1];
+}
+function stPlots() {
+  const box = $('stplots'), s = ST.sum, a = ST.a, c = stCrew();
+  if (!s || !a || !a.plots || !ST.geo || !c) { box.innerHTML = ''; return; }
+  const P = a.plots, L = s.length_in, { X0, X1, W } = ST.geo, sx = x => X0 + x / L * (X1 - X0);
+  const same = (u, v) => u.every((x, i) => Math.abs(x - v[i]) < 1e-9);
+  const defs = [
+    { title: 'Shear V', unit: 'lb', code: P.shear_lb, real: P.shear_real_lb, f: v => v.toFixed(0) },
+    { title: 'Bending moment M', unit: 'lb·ft', code: P.moment_lbin.map(v => v / 12), real: P.moment_real_lbin.map(v => v / 12), f: v => v.toFixed(0) },
+    { title: 'D/C along the hull', unit: '', code: P.dc, real: P.dc_real, f: v => v.toFixed(2), ref: 1, dc: true },
+  ];
+  const H = 150, top = 24, bot = H - 22;
+  const pins = ST.pins || [], hx = ST.hx;
+  box.innerHTML = defs.map(d => {
+    const showReal = !same(d.code, d.real);
+    const all = d.code.concat(showReal ? d.real : [], [0], d.ref ? [d.ref] : []);
+    let lo = Math.min(...all), hi = Math.max(...all); const pad = (hi - lo) * 0.08 || 1; lo -= pad; hi += pad;
+    const sy = v => bot - (v - lo) / (hi - lo) * (bot - top);
+    const path = ys => P.x_in.map((x, i) => `${i ? 'L' : 'M'}${sx(x).toFixed(1)},${sy(ys[i]).toFixed(1)}`).join('');
+    let o = `<line x1="${X0}" x2="${X1}" y1="${sy(0)}" y2="${sy(0)}" stroke="${C.hair}"/>`;
+    for (const v of [lo + pad, hi - pad]) o += `<text x="${X0 - 4}" y="${sy(v) + 3}" font-size="10" fill="${C.muted}" text-anchor="end">${d.f(v)}</text>`;
+    if (d.ref) o += `<line x1="${X0}" x2="${X1}" y1="${sy(d.ref)}" y2="${sy(d.ref)}" stroke="${C.ink}" stroke-dasharray="4 3"/><text x="${X1}" y="${sy(d.ref) - 3}" font-size="10" fill="${C.muted}" text-anchor="end">code limit 1.00</text>`;
+    if (showReal) o += `<path d="${path(d.real)}" fill="none" stroke="${C.muted}" stroke-width="1.2" stroke-dasharray="5 3"/>`;
+    o += `<path d="${path(d.code)}" fill="none" stroke="${d.dc ? C.accent : C.ink}" stroke-width="1.6"/>`;
+    c.p.forEach((q, i) => { const x = sx(q.x); o += `<path d="M${x - 4},${bot + 8} L${x + 4},${bot + 8} L${x},${bot + 2} Z" fill="${i === ST.sel ? C.accent : C.ink}"/>`; });
+    const read = x => `${stLen(x)}: ${d.f(stInterp(P.x_in, d.code, x))}${d.unit ? ' ' + d.unit : ''}${showReal ? ` (real ${d.f(stInterp(P.x_in, d.real, x))})` : ''}`;
+    for (const px of pins) {
+      const y = sy(stInterp(P.x_in, d.code, px)), x = sx(px), right = x < (X0 + X1) / 2;
+      o += `<line x1="${x}" x2="${x}" y1="${top}" y2="${bot}" stroke="${C.faint}" stroke-dasharray="2 2"/><circle cx="${x}" cy="${y}" r="3.5" fill="${C.bg}" stroke="${C.ink}" stroke-width="1.5"/>`
+        + `<text x="${x + (right ? 6 : -6)}" y="${Math.max(top + 10, y - 6)}" font-size="10" fill="${C.ink}" text-anchor="${right ? 'start' : 'end'}" style="paint-order:stroke" stroke="${C.bg}" stroke-width="3">${esc(read(px))}</text>`;
+    }
+    if (hx != null) {
+      const x = sx(hx);
+      o += `<line x1="${x}" x2="${x}" y1="${top}" y2="${bot}" stroke="${C.accent}" stroke-width="1"/><circle cx="${x}" cy="${sy(stInterp(P.x_in, d.code, hx))}" r="3" fill="${C.accent}"/>`;
+      if (showReal) o += `<circle cx="${x}" cy="${sy(stInterp(P.x_in, d.real, hx))}" r="2.5" fill="${C.muted}"/>`;
+    }
+    const head = `<text x="${X0}" y="14" font-size="12" font-weight="650" fill="${C.ink}">${d.title}${d.unit ? ` <tspan font-weight="450" fill="${C.muted}">${d.unit}</tspan>` : ''}</text>`
+      + `<text x="${X1}" y="14" font-size="11" fill="${C.ink}" text-anchor="end">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : 'hover to read · click to pin'}</tspan>`}</text>`;
+    return `<svg class="stplot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${head}${o}<rect x="${X0}" y="${top}" width="${X1 - X0}" height="${bot - top}" fill="transparent" style="cursor:crosshair"/></svg>`;
+  }).join('') + (pins.length ? `<div class="hint" style="padding:0 0 var(--s2) ${X0}px">${pins.length} pinned reading(s) · <a href="#" id="stunpin">clear pins</a></div>` : '');
+}
+{
+  const at = e => { const svg = e.target.closest('svg.stplot'); if (!svg || !ST.geo || !ST.sum) return null;
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * ST.geo.W, { X0, X1 } = ST.geo;
+    return x < X0 || x > X1 ? null : (x - X0) / (X1 - X0) * ST.sum.length_in; };
+  let raf = 0;
+  $('stplots').addEventListener('pointermove', e => { const x = at(e); if (x === ST.hx) return; ST.hx = x; cancelAnimationFrame(raf); raf = requestAnimationFrame(stPlots); });
+  $('stplots').addEventListener('pointerleave', () => { ST.hx = null; stPlots(); });
+  $('stplots').addEventListener('click', e => {
+    if (e.target.id === 'stunpin') { e.preventDefault(); ST.pins = []; stPlots(); return; }
+    const x = at(e); if (x == null) return;
+    const tol = 6 / (ST.geo.X1 - ST.geo.X0) * ST.sum.length_in;
+    ST.pins = ST.pins || [];
+    const k = ST.pins.findIndex(p => Math.abs(p - x) < tol);
+    if (k >= 0) ST.pins.splice(k, 1); else ST.pins.push(Math.round(x * 2) / 2);
+    stPlots();
+  });
+}
+
+
+// How safety enters the numbers, from the canoe's own factors (seating::Safety).
+function stSafety(s) {
+  const f = s.safety, x = v => String(+v.toFixed(2)), dyn = f.dynamic_load_factor !== 1 ? ` (includes the ${x(f.dynamic_load_factor)} dynamic factor for paddling)` : '';
+  const crewM = f.crew_factor / f.strength_factor, punchM = f.crew_factor / f.punching_strength_factor;
+  const loads = f.method === 'lrfd'
+    ? `<li>Paddler weight \u00d7 <b>${x(f.crew_factor)}</b>${dyn}, hull weight \u00d7 <b>${x(f.hull_factor)}</b> (also checked at \u00d7 ${x(f.hull_only_factor)} with no crew)</li>`
+      + `<li>Concrete strength \u00d7 <b>${x(f.strength_factor)}</b> for bending, shear and biaxial, \u00d7 <b>${x(f.punching_strength_factor)}</b> for knee punching</li>`
+    : `<li>Paddler weight \u00d7 <b>${x(f.crew_factor)}</b>${dyn}, hull weight \u00d7 1</li>`
+      + `<li>Concrete strength \u00f7 <b>${x(f.factor_of_safety)}</b> (factor of safety)</li>`;
+  return `<b>How safety is counted</b> <span class="muted">(${f.method.toUpperCase()}, from canoe.toml)</span><ul style="margin:4px 0 4px 16px;padding:0">${loads}</ul>`
+    + `D/C = factored load \u00f7 reduced strength, so <b>D/C \u2264 1.00 is safe with these factors built in</b>. At exactly 1.00 the paddlers' load could still grow about `
+    + `<b>${x(crewM)}\u00d7</b> (${x(punchM)}\u00d7 for knee punching) before the concrete reaches the strength the lab tests measured.`
+    + `<div style="margin-top:4px">Past 1.00 the screen keeps going: <b style="color:#b28600">reduced</b> = over the code limit but the real load is still under the tested strength (it shows the safety factor left); <b style="color:${C.error}">fails</b> = no safety factor left (or water over the gunwale).</div>`
+    + `<div style="margin-top:4px">Freeboard ≥ <b>${s.freeboard_required_in.toFixed(2)} in</b> (the canoe.toml minimum) is the judges' staging check, with everyone at their marked seats: it is shown here but does not limit how far a paddler may slide; only water over the gunwale fails. Stability (GM) is shown for information only: it barely changes with where paddlers kneel; the design run checks it.</div>`;
+}
+// Code D/C bar (line at 1.00 = the code limit) with a red tick where the real load reaches the
+// tested strength (code D/C = dc / dc_true): past 1.00 the bar keeps going, amber, until that tick.
+function stColor(v, fail) { return !(v < fail) ? C.error : !(v <= 1) ? C.warning : v > ST.sum.dc_verify ? '#8a6d00' : C.ink; }
+function stGauge(label, at, fail, max, text, title) {
+  const w = v => Math.max(0, Math.min(isFinite(v) ? v : max, max)) / max * 100;
+  return `<div class="stg" title="${esc(title || '')}"><span>${label}</span><div class="sttrack"><i style="width:${w(at)}%;background:${stColor(at, fail)}"></i>`
+    + `<span class="lim" style="left:${w(1)}%"></span>${isFinite(fail) && fail <= max ? `<span class="lim" style="left:${w(fail)}%;background:${C.error};width:2px"></span>` : ''}</div><span>${text}</span></div>`;
+}
+const stSF = v => !isFinite(v) ? 'n/a' : v >= 100 ? '>99\u00d7' : `${v.toFixed(v < 10 ? 1 : 0)}\u00d7`;
+function stDemand() {
+  const a = ST.a, s = ST.sum;
+  if (!a || !s) { $('stverdict').innerHTML = ''; $('stgauges').innerHTML = ''; $('stgnote').textContent = ''; $('stwarn').innerHTML = ''; $('stsafety').innerHTML = s ? stSafety(s) : ''; return; }
+  const f = s.safety, code = f.crew_factor / f.strength_factor;
+  const sf = `Safety factor left: <b>${stSF(a.safety_factor)}</b> <span class="muted">(the real load could grow ${stSF(a.safety_factor)} before the concrete reaches its tested strength; the code keeps about ${stSF(code)} on paddler load)</span>`;
+  $('stverdict').innerHTML = a.state === 'safe'
+    ? `<div class="stv"><b>Safe at these seats</b><span class="muted">Every check keeps its full code margin. Closest: ${esc(ST_NAMES[a.governing_check] || a.governing_check)}, D/C ${a.dc.toFixed(2)}.</span><span>${sf}</span></div>`
+    : a.state === 'reduced'
+      ? `<div class="stv near"><b>Reduced safety margin</b><span class="muted">Past the code limit, but the canoe still holds at the real load:</span><span>${a.reasons.map(esc).join('<br>')}</span><span>${sf}</span></div>`
+      : `<div class="stv bad"><b>Fails: no safety factor left</b><span>${a.fail_reasons.map(esc).join('<br>')}</span><span>${sf}</span></div>`;
+  const ticks = a.checks.map(k => k.dc_true > 0 ? k.dc / k.dc_true : Infinity);
+  const max = Math.max(1.25, ...ticks.filter(isFinite).map(t => Math.min(t, 4) * 1.05), ...a.checks.map(k => Math.min(k.dc, 4) * 1.05));
+  let g = a.checks.map((k, n) => stGauge(ST_NAMES[k.name] || k.name, k.dc, ticks[n], max, `${k.dc.toFixed(2)} \u00b7 ${stSF(1 / k.dc_true)}`,
+    `Code D/C ${k.dc.toFixed(3)} (limit 1.00). Real load / tested strength ${k.dc_true.toFixed(3)}: safety factor left ${stSF(1 / k.dc_true)}; it fails where the bar reaches the red tick.${k.x_in != null ? ` At ${stLen(k.x_in)} from the bow.` : ''}`)).join('');
+  g += `<div class="stg" title="Lowest freeboard ${a.freeboard_in.toFixed(2)} in at these knees. The ${s.freeboard_required_in.toFixed(2)} in minimum is checked by the judges at staging (marked seats), so here it is information; water over the gunwale (0 in) fails."><span>Freeboard</span>`
+    + `<span class="hint" style="color:${a.freeboard_in <= 0 ? C.error : a.freeboard_ok ? C.muted : '#8a6d00'}">${a.freeboard_in <= 0 ? 'water over the gunwale' : a.freeboard_ok ? 'staging minimum met' : `under the ${s.freeboard_required_in.toFixed(2)} in staging minimum`}</span><span>${a.freeboard_in.toFixed(2)} in</span></div>`;
+  g += `<div class="stg" title="Loaded GM ${a.gm_in.toFixed(2)} in (the design run requires ${s.gm_min_in.toFixed(2)} in). Information only: seating cannot change it much."><span>Stability GM</span><span class="hint">info only, not a seat limit</span><span>${a.gm_in.toFixed(2)} in</span></div>`;
+  $('stgauges').innerHTML = g;
+  $('stgnote').textContent = `At exactly these knees. Bars: code D/C; black line = the code limit (1.00), red tick = no safety factor left. Numbers: code D/C \u00b7 safety factor left.`;
+  $('stsafety').innerHTML = stSafety(s);
+  $('stwarn').innerHTML = a.warnings.length ? `<div class="note-box warn">${a.warnings.map(esc).join('<br>')}</div>` : '';
+}
+function stSummary() {
+  if (!ST.sum) { $('stsum').innerHTML = ''; return; }
+  $('stsum').innerHTML = '<tr><th>crew</th><th>paddlers</th><th>D/C</th><th title="Safety factor left: real load / tested strength">SF</th><th></th></tr>' + ST.crews.map((c, i) => {
+    const a = ST.sumA[i], tot = c.p.reduce((t, q) => t + Number(q.lb), 0);
+    const st = !a ? '<span class="muted">\u2026</span>' : a.error ? `<span style="color:${C.error}" title="${esc(a.error)}">error</span>`
+      : a.state === 'safe' ? `<span style="color:${C.success}">safe</span>`
+        : a.state === 'reduced' ? `<span style="color:#b28600" title="${esc(a.reasons.join('; '))}">reduced</span>`
+          : `<span style="color:${C.error}" title="${esc(a.fail_reasons.join('; '))}">fails</span>`;
+    return `<tr data-c="${i}" class="${i === ST.cur ? 'on' : ''}"><td>${esc(c.name)}</td><td>${c.p.length} \u00b7 ${tot.toFixed(0)} lb</td><td>${a && !a.error ? a.dc.toFixed(2) : ''}</td><td>${a && !a.error ? stSF(a.safety_factor) : ''}</td><td>${st}</td></tr>`;
+  }).join('');
+}
+
+async function stPost(url, body) {
+  const r = await fetch(url, { method: 'POST', body });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+// While knees or weights change: checks and graphs only (about 0.2 s), the previous ranges kept but
+// dimmed; the ranges (the slow part) once the edits pause.
+function stEvalSoon() {
+  clearTimeout(ST.timer); ST.timer = setTimeout(() => stEval(false), 30);
+  clearTimeout(ST.fullTimer); ST.fullTimer = setTimeout(() => stEval(true), 450);
+}
+async function stEval(full = true) {
+  const c = stCrew(); if (!c || !ST.sum) return;
+  if (full) clearTimeout(ST.fullTimer);
+  // One request at a time (dragging fires many): a newer edit waits for the one in flight, then
+  // the latest state goes (a full one if any full one was asked for meanwhile).
+  if (ST.inflight) { ST.pending = full || ST.pending === 'full' ? 'full' : 'quick'; return; }
+  ST.inflight = true;
+  const seq = ++ST.seq, i = ST.cur, prev = ST.a;
+  stSave();
+  let ok = true;
+  try {
+    const a = await stPost('/api/seating', stBody(c, full, true));
+    if (seq === ST.seq && i === ST.cur) {
+      if (!full && prev && prev.bands && prev.bands.length === c.p.length) a.bands = prev.bands;
+      ST.stale = !full;
+      stError(''); ST.a = a; ST.sumA[i] = a;
+    } else ok = false;
+  } catch (e) {
+    if (seq === ST.seq && i === ST.cur) { stError(e.message); ST.a = null; ST.sumA[i] = { error: e.message }; } else ok = false;
+  }
+  ST.inflight = false;
+  if (ok) { stDraw(); stDemand(); stSummary(); }
+  if (ST.pending) { const f = ST.pending === 'full'; ST.pending = null; stEval(f); }
+}
+async function stEvalAll() {
+  for (let i = 0; i < ST.crews.length; i++) {
+    if (i === ST.cur) continue;
+    try { ST.sumA[i] = await stPost('/api/seating', stBody(ST.crews[i], false)); } catch (e) { ST.sumA[i] = { error: e.message }; }
+    stSummary();
+  }
+}
+
+// ---- edits ----
+function stPick(i) { ST.cur = i; ST.sel = 0; ST.a = ST.sumA[i] && ST.sumA[i].bands ? ST.sumA[i] : null; stRender(); stEval(); }
+$('stcrews').onclick = e => { const b = e.target.closest('[data-c]'); if (b) stPick(Number(b.dataset.c)); };
+$('stsum').onclick = e => { const r = e.target.closest('[data-c]'); if (r) stPick(Number(r.dataset.c)); };
+$('stunit').onclick = e => { const b = e.target.closest('[data-u]'); if (!b) return; ST.unit = b.dataset.u; stSave(); stRender(); };
+$('stname').oninput = () => { const c = stCrew(); if (!c) return; c.name = $('stname').value; stSave(); $('stcrews').children[ST.cur].textContent = c.name; stSummary(); };
+$('stlist').addEventListener('click', e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { const c = stCrew(); if (c.p.length < 2) return; stTouched(); c.p.splice(Number(del.dataset.del), 1); for (const o of c.p) if (o.pin > c.p.length) o.pin = 0; ST.sel = 0; ST.a = null; stRender(); stEval(); return; }
+  const row = e.target.closest('[data-i]');
+  if (row && ST.sel !== Number(row.dataset.i)) { ST.sel = Number(row.dataset.i); stSelectRow(); stDraw(); }
+});
+$('stlist').addEventListener('input', e => {
+  const row = e.target.closest('[data-i]'); if (!row) return;
+  const q = stCrew().p[Number(row.dataset.i)], v = e.target.value;
+  if (e.target.classList.contains('stpn')) { q.name = v; stSave(); stDraw(); if (q.rid && rSyncOn()) stPushToRoster(true, q); return; }
+  if (e.target.classList.contains('stpin')) {
+    stTouched();
+    // One paddler per seat: pinning here frees whoever had that seat.
+    const n = Number(v), c = stCrew();
+    for (const o of c.p) if (o !== q && n > 0 && o.pin === n) o.pin = 0;
+    q.pin = n; ST.sel = Number(row.dataset.i); stRender(); stEval(); return;
+  }
+  const n = Number(v); if (v === '' || !isFinite(n)) return;
+  if (e.target.classList.contains('stpw')) { if (n <= 0) return; q.lb = n; if (q.rid && rSyncOn()) stPushToRoster(true, q); }
+  else { q.x = Math.max(0, Math.min(ST.sum.length_in, n * stK())); stTouched(); }
+  ST.sel = Number(row.dataset.i); stSelectRow(); stDraw(); stEvalSoon();
+});
+for (const [id, k] of [['strbow', 'bow_clear_in'], ['strstern', 'stern_clear_in'], ['strsp', 'spacing_min_in']])
+  $(id).addEventListener('input', () => { const n = Number($(id).value); if ($(id).value === '' || !isFinite(n) || n < 0) return; ST.rules[k] = n * stK(); stDraw(); stEvalSoon(); });
+$('stadd').onclick = () => {
+  stTouched();
+  const c = stCrew(), L = ST.sum.length_in, r = ST.rules;
+  const xs = [r.bow_clear_in, ...c.p.map(q => q.x).sort((a, b) => a - b), L - r.stern_clear_in];
+  let best = [0, xs[0]]; for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] > best[1] - best[0]) best = [xs[i - 1], xs[i]];
+  c.p.push({ name: `Paddler ${c.p.length + 1}`, lb: 160, x: Math.round((best[0] + best[1]) / 2) });
+  ST.sel = c.p.length - 1; ST.a = null; stRender(); stEval();
+};
+$('stnewcrew').onclick = () => {
+  const L = ST.sum.length_in;
+  ST.crews.push({ name: `Crew ${ST.crews.length + 1}`, p: [{ name: 'Paddler 1', lb: 160, x: Math.round(L / 3) }, { name: 'Paddler 2', lb: 160, x: Math.round(2 * L / 3) }] });
+  stPick(ST.crews.length - 1);
+};
+$('stdelcrew').onclick = () => {
+  if (ST.crews.length < 2 || !confirm(`Remove the crew "${stCrew().name}" from the seating screen?`)) return;
+  ST.crews.splice(ST.cur, 1); ST.sumA.splice(ST.cur, 1); stPick(Math.max(0, ST.cur - 1));
+};
+$('streset').onclick = () => {
+  const k = ST.sum.cases.find(x => x.name === stCrew().run); if (!k) return;
+  ST.crews[ST.cur] = stFromRun(k); ST.sel = 0; ST.a = null; stRender(); stEval();
+};
+$('stbest').onclick = async () => {
+  stTouched();
+  const c = stCrew(), btn = $('stbest'); btn.disabled = true; btn.textContent = 'Finding best seats…';
+  try {
+    const j = await stPost('/api/seating/best', stBody(c, true, true));
+    j.seats_in.forEach((x, i) => { c.p[i].x = x; });
+    ST.seq++; ST.a = j.assessment; ST.sumA[ST.cur] = j.assessment; stError(''); stSave(); stRender();
+  } catch (e) { stError('best seating: ' + e.message); }
+  btn.disabled = false; btn.textContent = 'Best seating for this crew';
+};
+$('stuse').onclick = () => {
+  if (!confirm(`Replace the ${$('cases').children.length} load cases in Inputs with these ${ST.crews.length} crews (names, weights and seat pins; seats chosen by the next run)? Race events that name a load case that is gone must be re-picked.`)) return;
+  $('cases').innerHTML = '';
+  for (const c of ST.crews) lcBlock({ name: c.name, weights_lb: c.p.map(q => Number(q.lb)), positions: stPins(c) || undefined });
+  raceEvents(); schedulePrefs();
+  $('stbestnote').textContent = 'Inputs now have these crews as load cases. Run again to size the wall for them.';
+};
+
+// Drag a knee along the hull.
+$('stsvg').addEventListener('pointerdown', e => {
+  const g = e.target.closest('g[data-k]'); if (!g) return;
+  ST.drag = Number(g.dataset.k); ST.sel = ST.drag; stSelectRow(); stTouched();
+  $('stsvg').setPointerCapture(e.pointerId); e.preventDefault(); stDraw();
+});
+$('stsvg').addEventListener('pointermove', e => {
+  if (ST.drag == null) return;
+  const svg = $('stsvg'), pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+  const p = pt.matrixTransform(svg.getScreenCTM().inverse()), L = ST.sum.length_in;
+  const g = ST.geo, x = Math.max(0, Math.min(L, (p.x - g.X0) / (g.X1 - g.X0) * L));
+  const q = stCrew().p[ST.drag]; q.x = Math.round(x * 2) / 2;
+  const inp = $('stlist').children[ST.drag]; if (inp) inp.querySelector('.stpx').value = stIn(q.x);
+  stDraw(); stEvalSoon();
+});
+const stDrop = () => { ST.drag = null; };
+window.addEventListener('resize', () => { if (!$('seating').hidden) stDraw(); });
+$('stsvg').addEventListener('pointerup', stDrop);
+$('stsvg').addEventListener('pointercancel', stDrop);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('seating').hidden && document.activeElement.tagName !== 'INPUT') closeSeating(); });
+
+// Printable seating sheet: every crew bow to stern, knees from bow and stern, safe ranges.
+$('stprint').onclick = async () => {
+  const s = ST.sum, w = window.open('', '_blank'); if (!w) return;
+  w.document.write('<p style="font:13px sans-serif">Checking every crew…</p>');
+  const f = x => `${(x / 12).toFixed(1)} ft (${x.toFixed(0)} in)`;
+  let h = '';
+  for (const c of ST.crews) {
+    let a; try { a = await stPost('/api/seating', stBody(c, true)); } catch (e) { a = { error: e.message }; }
+    const order = c.p.map((q, i) => i).sort((i, j) => c.p[i].x - c.p[j].x);
+    h += `<h2>${esc(c.name)} <small>${c.p.length} paddlers, ${c.p.reduce((t, q) => t + Number(q.lb), 0).toFixed(0)} lb</small></h2>`;
+    const word = a.error ? '' : a.state === 'safe' ? 'Safe at these seats' : a.state === 'reduced' ? 'REDUCED MARGIN: ' + a.reasons.map(esc).join('; ') : 'FAILS: ' + a.fail_reasons.map(esc).join('; ');
+    h += a.error ? `<p>error: ${esc(a.error)}</p>` : `<p>${word}. Safety factor left ${stSF(a.safety_factor)}, D/C ${a.dc.toFixed(2)}, freeboard ${a.freeboard_in.toFixed(2)} in, GM ${a.gm_in.toFixed(2)} in.</p>`;
+    const rng = r => r ? `${(r[0] / 12).toFixed(1)} to ${(r[1] / 12).toFixed(1)} ft` : '';
+    h += '<table><tr><th>seat</th><th>paddler</th><th>weight</th><th>knee from bow</th><th>knee from stern</th><th>full margin, from bow</th><th>before no safety factor is left</th></tr>'
+      + order.map((i, k) => { const q = c.p[i], b = a.bands && a.bands[i];
+        return `<tr><td>${k + 1}${q.pin ? ' (pinned)' : ''}</td><td>${esc(q.name)}</td><td>${Number(q.lb).toFixed(0)} lb</td><td>${f(q.x)}</td><td>${f(s.length_in - q.x)}</td><td>${b ? rng(b.range_in) || 'not here' : ''}</td><td>${b ? rng(b.hold_in) || 'fails here' : ''}</td></tr>`; }).join('') + '</table>';
+  }
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Seating sheet</title><style>body{font:12px/1.4 ${FONT};color:#141414;margin:24px}h1{font-size:18px;margin:0}h2{font-size:14px;margin:18px 0 4px}small{color:#707070;font-weight:450}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e0e0e0;padding:4px 8px 4px 0;text-align:left;font-weight:450}th{color:#707070}p{margin:2px 0 6px}</style></head><body>`
+    + `<h1>Seating sheet</h1><p>Canoe ${(s.length_in / 12).toFixed(1)} ft, wall ${s.thickness_in} in at ${s.density_pcf} pcf${s.mix ? ' (' + esc(s.mix) + ')' : ''}, ${s.hull_weight_lb.toFixed(0)} lb. Knees measured from the bow tip. ${new Date().toLocaleString()}</p><div style="border-left:3px solid #e0e0e0;padding-left:10px">${stSafety(s)}</div>${h}</body></html>`);
+  w.document.close(); w.focus(); w.print();
+};
+</script>
+<script>
+// ---------- Roster: who races which event (src/roster.rs, /api/roster) ----------
+// People live in this browser only (localStorage 'jaguar.roster'); CSV export / import shares them.
+// Each paddler has a stable id so event include / exclude survive edits and row removal.
+const RS = { p: [], ev: {}, settings: null, info: [], defaults: [], out: null, busy: false, nextId: 1 };
+const R_COLS = ['name', 'gender', 'weight_lb', 'height_in', 'watts_1min', 'watts_4min', 'steer_stern', 'steer_bow'];
+const rBlank = i => ({ id: RS.nextId++, name: '', gender: i < 5 ? 'M' : 'F', weight_lb: '', height_in: '', watts_1min: '', watts_4min: '', steer_stern: 0, steer_bow: 0 });
+const rLabel = (q, i) => q.name.trim() || `Paddler ${i + 1}`;
+function rSave() { store.set('roster', JSON.stringify({ p: RS.p, ev: RS.ev, settings: RS.settings })); }
+function rLoad() {
+  let s = null; try { s = JSON.parse(store.get('roster') || 'null'); } catch (e) { s = null; }
+  RS.p = s && Array.isArray(s.p) && s.p.length ? s.p : Array.from({ length: 10 }, (_, i) => rBlank(i));
+  RS.nextId = Math.max(0, ...RS.p.map(q => q.id || 0)) + 1;
+  for (const q of RS.p) if (!q.id) q.id = RS.nextId++;
+  RS.ev = s && s.ev ? s.ev : {};
+  RS.settings = s && s.settings ? s.settings : null;
+}
+// Rows that take part: a weight entered. The posted index of each id.
+const rUsed = () => RS.p.filter(q => q.weight_lb !== '' && q.weight_lb != null);
+
+async function openRoster() {
+  closeSeating();
+  $('roster').hidden = false; $('rosterbtn').textContent = 'Close roster';
+  rLoad(); rErr('');
+  const r = await fetch('/api/roster'), j = await r.json();
+  if (!r.ok) { RS.info = []; RS.defaults = []; rRender(); rErr(j.error || r.status); return; }
+  RS.info = j.info; RS.defaults = j.events;
+  if (!RS.settings) RS.settings = { ...j.settings };
+  for (const d of j.events) if (!RS.ev[d.name]) RS.ev[d.name] = { men: d.men, women: d.women, bow_rudder: false, inc: [], exc: [] };
+  rRender();
+}
+function closeRoster() { $('roster').hidden = true; $('rosterbtn').textContent = 'Roster'; }
+$('rosterbtn').onclick = () => $('roster').hidden ? openRoster() : closeRoster();
+function rErr(m) { $('rerr').hidden = !m; $('rerr').textContent = m || ''; }
+
+function rRender() {
+  const num = (k, q, step = 'any') => `<input type="number" step="${step}" min="0" data-k="${k}" value="${esc(q[k] ?? '')}">`;
+  const opt = (k, q, vals) => `<select data-k="${k}">${vals.map(([v, t]) => `<option value="${v}" ${String(q[k]) === String(v) ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+  const steer = [[0, '0'], [1, '1'], [2, '2'], [3, '3']];
+  $('rtable').innerHTML = '<colgroup><col style="width:22px"><col><col style="width:58px"><col style="width:68px"><col style="width:64px"><col style="width:68px"><col style="width:68px"><col style="width:56px"><col style="width:56px"><col style="width:30px"></colgroup><tr><th></th><th>name</th><th>gender</th><th>weight lb</th><th>height in</th><th>1-min W</th><th>4-min W</th><th title="Steering rating from the stern (paddle): 0 none, 3 best">steer S</th><th title="Steering rating from the bow (rudder): 0 none, 3 best">steer B</th><th></th></tr>'
+    + RS.p.map((q, i) => `<tr data-id="${q.id}"><td class="n">${i + 1}</td><td><input data-k="name" placeholder="Paddler ${i + 1}" value="${esc(q.name)}"></td>`
+      + `<td>${opt('gender', q, [['M', 'M'], ['F', 'F']])}</td><td>${num('weight_lb', q)}</td><td>${num('height_in', q)}</td>`
+      + `<td>${num('watts_1min', q)}</td><td>${num('watts_4min', q)}</td>`
+      + `<td>${opt('steer_stern', q, steer)}</td><td>${opt('steer_bow', q, steer)}</td><td><button type="button" class="btn x" data-del="${q.id}" title="Remove this paddler">×</button></td></tr>`).join('');
+  rEvents(); rSettings(); rResults();
+}
+function rEvents() {
+  if (!RS.info.length) { $('revents').innerHTML = ''; return; }
+  $('revents').innerHTML = '<tr><th>event</th><th>M</th><th>F</th><th title="The bow paddler may steer with the rudder">rudder</th><th>who</th></tr>' + RS.info.map(e => {
+    const v = RS.ev[e.name];
+    const chips = RS.p.map((q, i) => {
+      const st = v.inc.includes(q.id) ? 'in' : v.exc.includes(q.id) ? 'out' : '';
+      const fits = (q.gender === 'M' ? v.men : v.women) > 0 && q.weight_lb !== '';
+      return `<button type="button" class="rchip ${st} ${fits ? '' : 'no'}" data-ev="${esc(e.name)}" data-id="${q.id}">${esc(rLabel(q, i))}</button>`;
+    }).join('');
+    return `<tr data-ev="${esc(e.name)}"><td title="${esc(e.course)} · weight ${e.weight}">${esc(e.name)}</td><td style="width:44px"><input type="number" min="0" step="1" data-e="men" value="${v.men}"></td>`
+      + `<td style="width:44px"><input type="number" min="0" step="1" data-e="women" value="${v.women}"></td><td><input type="checkbox" class="switch" data-e="bow_rudder" ${v.bow_rudder ? 'checked' : ''}></td><td><div class="rchips">${chips}</div></td></tr>`;
+  }).join('');
+}
+function rSettings() {
+  if (!RS.settings) return;
+  $('rktrack').value = RS.settings.k_track; $('rkpace').value = RS.settings.k_pace; $('rksteer').value = RS.settings.steer_penalty;
+}
+
+// ---- edits ----
+$('rtable').addEventListener('input', e => {
+  const tr = e.target.closest('tr[data-id]'), k = e.target.dataset.k; if (!tr || !k) return;
+  const q = RS.p.find(x => x.id === Number(tr.dataset.id));
+  q[k] = ['steer_stern', 'steer_bow'].includes(k) ? Number(e.target.value) : e.target.value;
+  rSave(); if (k === 'name' || k === 'gender' || k === 'weight_lb') rEvents();
+  if ((k === 'name' || k === 'weight_lb') && rSyncOn()) rPersonToSeating(q);
+});
+$('rtable').addEventListener('click', e => {
+  const b = e.target.closest('[data-del]'); if (!b) return;
+  const id = Number(b.dataset.del);
+  RS.p = RS.p.filter(q => q.id !== id);
+  for (const v of Object.values(RS.ev)) { v.inc = v.inc.filter(x => x !== id); v.exc = v.exc.filter(x => x !== id); }
+  rSave(); rRender();
+});
+$('radd').onclick = () => { RS.p.push(rBlank(RS.p.length)); rSave(); rRender(); };
+$('rclear').onclick = () => {
+  if (!confirm('Clear the roster back to 10 blank rows? Export CSV first to keep it.')) return;
+  RS.p = []; RS.nextId = 1; RS.p = Array.from({ length: 10 }, (_, i) => rBlank(i));
+  for (const v of Object.values(RS.ev)) { v.inc = []; v.exc = []; }
+  RS.out = null; rSave(); rRender();
+};
+$('revents').addEventListener('click', e => {
+  const c = e.target.closest('.rchip'); if (!c) return;
+  const v = RS.ev[c.dataset.ev], id = Number(c.dataset.id);
+  if (v.inc.includes(id)) { v.inc = v.inc.filter(x => x !== id); v.exc.push(id); }
+  else if (v.exc.includes(id)) v.exc = v.exc.filter(x => x !== id);
+  else v.inc.push(id);
+  rSave(); rEvents();
+});
+$('revents').addEventListener('input', e => {
+  const tr = e.target.closest('tr[data-ev]'), k = e.target.dataset.e; if (!tr || !k) return;
+  const v = RS.ev[tr.dataset.ev];
+  if (k === 'bow_rudder') v.bow_rudder = e.target.checked;
+  else { const n = Number(e.target.value); if (!Number.isInteger(n) || n < 0) return; v[k] = n; }
+  rSave(); if (k !== 'bow_rudder') rEvents();
+});
+for (const [id, k] of [['rktrack', 'k_track'], ['rkpace', 'k_pace'], ['rksteer', 'steer_penalty']])
+  $(id).addEventListener('input', () => { const n = Number($(id).value); if ($(id).value === '' || !isFinite(n) || n < 0) return; RS.settings[k] = n; rSave(); });
+
+// ---- CSV ----
+$('rexport').onclick = () => {
+  const cell = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  const text = [R_COLS.join(','), ...RS.p.map(q => R_COLS.map(k => cell(q[k] ?? '')).join(','))].join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/csv' })); a.download = 'roster.csv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('rimport').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rows = [];
+  for (const line of (await f.text()).split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const out = []; let cur = '', q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+    }
+    out.push(cur); rows.push(out.map(s => s.trim()));
+  }
+  const head = (rows.shift() || []).map(h => h.toLowerCase());
+  const missing = R_COLS.filter(k => !head.includes(k));
+  e.target.value = '';
+  if (missing.length) { rErr(`roster CSV: missing column(s) ${missing.join(', ')}`); return; }
+  RS.nextId = 1;
+  RS.p = rows.map(r => {
+    const q = rBlank(0);
+    for (const k of R_COLS) q[k] = r[head.indexOf(k)] ?? '';
+    q.gender = String(q.gender).toUpperCase().startsWith('F') ? 'F' : 'M';
+    q.steer_stern = Math.max(0, Math.min(3, Math.round(Number(q.steer_stern) || 0)));
+    q.steer_bow = Math.max(0, Math.min(3, Math.round(Number(q.steer_bow) || 0)));
+    return q;
+  });
+  for (const v of Object.values(RS.ev)) { v.inc = []; v.exc = []; }
+  rErr(''); rSave(); rRender();
+};
+
+// ---- assign ----
+$('rassign').onclick = async () => {
+  if (RS.busy) return;
+  const used = rUsed();
+  if (!used.length) { rErr('enter at least one paddler\'s weight'); return; }
+  const idx = new Map(used.map((q, i) => [q.id, i]));
+  const opt = v => v === '' || v == null ? null : Number(v);
+  const body = {
+    paddlers: used.map(q => ({ name: rLabel(q, RS.p.indexOf(q)), gender: q.gender, weight_lb: Number(q.weight_lb), height_in: opt(q.height_in),
+      watts_1min: opt(q.watts_1min), watts_4min: opt(q.watts_4min), steer_stern: q.steer_stern, steer_bow: q.steer_bow })),
+    events: RS.info.map(e => { const v = RS.ev[e.name];
+      return { name: e.name, men: v.men, women: v.women, bow_rudder: v.bow_rudder, include: v.inc.filter(id => idx.has(id)).map(id => idx.get(id)), exclude: v.exc.filter(id => idx.has(id)).map(id => idx.get(id)) }; }),
+    settings: RS.settings,
+    rules: typeof ST !== 'undefined' && ST.rules ? ST.rules : null,
+  };
+  RS.busy = true; const b = $('rassign'); b.disabled = true; b.textContent = 'Assigning… (racing every crew)';
+  try {
+    const r = await fetch('/api/roster', { method: 'POST', body: JSON.stringify(body) }), j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.status);
+    RS.out = j; RS.outIds = used.map(q => q.id); rErr('');
+  } catch (e) { rErr('assign: ' + e.message); }
+  RS.busy = false; b.disabled = false; b.textContent = 'Assign crews';
+  rResults();
+  if (RS.out && rSyncOn()) await rSendToSeating(null);
+};
+function rResults() {
+  const o = RS.out;
+  if (!o) { $('rout').innerHTML = ''; return; }
+  const ft = x => `${(x / 12).toFixed(1)} ft`;
+  let h = `<div class="hint">Weighted race time ${o.weighted_time_s.toFixed(1)} s over the events with a crew. Times are model numbers on each event's planned path.</div>`;
+  h += o.assignments.map((a, k) => {
+    if (a.error) return `<div class="rcard bad"><div class="rhead"><b>${esc(a.event)}</b></div><div>${esc(a.error)}</div></div>`;
+    const rows = a.crew.map(m => `<tr><td>${m.seat}</td><td>${esc(m.name)} ${m.steerer ? '<span class="rtag steer">steers</span>' : ''}</td><td>${m.side === 'left' ? 'L' : 'R'}</td>`
+      + `<td>${m.weight_lb.toFixed(0)} lb</td><td>${m.watts.toFixed(0)} W${m.estimated ? ' <span class="rtag est" title="No gym test for this event\'s length: estimated from body mass">est.</span>' : ''}</td><td>${ft(m.knee_in)}</td></tr>`).join('');
+    return `<div class="rcard"><div class="rhead"><b>${esc(a.event)}</b><span class="hint">${esc(a.course)} · ${a.test === '1min' ? '1-min' : '4-min'} watts</span><span class="t">${a.time_s.toFixed(1)} s</span></div>`
+      + `<table class="rcrew"><tr class="hint"><td>seat</td><td>bow → stern</td><td title="Starting side; the crew switches sides together">start</td><td>weight</td><td>power</td><td>knee</td></tr>${rows}</table>`
+      + `<div class="hint">Power ${a.raw_power_w.toFixed(0)} W − ruddering ${a.tracking_loss_w.toFixed(0)} − pace ${a.pace_loss_w.toFixed(0)} = ${a.effective_power_w.toFixed(0)} W`
+      + `${a.steer_penalty_s > 0 ? ` · steering +${a.steer_penalty_s.toFixed(1)} s` : ''} · safe: D/C ${a.dc.toFixed(2)}, freeboard ${a.freeboard_in.toFixed(2)} in, GM ${a.gm_in.toFixed(2)} in · ${a.crews_timed} crews timed</div>`
+      + (a.notes.length ? `<div class="hint">${a.notes.map(esc).join(' · ')}</div>` : '')
+      + `<div><button type="button" class="btn soft" data-seat="${k}">Open in Seating</button></div></div>`;
+  }).join('');
+  $('rout').innerHTML = h;
+}
+// ---- sync between Roster and Seating ----
+// Seating crews made from the roster carry the event (crew.event) and each paddler's roster id
+// (p.rid). Roster -> Seating: assigned crews (one per event, everyone pinned to their seat) and
+// roster name / weight edits. Seating -> Roster: name / weight edits of paddlers with a rid.
+// Knee and seat edits stay in Seating (the crew is marked edited; replacing it asks first).
+function rSyncOn() { return store.get('rosterSync') === '1'; }
+function rSetSync(on) { store.set('rosterSync', on ? '1' : '0'); $('rsync').checked = on; $('stsync').checked = on; stSyncNote(); }
+$('rsync').onchange = () => rSetSync($('rsync').checked);
+$('stsync').onchange = () => rSetSync($('stsync').checked);
+$('rsync').checked = rSyncOn();
+// Assignments (all, or index k) into Seating's crews. Returns the crew index of the last one put, or -1.
+async function rSendToSeating(k) {
+  if (!RS.out) { rErr('assign crews first'); return -1; }
+  if (!(await stEnsure())) { rErr('seating: ' + ST.loadErr); return -1; }
+  const list = RS.out.assignments.filter((a, i) => !a.error && (k == null || i === k));
+  const edited = list.filter(a => ST.crews.some(c => c.event === a.event && c.edited)).map(a => a.event);
+  if (edited.length && !confirm(`Replace the crew(s) you edited on the Seating screen?\n${edited.join('\n')}`)) return -1;
+  let last = -1;
+  for (const a of list) {
+    const crew = { name: a.event, event: a.event, edited: false, p: a.crew.map(m => ({ name: m.name, lb: m.weight_lb, x: m.knee_in, pin: m.seat, rid: (RS.outIds || [])[m.paddler] ?? null })) };
+    const i = ST.crews.findIndex(c => c.event === a.event || c.name === a.event);
+    if (i >= 0) ST.crews[i] = crew; else ST.crews.push(crew);
+    last = i >= 0 ? i : ST.crews.length - 1;
+  }
+  stSave(); ST.sumA = [];
+  if (!$('seating').hidden) { stRender(); stEval(); stEvalAll(); }
+  $('rnote').textContent = `${list.length} crew(s) sent to Seating`;
+  return last;
+}
+// A roster paddler's name / weight into every Seating crew they are in.
+async function rPersonToSeating(q) {
+  if (!(await stEnsure())) return;
+  const i = RS.p.indexOf(q);
+  let n = 0;
+  for (const c of ST.crews) for (const p of c.p) if (p.rid === q.id) { p.name = rLabel(q, i); if (Number(q.weight_lb) > 0) p.lb = Number(q.weight_lb); n++; }
+  if (n) { stSave(); ST.sumA = []; if (!$('seating').hidden) { stRender(); stEval(); stEvalAll(); } }
+}
+// Seating -> Roster: one paddler's name and weight to their roster row and to every other Seating
+// crew they are in (so one person has one weight everywhere). True if anything changed.
+function stPushPerson(p) {
+  if (!RS.p.length) rLoad();
+  const q = RS.p.find(x => x.id === p.rid); if (!q) return false;
+  const name = p.name.trim() === `Paddler ${RS.p.indexOf(q) + 1}` ? '' : p.name;
+  const changed = q.name !== name || Number(q.weight_lb) !== Number(p.lb);
+  q.name = name; q.weight_lb = p.lb;
+  for (const c of ST.crews) for (const o of c.p) if (o.rid === p.rid && o !== p) { o.name = p.name; o.lb = p.lb; }
+  return changed;
+}
+// The shown crew's linked paddlers to the roster. quiet = auto sync (one edit).
+function stPushToRoster(quiet, only) {
+  const c = stCrew(); if (!c) return 0;
+  let n = 0;
+  for (const p of only ? [only] : c.p) if (stPushPerson(p)) n++;
+  rSave(); stSave(); ST.sumA = [];
+  if (!$('roster').hidden) rRender();
+  if (!quiet) { $('stsyncnote').textContent = n ? `Roster updated: ${n} change(s) from this crew.` : 'Roster already matches this crew.'; stEvalAll(); }
+  else { clearTimeout(ST.allTimer); ST.allTimer = setTimeout(stEvalAll, 400); }
+  return n;
+}
+$('stpush').onclick = () => stPushToRoster(false);
+$('rsend').onclick = () => rSendToSeating(null);
+// One event's crew into Seating, then open it there.
+$('rout').addEventListener('click', async e => {
+  const b = e.target.closest('[data-seat]'); if (!b) return;
+  const i = await rSendToSeating(Number(b.dataset.seat));
+  if (i < 0) return;
+  closeRoster();
+  await openSeating();
+  if (ST.sum) stPick(Math.min(i, ST.crews.length - 1));
+});
 </script>
 </body>
 </html>

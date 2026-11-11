@@ -20,7 +20,7 @@
 //! Must stay deterministic: same canoe.toml => byte-identical result.json.
 
 use crate::check::{Verdict, check, check_zoned, first_moment_below, freeboard, freeboard_over};
-use crate::equilibrium::{CrewLoad, Loads, solve, solve_weights};
+use crate::equilibrium::{CrewLoad, Loads, solve_trim, solve_weights, solve_weights_trim};
 use crate::hull::{Grid, Hull, Topsides};
 use crate::hullgen::ShapeParams;
 use crate::mix::{MixProvenance, StrengthFit};
@@ -2827,11 +2827,26 @@ impl Wall<'_> {
         patch: f64,
         cg: f64,
     ) -> Result<Loads> {
+        self.solve_trim(grid, sec, dead, crew, patch, cg, false)
+    }
+
+    /// [`Wall::solve`] with the wide trim bracket when `wide` (`Params::wide_trim`).
+    #[allow(clippy::too_many_arguments)]
+    fn solve_trim(
+        &self,
+        grid: &Grid,
+        sec: &Sections,
+        dead: f64,
+        crew: &[CrewLoad],
+        patch: f64,
+        cg: f64,
+        wide: bool,
+    ) -> Result<Loads> {
         match self {
-            Wall::Uniform(r) => solve(grid, sec, r * dead, crew, patch, cg),
+            Wall::Uniform(r) => solve_trim(grid, sec, r * dead, crew, patch, cg, wide),
             Wall::Zoned(z) => {
                 let w: Vec<f64> = z.zs.weight.iter().map(|w| w * dead).collect();
-                solve_weights(grid, &w, &z.zs.zg, crew, patch, cg)
+                solve_weights_trim(grid, &w, &z.zs.zg, crew, patch, cg, wide)
             }
         }
     }
@@ -2948,7 +2963,7 @@ pub fn eval_case_wall(
         seats.iter().zip(&case.weights_lb).map(|(&x_in, &w)| CrewLoad { x_in, lb: w * f }).collect()
     };
     let (patch, cg) = (mat.knee_patch_in, params.stability.crew_cg_in);
-    let service = wall.solve(grid, sec, 1.0, &crew(1.0), patch, cg)?;
+    let service = wall.solve_trim(grid, sec, 1.0, &crew(1.0), patch, cg, params.wide_trim)?;
     // At these seats, where the gate looks (the lettering, else the whole hull).
     let fb = freeboard_over(grid, &service, &fb_spans(params, grid)?.1).0;
     let max_paddler =
@@ -2959,7 +2974,7 @@ pub fn eval_case_wall(
         let loads = if (dead, f) == (1.0, 1.0) {
             service.clone()
         } else {
-            wall.solve(grid, sec, dead, &crew(f), patch, cg)?
+            wall.solve_trim(grid, sec, dead, &crew(f), patch, cg, params.wide_trim)?
         };
         let mut v = match wall {
             Wall::Uniform(rho) => check(
@@ -3169,7 +3184,12 @@ fn gate_freeboard(
     for q in seats::shifted(seats, params.gates.freeboard_seat_shift_in, grid).into_iter().skip(1) {
         let crew: Vec<CrewLoad> =
             q.iter().zip(&case.weights_lb).map(|(&x_in, &lb)| CrewLoad { x_in, lb }).collect();
-        let at = FreeboardAt::of(grid, &q, &wall.solve(grid, sec, 1.0, &crew, patch, cg)?, spans);
+        let at = FreeboardAt::of(
+            grid,
+            &q,
+            &wall.solve_trim(grid, sec, 1.0, &crew, patch, cg, params.wide_trim)?,
+            spans,
+        );
         if at.freeboard_in < out.freeboard_in {
             out = at;
         }

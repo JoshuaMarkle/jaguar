@@ -94,6 +94,12 @@ placed where checks need it as side-view rectangles on `increment_in` marks (T72
 against single mix reported. Open: more than two mixes; the team's real pour limits (smallest
 rectangle, fewest rectangles); a lab check of the dense/light bond line.
 
+## D. Roster (done 2026-11-10)
+
+Built as designed (docs/SPEC.md "Roster", `src/roster.rs`). Open: fit `k_track` / `k_pace` /
+`steer_penalty` from timed practice runs (like `race --measured`); use height (kneeling CG) for
+the reported GM; an optional cap on races per paddler if fatigue matters.
+
 ## Team task list: status
 
 Source: `data/canoe_optimizer_tasks.md` (from `data/raw/Canoe_optimizer_tasks_to_fix.docx`).

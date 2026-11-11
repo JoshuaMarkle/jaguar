@@ -105,6 +105,21 @@
 //!   that sheet (`sheets.rs`) as a download; warnings (an unofficial school name, an unverified
 //!   design) in the `X-Jaguar-Warnings` header. 400 bad inputs, 404 no result, 409 a run is
 //!   going or no winner, 422 the sheets cannot be drawn (the message names the missing input).
+//! * `GET  /api/seating`  -> `seating::Summary` of the last result's winner (or closest design):
+//!   hull side profile, wall, seat rules, limits and the run's load cases with their seats.
+//!   404 no result yet, 409 a run is going or the result has no canoe to rebuild (none, two-mix wall).
+//! * `POST /api/seating` body = `seating::Request` {weights_lb, seats_in, rules?, bands?} ->
+//!   `seating::Assessment` (every check, freeboard and GM at exactly these knees, no seat
+//!   variance; each paddler's safe band). `positions` (optional) pins paddlers to seats like
+//!   `load_case.positions`: best keeps them there, assess warns when a pinned paddler is elsewhere. `POST /api/seating/best` same body (seats_in
+//!   ignored) -> {"seats_in", "crew_order", "assessment"}: the run's seat picker for this crew.
+//!   400 bad body or crew, plus the GET errors. Synchronous (well under a second).
+//! * `GET  /api/roster` -> {"events": [roster::EventSpec] (gender mix from each race event's
+//!   load case name), "info": [{name, course, weight, load_case}], "settings": defaults} for the
+//!   race events of the current canoe.toml (else the run's). `POST /api/roster` body =
+//!   `roster::Request` {paddlers, events, settings?, rules?} -> `roster::Roster`: every event's
+//!   fastest safe crew on the current result's canoe. 400 bad roster or no race events, plus the
+//!   seating GET errors. Synchronous (seconds). The roster itself is never stored server side.
 //!
 //! * `GET  /api/session`   -> {"app": "jaguar", "version", "desktop": bool, "folder": str|null}.
 //!   `desktop` = started by a double-click (`launch.rs`); `folder` = its canoe folder. The
@@ -406,6 +421,11 @@ impl App {
             ("POST", "/api/runs/open") => self.open_run(query),
             ("POST", "/api/race") => self.race(body),
             ("POST", "/api/manufacture") => self.manufacture(body),
+            ("GET", "/api/seating") => self.seating(None, body),
+            ("POST", "/api/seating") => self.seating(Some(false), body),
+            ("POST", "/api/seating/best") => self.seating(Some(true), body),
+            ("GET", "/api/roster") => self.roster(None),
+            ("POST", "/api/roster") => self.roster(Some(body)),
             ("GET", "/api/drawing") => self.drawing_spec(),
             ("POST", "/api/drawing") => {
                 let (st, ct, _, bytes, _) = self.drawing(query, body);
@@ -473,6 +493,9 @@ impl App {
                 | "/api/export"
                 | "/api/race"
                 | "/api/manufacture"
+                | "/api/seating"
+                | "/api/seating/best"
+                | "/api/roster"
                 | "/api/drawing"
                 | "/api/pause"
                 | "/api/resume"
@@ -947,6 +970,89 @@ impl App {
         match built {
             Ok(v) => json_reply(200, v),
             Err(e) => err_reply(422, format!("{e:#}")),
+        }
+    }
+
+    /// `/api/seating` (`best` None = GET summary, Some(false) = assess, Some(true) = best seats).
+    /// The current result's canoe for seating and the roster, or the reply saying why not.
+    fn finished_canoe(&self) -> Result<crate::seating::Canoe, Reply> {
+        let (state, result) = {
+            let s = self.lock();
+            (s.state, s.result.clone())
+        };
+        if state == "running" {
+            return Err(err_reply(409, "a run is going: use its canoe when it is done"));
+        }
+        let Some(result) = result else {
+            return Err(err_reply(404, "no result yet: run first"));
+        };
+        crate::seating::canoe_from_result(&result).map_err(|e| err_reply(409, format!("{e:#}")))
+    }
+
+    /// `/api/roster` (`body` None = GET the default event mixes, Some = assign crews).
+    fn roster(&self, body: Option<&str>) -> Reply {
+        use crate::roster;
+        let canoe = match self.finished_canoe() {
+            Ok(c) => c,
+            Err(r) => return r,
+        };
+        // The race events as canoe.toml has them now; else the run's (crews resolved).
+        let rp = match self.current().race {
+            Some(rp) => Some(rp),
+            None => canoe
+                .params
+                .race
+                .clone()
+                .and_then(|mut rp| rp.resolve_crews(&canoe.params.load_cases).ok().map(|_| rp)),
+        };
+        let Some(rp) = rp.filter(|rp| !rp.events.is_empty()) else {
+            return err_reply(400, "no [[race.event]] in canoe.toml: the roster fills race events");
+        };
+        let Some(body) = body else {
+            let info: Vec<_> = rp
+                .events
+                .iter()
+                .map(|e| serde_json::json!({"name": e.name, "course": e.course, "weight": e.weight, "load_case": e.load_case}))
+                .collect();
+            return json_reply(
+                200,
+                serde_json::json!({"events": roster::default_events(&rp), "info": info, "settings": roster::Settings::default()}),
+            );
+        };
+        let req: roster::Request = match serde_json::from_str(body) {
+            Ok(r) => r,
+            Err(e) => return err_reply(400, format!("roster: {e}")),
+        };
+        match roster::assign(&canoe, &rp, &req) {
+            Ok(r) => json_reply(200, serde_json::json!(r)),
+            Err(e) => err_reply(400, format!("{e:#}")),
+        }
+    }
+
+    fn seating(&self, best: Option<bool>, body: &str) -> Reply {
+        use crate::seating;
+        let canoe = match self.finished_canoe() {
+            Ok(c) => c,
+            Err(r) => return r,
+        };
+        let Some(best) = best else {
+            return json_reply(200, serde_json::json!(seating::summary(&canoe)));
+        };
+        let req: seating::Request = match serde_json::from_str(body) {
+            Ok(r) => r,
+            Err(e) => return err_reply(400, format!("seating request: {e}")),
+        };
+        let out = if best {
+            seating::best(&canoe, &req.weights_lb, req.positions.as_deref(), req.rules).and_then(|s| {
+                let a = seating::assess(&canoe, &seating::Request { seats_in: s.seats_in.clone(), ..req })?;
+                Ok(serde_json::json!({"seats_in": s.seats_in, "crew_order": s.crew_order, "assessment": a}))
+            })
+        } else {
+            seating::assess(&canoe, &req).map(|a| serde_json::json!(a))
+        };
+        match out {
+            Ok(v) => json_reply(200, v),
+            Err(e) => err_reply(400, format!("{e:#}")),
         }
     }
 
@@ -1519,7 +1625,22 @@ mod tests {
         assert_eq!(a.handle("DELETE", "/api/drawing", "").0, 405);
         a.lock().result = Some(r#"{"format":"jaguar-result/1","winner":null}"#.into());
         assert_eq!(a.handle("POST", "/api/drawing?sheet=2&format=svg", "").0, 409, "no winner, no drawing");
+        assert_eq!(a.handle("GET", "/api/seating", "").0, 409, "no winner, no seating");
         a.lock().result = None;
+        // Seating: the page, and the endpoints refuse until there is a canoe (tests/seating.rs has the physics).
+        assert!(page.contains(r#"id="seatbtn""#) && page.contains("function openSeating("));
+        assert_eq!(a.handle("GET", "/api/seating", "").0, 404);
+        assert_eq!(a.handle("POST", "/api/seating", r#"{"weights_lb":[150],"seats_in":[60]}"#).0, 404);
+        assert_eq!(a.handle("POST", "/api/seating/best", "{}").0, 404);
+        assert_eq!(a.handle("DELETE", "/api/seating", "").0, 405);
+        // Roster: the page, and the endpoint refuses until there is a canoe (tests/roster.rs has the solver).
+        assert!(page.contains(r#"id="rosterbtn""#) && page.contains("function openRoster("));
+        // Roster <-> Seating sync (browser side): both switches, both directions.
+        assert!(page.contains(r#"id="rsync""#) && page.contains(r#"id="stsync""#));
+        assert!(page.contains("function rSendToSeating(") && page.contains("function stPushToRoster("));
+        assert_eq!(a.handle("GET", "/api/roster", "").0, 404);
+        assert_eq!(a.handle("POST", "/api/roster", "{}").0, 404);
+        assert_eq!(a.handle("PUT", "/api/roster", "").0, 405);
         assert_eq!(a.handle("GET", "/nope", "").0, 404);
         assert_eq!(a.handle("DELETE", "/api/run", "").0, 405);
     }
