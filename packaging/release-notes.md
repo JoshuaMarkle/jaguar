@@ -2,6 +2,32 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in 0.5.6
+* **Seating (race day):** open the finished canoe, then place, drag or type each paddler's knee
+  position and watch the demand update live. JAGUAR shows how far each paddler can slide while
+  the full safety factor holds, how far before nothing is left, and the safety factor remaining
+  in between. It finds the best seating, with pins (for example the steerer in the stern), loads
+  the crews from your load cases, and draws shear, moment and D/C graphs you can hover and click.
+  There is also a printable seating sheet.
+* **Roster:** list your paddlers (weight, height, gender, 1- and 4-minute erg watts, stern and
+  bow steering). JAGUAR fills every race event with the fastest crew that keeps the canoe safe
+  and tracking straight. People stay in your browser only (CSV import and export). Roster and
+  Seating sync both ways, automatically or with a button.
+* **Drawings:** canoe and mold drawing sheets (PDF, SVG, DXF) with views, dimensions, wall
+  buildup, foam nesting and a bill of materials.
+* **Mold foam boards:** set the foam board thickness and the search tries only depths, curved
+  bottoms and rockers that come out in whole boards. Exported CAD keeps the topsides knuckle
+  on its board line.
+* **Finer search:** mold depth and side flare are refined past the grid (resolution fields), the
+  shape search is faster, and the best design is re-checked at finer stations before it wins.
+  The starter canoe uses 61 stations.
+* **Better auto seats:** crew orders are scored on structural demand as well as stability, and
+  seats are planned at each design's own density.
+* **Clearer reports:** a binding-constraint table shows how close each check is, mix data
+  warnings (placeholders, weak fits, too few breaks) appear in every report, and loaded GM
+  warns when the assumed crew CG height decides it. You can also choose which mixes a run uses.
+* **Fix:** the race summary no longer crashes on load cases given as displacements.
+
 ## New in 0.5.5
 * **Compare layouts (shop packet):** a new table compares all flat, all upright and flat +
   upright keel (with slabs of each foam thickness you have, or two sheets glued) using your foam,
