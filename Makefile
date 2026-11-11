@@ -1,4 +1,4 @@
-.PHONY: check fmt run serve hooks pwa wasm-test
+.PHONY: check fmt run serve hooks pwa wasm-test pwa-browser-test
 # Cargo's target folder (CARGO_TARGET_DIR or ./target).
 TARGET = $(shell cargo metadata --format-version 1 --no-deps | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).target_directory.split(String.fromCharCode(92)).join('/')))")
 WASM = $(TARGET)/wasm32-wasip1/release/jaguar_wasm.wasm
@@ -24,3 +24,5 @@ pwa:              ## the phone app in target/pwa (needs rustup target add wasm32
 wasm-test: pwa    ## the phone engine against the native build (docs/SPEC.md "Phone app")
 	cargo build --release -q
 	node web/pwa/test.mjs "$(WASM)" "$(TARGET)/release/jaguar"
+pwa-browser-test: pwa ## the built phone app in headless Chrome (needs Chrome or Edge)
+	node web/pwa/browser-test.mjs target/pwa

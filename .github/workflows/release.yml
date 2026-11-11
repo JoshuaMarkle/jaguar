@@ -20,6 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
       - run: make wasm-test
+      - run: node web/pwa/browser-test.mjs target/pwa
       - run: cd target/pwa && zip -qr ../../JAGUAR-phone.zip .
       - uses: actions/upload-artifact@v4
         with: { name: JAGUAR-phone, path: JAGUAR-phone.zip }

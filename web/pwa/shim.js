@@ -444,8 +444,8 @@
   function fatal(text) {
     banner(text, [['Reload', () => location.reload()]]);
   }
-  const css = `.pwa-banner{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:1000;display:flex;gap:8px;align-items:center;
-    max-width:calc(100vw - 32px);padding:8px 8px 8px 14px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hair,#e0e0e0);border-radius:var(--r-md,8px);font:inherit}
+  const css = `.pwa-banner{position:fixed;left:16px;right:16px;bottom:16px;margin:0 auto;z-index:1000;display:flex;gap:8px;align-items:center;
+    max-width:520px;padding:8px 8px 8px 14px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hair,#e0e0e0);border-radius:var(--r-md,8px);font:inherit}
     .pwa-banner span{flex:1}
     .pwa-veil{position:fixed;inset:0;z-index:1001;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(20,20,20,.3)}
     .pwa-dialog{max-width:520px;width:100%;padding:16px;background:var(--canvas,#fff);color:var(--ink,#141414);border:1px solid var(--hair,#e0e0e0);border-radius:var(--r-md,8px)}

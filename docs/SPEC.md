@@ -890,8 +890,12 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
   browser has it). A shape search saves every scored shape; a run cut off by the app being closed
   is offered on the next launch (**Resume** / **Discard**): Resume skips the saved shapes (a fixed
   hull starts over) and gives the same result as an uninterrupted run.
+* **Narrow screens** (760 px and less: a phone; also a narrow desktop window): one column that
+  scrolls, 3D view, result, charts, then inputs; the top bar stays on one row (scrolls sideways),
+  name, Run and the run status first; touch-sized controls. Wider windows are unchanged.
 * **Offline and updates:** a service worker caches every file at install, one cache per build
   (version + content hash). A new build waits until the page's "Reload" (refused while a run goes).
+* **Tests:** `make pwa-browser-test` drives the built app in headless Chrome (every release).
 * **Same answers as native** (`make wasm-test`, every release): wasm brings its own libm, so the
   last bits of sin/exp/pow can differ. Measured on `examples/canoe.toml`: same structure and
   winner, worst relative difference 3e-14 over 43 064 numbers. Gate: same structure and strings

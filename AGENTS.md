@@ -46,7 +46,7 @@ src/serve.rs + web/ localhost web UI (API documented in serve.rs, single index.h
 src/main.rs         CLI: (none = desktop app) | run | check | mix | import-michlet | import-mesh | gen-hull | export | mold | drawing | race | serve
 jaguar-wasm/        phone engine: the crate as a wasm32-wasip1 reactor (C ABI over serve::Embedded, runs)
 web/pwa/            phone app: in-memory WASI fs, API + compute workers, fetch shim, service worker,
-                    build.mjs (-> target/pwa), test.mjs (wasm vs native)
+                    build.mjs (-> target/pwa), test.mjs (wasm vs native), browser-test.mjs (headless Chrome)
 
 tests/golden.rs     must match tests/golden/reference.py (independent Python implementation)
 tests/golden/       golden JSON, reference.py, and the Michlet files the off1 hull came from
@@ -77,6 +77,7 @@ make run       # cargo run --release -- run examples/canoe.toml
 make serve     # web UI at http://127.0.0.1:8000
 make pwa       # phone app in target/pwa (rustup target add wasm32-wasip1; Node 22)
 make wasm-test # phone engine vs native: parity, stepped shape search, API (run when touching serve/shapeopt/web/pwa)
+make pwa-browser-test # the built phone app in headless Chrome (run when touching web/)
 git tag v0.5.6 && git push origin v0.5.6   # release: builds and publishes the Windows + Mac zips
 ```
 

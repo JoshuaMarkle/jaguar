@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>JAGUAR</title>
 <style>
   /* Tokens from docs/DESIGN.md, scaled down for a dense tool UI (CAD/Blender-like, not a marketing page). */
@@ -309,6 +310,32 @@
     #roster[hidden] { display: none; }
     #roster > section:first-child { border-right: 0; border-bottom: 1px solid var(--hair); }
     .rwrap { overflow-x: auto; }
+  }
+  /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow window) ----------
+     One column that scrolls: top bar (one row, scrolls sideways) | 3D view | result | charts |
+     inputs. Touch-sized controls; 16px inputs so iOS does not zoom in on focus. */
+  @media (max-width: 760px) {
+    :root { --ctl-h: 34px; --label-w: 112px; --unit-w: 30px; }
+    body { display: flex; flex-direction: column; height: auto; min-height: 100%; overflow: visible; }
+    #top { position: sticky; top: 0; z-index: 20; height: var(--top); flex: none; background: var(--canvas); overflow-x: auto; scrollbar-width: none; }
+    #top::-webkit-scrollbar { display: none; }
+    #top .spacer, #top .brand span { display: none; }
+    #top .runbox { flex: 0 0 200px; }
+    /* The bar scrolls sideways: name, Run and its controls first, the rest after. */
+    #top .brand { order: -3; flex-shrink: 0; }
+    #top #run { order: -2; }
+    #top .runbox, #top #runctl { order: -1; }
+    #gutter-side { display: none; }
+    .split .pop { left: auto; right: 0; max-width: calc(100vw - 32px); }
+    #view { order: 1; height: 44vh; min-height: 260px; flex: none; }
+    #right { order: 2; border: 0; border-top: 1px solid var(--hair); }
+    #plotwrap { order: 3; height: 52vh; min-height: 320px; flex: none; }
+    #gutter-plot { display: none; }
+    #left { order: 4; border: 0; border-top: 1px solid var(--hair); }
+    #left, #right { flex: none; }
+    #left .scroll, #right .scroll { flex: none; overflow: visible; }
+    input, select, textarea { font-size: 16px; }
+    .btn { min-height: 32px; }
   }
 </style>
 <script src="/vendor/three.min.js"></script>
@@ -1398,7 +1425,8 @@ function buildCanoe() {
     water.rotation.x = -Math.PI / 2; water.position.y = draft; scene.add(water);
   }
   target.set(hull.length / 2, depth / 2, 0);
-  radius = hull.length * 1.1; stopTween(); placeCam();
+  // A narrow (phone, portrait) view backs off so the whole canoe fits across it.
+  radius = hull.length * 1.1 * Math.max(1, 1.6 / Math.max(camera.aspect, 0.1)); stopTween(); placeCam();
   homeView = { theta, phi, radius, target: target.clone() };
 }
 

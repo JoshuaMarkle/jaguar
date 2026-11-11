@@ -2,6 +2,14 @@ JAGUAR finds the lightest concrete canoe wall (thickness, mix density, mold dept
 check under the crew, and can search the hull shape too. It runs in your web browser; no install,
 no terminal.
 
+## New in the next release
+* **Phone app (offline):** open the JAGUAR page once on an iPhone or Android phone and add it to
+  the home screen; it then runs with no network, on the phone itself, with the same results as
+  the desktop. **Save project** / **Open project** move the canoe folder as a zip (also from a
+  desktop JAGUAR folder). Exports go to the share sheet. A long hull shape search is offered
+  **Phone-sized** (about 15 minutes) or in full; a run cut off when the app closes can be
+  resumed.
+
 ## New in 0.5.6
 * **Seating (race day):** open the finished canoe, then place, drag or type each paddler's knee
   position and watch the demand update live. JAGUAR shows how far each paddler can slide while
