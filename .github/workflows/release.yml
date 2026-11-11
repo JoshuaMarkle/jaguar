@@ -2,7 +2,8 @@
 # JAGUAR-mac.zip (JAGUAR.app, Apple silicon + Intel), and the phone app (docs/SPEC.md "Phone app"):
 # tested against the native build, published on GitHub Pages and as JAGUAR-phone.zip. Push a tag
 # `v*` to publish them; run it by hand (Actions > release > Run workflow) to only build them.
-# GitHub Pages must be set to "GitHub Actions" once (Settings > Pages > Source).
+# GitHub Pages must be set to "GitHub Actions" once (Settings > Pages > Source), and release tags
+# allowed to deploy (Settings > Environments > github-pages > add the tag rule v*).
 name: release
 on:
   push:
@@ -27,8 +28,9 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with: { path: target/pwa }
 
+  # On a release tag, and on a run by hand from main (try the phone app before a release).
   pages:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
     needs: [phone]
     runs-on: ubuntu-latest
     permissions:
