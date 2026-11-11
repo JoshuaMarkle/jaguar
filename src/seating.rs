@@ -502,7 +502,10 @@ impl Canoe {
                 let j1 = at(pos(k1));
                 if open && j1.state != State::Safe {
                     let (b, jb) = first_bad(k0, k1, j1.clone(), &|j| j.state != State::Safe);
-                    safe = Some((pos(b - 1), jb.reasons.join(", ")));
+                    // A seat that fails outright (water over the gunwale) may have no code check
+                    // over: then the failure is what ends the safe range.
+                    let why = if jb.reasons.is_empty() { &jb.fail } else { &jb.reasons };
+                    safe = Some((pos(b - 1), why.join(", ")));
                     open = false;
                 }
                 if j1.state == State::Fails {

@@ -340,3 +340,18 @@ fn plots_follow_the_hull_and_agree_with_the_checks() {
     assert!(peak(&l.moment_lbin) > peak(&l.moment_real_lbin));
     assert!(assess(&c, &req(&c, 0, false)).unwrap().plots.is_none());
 }
+
+/// A safe range that ends where the canoe fails outright (water over the gunwale, no code check
+/// over first) says so: never an empty reason.
+#[test]
+fn band_ends_always_say_why() {
+    let c = canoe();
+    for seats in [vec![80.0, 165.0], vec![60.0, 190.0], c.cases[0].seats_in.clone()] {
+        let a = assess(&c, &Request { seats_in: seats.clone(), ..req(&c, 0, true) }).unwrap();
+        for (i, b) in a.bands.unwrap().iter().enumerate() {
+            for why in [&b.fore_limit, &b.aft_limit, &b.fore_fail, &b.aft_fail].into_iter().flatten() {
+                assert!(!why.trim().is_empty(), "seats {seats:?}, paddler {i}: an end with no reason: {b:?}");
+            }
+        }
+    }
+}
