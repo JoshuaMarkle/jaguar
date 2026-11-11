@@ -983,6 +983,11 @@ impl App {
     /// `/api/seating` (`best` None = GET summary, Some(false) = assess, Some(true) = best seats).
     /// The current result's canoe for seating and the roster, or the reply saying why not.
     fn finished_canoe(&self) -> Result<crate::seating::Canoe, Reply> {
+        self.finished_result().map(|(c, _)| c)
+    }
+
+    /// The current result's canoe and the result text, or the reply saying why not.
+    fn finished_result(&self) -> Result<(crate::seating::Canoe, String), Reply> {
         let (state, result) = {
             let s = self.lock();
             (s.state, s.result.clone())
@@ -993,27 +998,44 @@ impl App {
         let Some(result) = result else {
             return Err(err_reply(404, "no result yet: run first"));
         };
-        crate::seating::canoe_from_result(&result).map_err(|e| err_reply(409, format!("{e:#}")))
+        let canoe =
+            crate::seating::canoe_from_result(&result).map_err(|e| err_reply(409, format!("{e:#}")))?;
+        Ok((canoe, result))
+    }
+
+    /// The roster's canoe, result text, race events (crews resolved) and the load cases they were
+    /// resolved with, or the reply saying why not.
+    #[allow(clippy::type_complexity)]
+    fn roster_inputs(
+        &self,
+    ) -> Result<(crate::seating::Canoe, String, crate::params::RaceParams, Vec<crate::params::LoadCase>), Reply>
+    {
+        let (canoe, result) = self.finished_result()?;
+        // The race events as canoe.toml has them now; else the run's (crews resolved).
+        let current = self.current();
+        let (rp, cases) = match current.race {
+            Some(rp) => (Some(rp), current.load_cases),
+            None => (
+                canoe
+                    .params
+                    .race
+                    .clone()
+                    .and_then(|mut rp| rp.resolve_crews(&canoe.params.load_cases).ok().map(|_| rp)),
+                canoe.params.load_cases.clone(),
+            ),
+        };
+        let Some(rp) = rp.filter(|rp| !rp.events.is_empty()) else {
+            return Err(err_reply(400, "no [[race.event]] in canoe.toml: the roster fills race events"));
+        };
+        Ok((canoe, result, rp, cases))
     }
 
     /// `/api/roster` (`body` None = GET the default event mixes, Some = assign crews).
     fn roster(&self, body: Option<&str>) -> Reply {
         use crate::roster;
-        let canoe = match self.finished_canoe() {
-            Ok(c) => c,
+        let (canoe, _, rp, _) = match self.roster_inputs() {
+            Ok(v) => v,
             Err(r) => return r,
-        };
-        // The race events as canoe.toml has them now; else the run's (crews resolved).
-        let rp = match self.current().race {
-            Some(rp) => Some(rp),
-            None => canoe
-                .params
-                .race
-                .clone()
-                .and_then(|mut rp| rp.resolve_crews(&canoe.params.load_cases).ok().map(|_| rp)),
-        };
-        let Some(rp) = rp.filter(|rp| !rp.events.is_empty()) else {
-            return err_reply(400, "no [[race.event]] in canoe.toml: the roster fills race events");
         };
         let Some(body) = body else {
             let info: Vec<_> = rp
@@ -1556,6 +1578,83 @@ impl Embedded {
         }
         (s.ctl.paused(), s.ctl.stopped())
     }
+
+    /// `POST /api/roster` for the host's workers: `serve`'s checks of it, and when they pass, the
+    /// job (the canoe's result, the race events, the request). The host runs its events in parts
+    /// ([`roster_part`]) and answers with [`roster_join`]. Err = the answer (refused).
+    pub fn roster_job(&self, body: &[u8]) -> Result<RosterJob, Response> {
+        let (_, result, race, load_cases) = self.0.roster_inputs().map_err(Response::text)?;
+        let request = serde_json::from_slice(body)
+            .map_err(|e| Response::text(err_reply(400, format!("roster: {e}"))))?;
+        Ok(RosterJob { result, race, load_cases, request })
+    }
+}
+
+/// A `POST /api/roster` the host splits over its workers ([`Embedded::roster_job`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RosterJob {
+    result: String,
+    /// Written without the crews its load cases give (`RaceEvent`'s serializer): resolved again
+    /// with `load_cases` in [`roster_part`].
+    race: crate::params::RaceParams,
+    load_cases: Vec<crate::params::LoadCase>,
+    request: crate::roster::Request,
+}
+
+impl RosterJob {
+    /// How many events the request assigns.
+    pub fn events(&self) -> usize {
+        self.request.events.len()
+    }
+}
+
+/// `roster::assign` of the job's events `from..to` (a `roster::Roster` as JSON, its numbers
+/// carried exactly between workers: `shapeopt::exact`), or why not.
+pub fn roster_part(job: &RosterJob, from: usize, to: usize) -> Result<serde_json::Value, String> {
+    let canoe = crate::seating::canoe_from_result(&job.result).map_err(|e| format!("{e:#}"))?;
+    let mut rp = job.race.clone();
+    for e in &mut rp.events {
+        if e.load_case.is_some() {
+            e.weights_lb.clear();
+        }
+    }
+    rp.resolve_crews(&job.load_cases).map_err(|e| format!("{e:#}"))?;
+    let mut req = job.request.clone();
+    req.events = req.events.get(from..to).ok_or("roster part out of range")?.to_vec();
+    let r = crate::roster::assign(&canoe, &rp, &req).map_err(|e| format!("{e:#}"))?;
+    serde_json::to_value(r).map(crate::shapeopt::exact::encode).map_err(|e| e.to_string())
+}
+
+/// The answer to the whole `POST /api/roster` from its parts, in event order: what `serve`
+/// answers (the first part's error is the request's: parts are consecutive events, so it is the
+/// first bad event's, or the paddlers', which every part checks alike).
+pub fn roster_join(parts: Vec<Result<serde_json::Value, String>>) -> Response {
+    let mut out: Option<serde_json::Value> = None;
+    for p in parts {
+        let p = match p.and_then(crate::shapeopt::exact::decode) {
+            Ok(p) => p,
+            Err(e) => return Response::text(err_reply(400, e)),
+        };
+        match &mut out {
+            None => out = Some(p),
+            Some(o) => {
+                let more = p["assignments"].as_array().cloned().unwrap_or_default();
+                if let Some(a) = o["assignments"].as_array_mut() {
+                    a.extend(more);
+                }
+            }
+        }
+    }
+    let Some(mut out) = out else { return Response::text(err_reply(500, "roster: no parts")) };
+    let total = crate::roster::weighted_time(
+        out["assignments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|a| (a["time_s"].as_f64(), a["weight"].as_f64().unwrap_or(0.0))),
+    );
+    out["weighted_time_s"] = serde_json::json!(total);
+    Response::text(json_reply(200, out))
 }
 
 pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()> {
@@ -2160,6 +2259,45 @@ mod tests {
         }
         e.finish(RunOutcome::Stopped);
         assert_eq!(get("/api/status")["state"], "error", "no run going: ignored");
+    }
+
+    /// The phone app's roster: the job split into consecutive parts on its workers and joined
+    /// answers what `POST /api/roster` answers, for any split; a bad request is refused alike.
+    #[test]
+    fn roster_in_parts_answers_as_one() {
+        let (a, p) = app_on(|_| {});
+        a.lock().state = "running";
+        run_job(p, Arc::clone(&a.shared), a.result_path.clone(), &optimize::RunControl::default());
+        let e = Embedded::new(&a.params_path, a.prefs_path.clone(), 3).unwrap();
+        let ev: serde_json::Value =
+            serde_json::from_slice(&e.request("GET", "/api/roster", b"").body).unwrap();
+        let ppl: Vec<_> = (0..8)
+            .map(|i| {
+                serde_json::json!({"name": format!("P{i}"), "gender": if i < 4 { "M" } else { "F" },
+                "weight_lb": 140 + 6 * i, "watts_1min": 280 + 12 * i, "steer_stern": i % 4, "steer_bow": 0})
+            })
+            .collect();
+        let body = serde_json::json!({"paddlers": ppl, "events": ev["events"]}).to_string();
+        let want = e.request("POST", "/api/roster", body.as_bytes());
+        assert_eq!(want.status, 200, "{}", String::from_utf8_lossy(&want.body));
+        let job = e.roster_job(body.as_bytes()).unwrap();
+        let job: RosterJob = serde_json::from_str(&serde_json::to_string(&job).unwrap()).unwrap();
+        let n = job.events();
+        assert!(n >= 3);
+        for parts in [1, 2, 3, n] {
+            let cuts: Vec<usize> = (0..=parts).map(|k| k * n / parts).collect();
+            let got = roster_join(cuts.windows(2).map(|w| roster_part(&job, w[0], w[1])).collect());
+            assert_eq!(got.status, 200, "{parts} parts: {}", String::from_utf8_lossy(&got.body));
+            let (g, w): (serde_json::Value, serde_json::Value) =
+                (serde_json::from_slice(&got.body).unwrap(), serde_json::from_slice(&want.body).unwrap());
+            assert_eq!(g, w, "{parts} parts");
+        }
+        // Refused as serve refuses: a bad paddler, an unknown event.
+        let bad = body.replace("\"weight_lb\":140", "\"weight_lb\":-1");
+        let job = e.roster_job(bad.as_bytes()).unwrap();
+        let got = roster_join(vec![roster_part(&job, 0, 1), roster_part(&job, 1, n)]);
+        assert_eq!((got.status, got.body), (400, e.request("POST", "/api/roster", bad.as_bytes()).body));
+        assert_eq!(e.roster_job(b"{").unwrap_err().status, 400);
     }
 
     #[test]

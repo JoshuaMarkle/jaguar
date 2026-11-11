@@ -128,6 +128,20 @@ try {
   check(/^0\.\d+ \d+ \d+(\.\d+)? \d+\.\d{3}$/.test(res ?? ''), `winner (starter lab data): ${res}`);
   const exp = await evaluate(`fetch('/api/export?format=step').then(async r => r.headers.get('Content-Disposition') + ' ' + (await r.arrayBuffer()).byteLength)`);
   check(/off1-f4\.step" \d{6,}/.test(exp), `STEP export: ${exp}`);
+  // Roster on the compute workers: the app answers while it assigns.
+  await evaluate(`(async () => {
+    const ev = await (await fetch('/api/roster')).json();
+    const ppl = Array.from({ length: 8 }, (_, i) => ({ name: 'P' + i, gender: i < 4 ? 'M' : 'F', weight_lb: 140 + 6 * i, watts_1min: 280 + 12 * i, steer_stern: i % 4 }));
+    window.__roster = { t0: performance.now() };
+    fetch('/api/roster', { method: 'POST', body: JSON.stringify({ paddlers: ppl, events: ev.events }) })
+      .then(async r => { window.__roster.status = r.status; window.__roster.n = (await r.json()).assignments?.length; window.__roster.s = (performance.now() - window.__roster.t0) / 1000; });
+  })()`);
+  await sleep(1500);
+  const lag = await evaluate(`(async () => { const t = performance.now(); await fetch('/api/status'); return performance.now() - t; })()`);
+  let ro = {};
+  for (let i = 0; i < 240 && !ro.status; i++) { await sleep(500); ro = await evaluate('window.__roster'); }
+  check(ro.status === 200 && ro.n > 0, `roster assigned: ${ro.n} events in ${ro.s?.toFixed(1)} s`);
+  check(lag < 1000, `the app answers during the roster (${Math.round(lag)} ms)`);
   const runs = await evaluate(`fetch('/api/runs').then(r => r.json()).then(j => j.runs.length)`);
   check(runs === 2, `history: ${runs} runs`);
   const sw = await evaluate(`navigator.serviceWorker.ready.then(r => !!r.active)`);

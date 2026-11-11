@@ -890,9 +890,18 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
   browser has it). A shape search saves every scored shape; a run cut off by the app being closed
   is offered on the next launch (**Resume** / **Discard**): Resume skips the saved shapes (a fixed
   hull starts over) and gives the same result as an uninterrupted run.
+* **Race day on the phone:** Seating answers from the API engine (a fraction of a second).
+  Roster's Assign is split over the compute workers by consecutive events (`Embedded::roster_job`,
+  `serve::roster_part`, `serve::roster_join`): the same answer as one call, byte for byte, and the
+  app keeps answering meanwhile. "Print seating sheet" on a touch screen hands the sheet over as
+  `Seating sheet.html` (share sheet: Print, Files) instead of opening a window.
+* **Touch screens** (no hover; any page, not only the phone app): help kept in a tooltip shows when
+  its label or text is tapped (a tapped field label shows its help instead of focusing the field);
+  "hover" hints read "tap".
 * **Narrow screens** (760 px and less: a phone; also a narrow desktop window): one column that
   scrolls, 3D view, result, charts, then inputs; the top bar stays on one row (scrolls sideways),
-  name, Run and the run status first; touch-sized controls. Wider windows are unchanged.
+  name, Run and the run status first; touch-sized controls; Seating's side view and charts grow
+  with the page and its key wraps under the bars. Wider windows are unchanged.
 * **Offline and updates:** a service worker caches every file at install, one cache per build
   (version + content hash). A new build waits until the page's "Reload" (refused while a run goes).
 * **Tests:** `make pwa-browser-test` drives the built app in headless Chrome (every release).

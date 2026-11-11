@@ -180,6 +180,21 @@ await test('api: prefs, host run, result kept, exports, history', async () => {
   assert(req('GET', '/api/seating').status === 200, 'seating');
   const mold = req('POST', '/api/manufacture', '{}');
   assert(mold.status === 200 && mold.json().dxf.length > 0, 'mold DXF');
+  // Roster over three worker engines (as shim.js splits it) = one call.
+  const ev = req('GET', '/api/roster').json();
+  const ppl = Array.from({ length: 8 }, (_, i) => ({ name: `P${i}`, gender: i < 4 ? 'M' : 'F', weight_lb: 140 + 6 * i, watts_1min: 280 + 12 * i, steer_stern: i % 4 }));
+  const rbody = JSON.stringify({ paddlers: ppl, events: ev.events });
+  const one = req('POST', '/api/roster', rbody);
+  const j = api.call('api_roster_job', {}, rbody).head;
+  assert(j.job && j.events === ev.events.length, 'roster job');
+  const workers = [await Engine.create(module), await Engine.create(module), await Engine.create(module)];
+  const cuts = [0, 1, 2, 3].map(i => Math.floor(i * j.events / 3));
+  const parts = workers.map((w, i) => w.call('roster_part', { job: j.job, from: cuts[i], to: cuts[i + 1] }).head);
+  const joined = api.call('api_roster_join', { parts });
+  assert(one.status === 200 && joined.head.status === 200, `roster: ${one.status} / ${joined.head.status}`);
+  assert(decode(joined.body) === decode(one.body), 'roster in parts = one call, byte for byte');
+  const refused = api.call('api_roster_job', {}, '{"paddlers": []}').head;
+  assert(refused.response?.status === 400, 'a bad roster is refused before the workers');
   assert(req('GET', '/api/session').json().desktop === false, 'not the desktop app');
   assert(req('POST', '/api/quit').status === 403, 'no quit');
 });

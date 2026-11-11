@@ -311,6 +311,8 @@
     #roster > section:first-child { border-right: 0; border-bottom: 1px solid var(--hair); }
     .rwrap { overflow-x: auto; }
   }
+  .tip { position: fixed; z-index: 1002; padding: var(--s2) var(--s3); background: var(--canvas); color: var(--ink);
+    border: 1px solid var(--hair); border-radius: var(--r-md); font-size: 13px; line-height: 1.4; white-space: pre-line; }
   /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow window) ----------
      One column that scrolls: top bar (one row, scrolls sideways) | 3D view | result | charts |
      inputs. Touch-sized controls; 16px inputs so iOS does not zoom in on focus. */
@@ -336,6 +338,8 @@
     #left .scroll, #right .scroll { flex: none; overflow: visible; }
     input, select, textarea { font-size: 16px; }
     .btn { min-height: 32px; }
+    /* Seating: the side view and its charts grow with the page (no box scrolling inside it). */
+    #stview { height: auto; overflow: visible; }
   }
 </style>
 <script src="/vendor/three.min.js"></script>
@@ -1343,6 +1347,30 @@ function stepTween() {
   theta = a.theta + (b.theta - a.theta) * s; phi = a.phi + (b.phi - a.phi) * s; radius = a.radius + (b.radius - a.radius) * s;
   target.lerpVectors(a.target, b.target, s); placeCam();
   if (u >= 1) tween = null;
+}
+// Touch screens have no hover: help that lives in a title shows when its label or text is tapped
+// (controls keep their tap; their visible text says what they do).
+const HOVER = matchMedia('(hover: hover)').matches;
+if (!HOVER) {
+  for (const h of document.querySelectorAll('.panehead .hint')) h.textContent = h.textContent.replace(/^hover/, 'tap');
+  let tip = null;
+  const hideTip = () => { tip?.remove(); tip = null; };
+  document.addEventListener('click', ev => {
+    hideTip();
+    const t = ev.target.closest?.('[title]');
+    if (!t || !t.title.trim() || t.closest('button, a, input, select, textarea, summary, .btn, [data-k]')) return;
+    if (t.tagName === 'LABEL') ev.preventDefault(); // help, not focus: the field itself is the next tap
+    tip = document.createElement('div');
+    tip.className = 'tip';
+    tip.textContent = t.title;
+    document.body.appendChild(tip);
+    const r = t.getBoundingClientRect(), w = Math.min(300, innerWidth - 32);
+    tip.style.width = w + 'px';
+    tip.style.left = Math.max(16, Math.min(innerWidth - w - 16, r.left)) + 'px';
+    const below = r.bottom + 6, h = tip.offsetHeight;
+    tip.style.top = (below + h < innerHeight - 8 ? below : Math.max(8, r.top - h - 6)) + 'px';
+  }, true);
+  addEventListener('scroll', hideTip, true);
 }
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
@@ -3741,7 +3769,8 @@ function stDraw() {
   // panel's pixel width so text stays readable.
   const box = $('stview'), L = s.length_in, D = s.depth_in, n = c.p.length;
   const W = Math.max(320, box.clientWidth - 32), X0 = 28, X1 = W - 28, k = (X1 - X0) / L;
-  const top = 64, bot = top + D * k, H = bot + 72 + 16 * n;
+  // Narrow (a phone): the scale line and the bars' key each get their own lines.
+  const narrow = W < 560, top = 64, bot = top + D * k, H = bot + 72 + 16 * n + (narrow ? 34 : 0);
   const sx = x => X0 + x * k, sz = z => bot - z * k;
   ST.geo = { X0, X1, W };
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
@@ -3779,11 +3808,16 @@ function stDraw() {
   const keel = s.x_in.map((x, i) => `${sx(x).toFixed(1)},${sz(s.keel_in[i]).toFixed(1)}`);
   o += `<polygon points="${sx(s.x_in[0])},${sz(D)} ${sx(L)},${sz(D)} ${keel.reverse().join(' ')}" fill="${C.bg}" fill-opacity=".6" stroke="${C.ink}" stroke-width="1.5" stroke-linejoin="round"/>`;
   o += `<text x="${sx(0)}" y="14" font-size="11" fill="${C.muted}">BOW</text><text x="${sx(L)}" y="14" font-size="11" fill="${C.muted}" text-anchor="end">STERN</text>`;
-  o += `<text x="${sx(L)}" y="${bot + 44}" font-size="10" fill="${C.faint}" text-anchor="end">true scale</text>`;
+  if (!narrow) o += `<text x="${sx(L)}" y="${bot + 44}" font-size="10" fill="${C.faint}" text-anchor="end">true scale</text>`;
   const step = ST.unit === 'ft' ? 12 : (L > 150 ? 24 : 12), lab = ST.unit === 'ft' ? 24 : step * 2;
   for (let x = 0; x <= L + 1e-9; x += step) o += `<line x1="${sx(x)}" x2="${sx(x)}" y1="${bot + 14}" y2="${bot + 19}" stroke="${C.faint}"/>`
     + (Math.abs(x / lab - Math.round(x / lab)) < 1e-9 ? `<text x="${sx(x)}" y="${bot + 31}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit === 'ft' ? x / 12 : x}</text>` : '');
-  o += `<text x="${sx(L / 2)}" y="${bot + 45}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit} from bow \u00b7 bars: where each paddler can kneel (others in place): solid = full safety margin, amber = some margin left</text>`;
+  if (narrow) {
+    const yk = bot + 72 + 16 * n;
+    o += `<text x="${sx(L / 2)}" y="${bot + 45}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit} from bow \u00b7 true scale</text>`
+      + `<text x="${X0}" y="${yk + 8}" font-size="11" fill="${C.muted}">bars: where each paddler can kneel (others in place)</text>`
+      + `<text x="${X0}" y="${yk + 24}" font-size="11" fill="${C.muted}">solid = full safety margin \u00b7 amber = some margin left</text>`;
+  } else o += `<text x="${sx(L / 2)}" y="${bot + 45}" font-size="11" fill="${C.muted}" text-anchor="middle">${ST.unit} from bow \u00b7 bars: where each paddler can kneel (others in place): solid = full safety margin, amber = some margin left</text>`;
   if (ST.stale) o += `<text x="${X1}" y="${bot + 60}" font-size="10" fill="${C.muted}" text-anchor="end">updating ranges\u2026</text>`;
   o += `<g opacity="${ST.stale ? 0.3 : 1}">`;
   c.p.forEach((q, i) => {
@@ -3873,7 +3907,7 @@ function stPlots() {
       if (showReal) o += `<circle cx="${x}" cy="${sy(stInterp(P.x_in, d.real, hx))}" r="2.5" fill="${C.muted}"/>`;
     }
     const head = `<text x="${X0}" y="14" font-size="12" font-weight="650" fill="${C.ink}">${d.title}${d.unit ? ` <tspan font-weight="450" fill="${C.muted}">${d.unit}</tspan>` : ''}</text>`
-      + `<text x="${X1}" y="14" font-size="11" fill="${C.ink}" text-anchor="end">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : 'hover to read · click to pin'}</tspan>`}</text>`;
+      + `<text x="${X1}" y="14" font-size="11" fill="${C.ink}" text-anchor="end">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : (HOVER ? 'hover to read · click to pin' : 'tap to read')}</tspan>`}</text>`;
     return `<svg class="stplot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${head}${o}<rect x="${X0}" y="${top}" width="${X1 - X0}" height="${bot - top}" fill="transparent" style="cursor:crosshair"/></svg>`;
   }).join('') + (pins.length ? `<div class="hint" style="padding:0 0 var(--s2) ${X0}px">${pins.length} pinned reading(s) · <a href="#" id="stunpin">clear pins</a></div>` : '');
 }
@@ -4090,8 +4124,12 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('seatin
 
 // Printable seating sheet: every crew bow to stern, knees from bow and stern, safe ranges.
 $('stprint').onclick = async () => {
-  const s = ST.sum, w = window.open('', '_blank'); if (!w) return;
-  w.document.write('<p style="font:13px sans-serif">Checking every crew…</p>');
+  // The phone app on a touch screen hands the sheet over as a file (share sheet: Print, Files):
+  // a new window does not print from an iPhone home-screen app. Elsewhere a window opened now
+  // (before the checks below, so no popup blocker stops it) and printed.
+  const asFile = window.JAGUAR_SAVE && matchMedia('(pointer: coarse)').matches;
+  const s = ST.sum, w = asFile ? null : window.open('', '_blank'); if (!asFile && !w) return;
+  if (w) w.document.write('<p style="font:13px sans-serif">Checking every crew…</p>');
   const f = x => `${(x / 12).toFixed(1)} ft (${x.toFixed(0)} in)`;
   let h = '';
   for (const c of ST.crews) {
@@ -4105,10 +4143,10 @@ $('stprint').onclick = async () => {
       + order.map((i, k) => { const q = c.p[i], b = a.bands && a.bands[i];
         return `<tr><td>${k + 1}${q.pin ? ' (pinned)' : ''}</td><td>${esc(q.name)}</td><td>${Number(q.lb).toFixed(0)} lb</td><td>${f(q.x)}</td><td>${f(s.length_in - q.x)}</td><td>${b ? rng(b.range_in) || 'not here' : ''}</td><td>${b ? rng(b.hold_in) || 'fails here' : ''}</td></tr>`; }).join('') + '</table>';
   }
-  w.document.open();
-  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Seating sheet</title><style>body{font:12px/1.4 ${FONT};color:#141414;margin:24px}h1{font-size:18px;margin:0}h2{font-size:14px;margin:18px 0 4px}small{color:#707070;font-weight:450}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e0e0e0;padding:4px 8px 4px 0;text-align:left;font-weight:450}th{color:#707070}p{margin:2px 0 6px}</style></head><body>`
+  const doc = (`<!doctype html><html><head><meta charset="utf-8"><title>Seating sheet</title><style>body{font:12px/1.4 ${FONT};color:#141414;margin:24px}h1{font-size:18px;margin:0}h2{font-size:14px;margin:18px 0 4px}small{color:#707070;font-weight:450}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #e0e0e0;padding:4px 8px 4px 0;text-align:left;font-weight:450}th{color:#707070}p{margin:2px 0 6px}</style></head><body>`
     + `<h1>Seating sheet</h1><p>Canoe ${(s.length_in / 12).toFixed(1)} ft, wall ${s.thickness_in} in at ${s.density_pcf} pcf${s.mix ? ' (' + esc(s.mix) + ')' : ''}, ${s.hull_weight_lb.toFixed(0)} lb. Knees measured from the bow tip. ${new Date().toLocaleString()}</p><div style="border-left:3px solid #e0e0e0;padding-left:10px">${stSafety(s)}</div>${h}</body></html>`);
-  w.document.close(); w.focus(); w.print();
+  if (asFile) return window.JAGUAR_SAVE(new Blob([doc], { type: 'text/html' }), 'Seating sheet.html');
+  w.document.open(); w.document.write(doc); w.document.close(); w.focus(); w.print();
 };
 </script>
 <script>

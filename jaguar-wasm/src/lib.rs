@@ -153,6 +153,50 @@ pub extern "C" fn api_finish(ptr: *mut u8, len: usize) -> u64 {
     })
 }
 
+/// `POST /api/roster` body -> `{job: serve::RosterJob, events}` for the workers, or the answer
+/// when it is refused (a `serve::Response` frame, as `api_request`).
+#[unsafe(no_mangle)]
+pub extern "C" fn api_roster_job(ptr: *mut u8, len: usize) -> u64 {
+    let (_, body) = input(ptr, len);
+    match with_api(|e| e.roster_job(&body)) {
+        Ok(Ok(job)) => output(&json!({ "events": job.events(), "job": job }), &[]),
+        Ok(Err(r)) => output(&json!({ "response": r }), &r.body),
+        Err(e) => output(&json!({ "error": format!("{e:#}") }), &[]),
+    }
+}
+
+/// `{parts: [{ok: Roster} | {err: message}]}` in event order -> the `POST /api/roster` answer
+/// (a `serve::Response` frame).
+#[unsafe(no_mangle)]
+pub extern "C" fn api_roster_join(ptr: *mut u8, len: usize) -> u64 {
+    let (h, _) = input(ptr, len);
+    let parts: Vec<Result<Value, String>> = h["parts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| match (p.get("ok"), p.get("err")) {
+            (Some(v), _) => Ok(v.clone()),
+            (_, Some(e)) => Err(e.as_str().unwrap_or("roster part failed").to_string()),
+            _ => Err("roster part: no answer".to_string()),
+        })
+        .collect();
+    let r = jaguar::serve::roster_join(parts);
+    output(&serde_json::to_value(&r).unwrap_or(Value::Null), &r.body)
+}
+
+/// `{job: serve::RosterJob, from, to}` -> `{ok: Roster}` of events `from..to`, or `{err}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn roster_part(ptr: *mut u8, len: usize) -> u64 {
+    call(ptr, len, |h, _| {
+        let job: jaguar::serve::RosterJob = field(&h, "job")?;
+        let (from, to): (usize, usize) = (field(&h, "from")?, field(&h, "to")?);
+        Ok(match jaguar::serve::roster_part(&job, from, to) {
+            Ok(v) => json!({ "ok": v }),
+            Err(e) => json!({ "err": e }),
+        })
+    })
+}
+
 /// -> `{paused, stopped}` of the run going.
 #[unsafe(no_mangle)]
 pub extern "C" fn api_control(ptr: *mut u8, len: usize) -> u64 {

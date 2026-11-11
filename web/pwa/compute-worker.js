@@ -34,6 +34,11 @@ const ops = {
     const e = await engineFor(id, files);
     return e.json('shape_step', { toml, base_dir: dir, evals, stopped });
   },
+  /** Events from..to of a roster job (`serve::roster_part`): { part: {ok} | {err} }. */
+  async rosterPart({ job, from, to }) {
+    const e = await engineFor('roster', []);
+    return { part: e.call('roster_part', { job, from, to }).head };
+  },
   async shapeScore({ runId: id, files, toml, dir, job }) {
     const e = await engineFor(id, files);
     return { eval: e.json('shape_score', { toml, base_dir: dir, job }) };

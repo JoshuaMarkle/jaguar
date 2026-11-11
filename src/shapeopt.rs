@@ -345,7 +345,7 @@ struct Eval {
 /// the string `"f64:<hex bits>"`, read back through a `serde_json::Value`, which never re-parses
 /// a decimal. (serde_json's `float_roundtrip` would do it too, but it changes how every hull file
 /// parses: a last-bit change that moves seat ties.)
-mod exact {
+pub(crate) mod exact {
     use serde_json::{Number, Value};
 
     pub fn encode(v: Value) -> Value {

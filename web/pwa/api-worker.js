@@ -68,6 +68,17 @@ const ops = {
   progress({ event }) { api.json('api_progress', event); },
   async finish({ outcome }) { api.json('api_finish', outcome); await persist(); },
   control() { return api.json('api_control', {}); },
+  /** `POST /api/roster` as a job for the compute workers ({job, events}), or its refusal ({head, body}). */
+  rosterJob({ body }) {
+    const r = api.call('api_roster_job', {}, new Uint8Array(body ?? 0));
+    if (r.head.error) throw new Error(r.head.error);
+    return r.head.job ? { job: r.head.job, events: r.head.events } : { head: r.head.response, body: r.body.slice().buffer };
+  },
+  /** The roster parts joined into the `POST /api/roster` answer. */
+  rosterJoin({ parts }) {
+    const r = api.call('api_roster_join', { parts });
+    return { head: r.head, body: r.body.slice().buffer };
+  },
   /** A run's shape search and its phone-sized cut (jaguar-wasm `shape_size`). */
   sizeRun({ toml, budget }) { return api.json('shape_size', { toml, base_dir: DIR, budget }); },
   /** The canoe folder and prefs, for "Download project". */

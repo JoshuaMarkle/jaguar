@@ -107,7 +107,7 @@ impl Default for Settings {
 }
 
 /// `POST /api/roster`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub paddlers: Vec<Paddler>,
@@ -644,6 +644,12 @@ fn solve_event(
 }
 
 /// Assign a crew to every event in `req.events` on the canoe `c` with `rp`'s courses.
+/// `Roster::weighted_time_s` of (time, event weight) per event: the events that got a crew.
+/// Also joins the phone app's per-worker parts (`serve::roster_join`).
+pub fn weighted_time(events: impl Iterator<Item = (Option<f64>, f64)>) -> f64 {
+    events.filter_map(|(t, w)| t.map(|t| t * w)).sum()
+}
+
 pub fn assign(c: &Canoe, rp: &RaceParams, req: &Request) -> Result<Roster> {
     validate(req, rp)?;
     let fallback = rp.paddler_power_w;
@@ -661,7 +667,7 @@ pub fn assign(c: &Canoe, rp: &RaceParams, req: &Request) -> Result<Roster> {
             assign_event(c, &top, rp, &plan, i, spec, &req.paddlers, est, req)
         })
         .collect();
-    let weighted_time_s = assignments.iter().filter_map(|a| a.time_s.map(|t| t * a.weight)).sum();
+    let weighted_time_s = weighted_time(assignments.iter().map(|a| (a.time_s, a.weight)));
     Ok(Roster { assignments, weighted_time_s, estimate_1min: est.0, estimate_4min: est.1 })
 }
 

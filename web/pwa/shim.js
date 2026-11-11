@@ -81,17 +81,44 @@
       }
       body = new TextEncoder().encode(text).buffer;
     }
+    if (method === 'POST' && path.split('?')[0] === '/api/roster' && !run) return toResponse(await rosterAnswer(body));
     const r = await api('request', { method, url: path, body }, [body]);
+    const status = r.head.status;
+    if (status === 202 && path.split('?')[0] === '/api/run') startRun().catch(runFailed);
+    const what = /^\/api\/(pause|resume|stop)(\?|$)/.exec(path)?.[1];
+    if (status === 200 && what) control(what);
+    return toResponse(r);
+  };
+  /** An API answer ({head: serve::Response, body}) as a fetch Response. */
+  function toResponse(r) {
     const headers = { 'Content-Type': r.head.content_type };
     if (r.head.filename) headers['Content-Disposition'] = `attachment; filename="${r.head.filename}"`;
     const w = (r.head.warnings || []).join(' | ').replace(/[^\x20-\x7e]/g, '?');
     if (w) headers['X-Jaguar-Warnings'] = w;
     const status = r.head.status;
-    if (status === 202 && path.split('?')[0] === '/api/run') startRun().catch(runFailed);
-    const what = /^\/api\/(pause|resume|stop)(\?|$)/.exec(path)?.[1];
-    if (status === 200 && what) control(what);
     return new Response(status === 204 ? null : r.body, { status, headers });
-  };
+  }
+
+  // ---------- roster: events split over the compute workers ----------
+  // Assign is seconds per event in wasm (a four-person co-ed event ~9 s on a laptop): the API
+  // worker checks the request and hands out the job, each worker assigns a run of consecutive
+  // events, the API joins them (serve::roster_join: the same answer as one call).
+  let rosterPool = null;
+  async function rosterAnswer(body) {
+    const j = await api('rosterJob', { body }, [body]);
+    if (!j.job) return j;
+    rosterPool ??= Promise.all(Array.from({ length: WORKERS }, compute));
+    let pool;
+    try { pool = await rosterPool; } catch (e) { rosterPool = null; throw e; }
+    const k = Math.max(1, Math.min(pool.length, j.events));
+    const cuts = Array.from({ length: k + 1 }, (_, i) => Math.floor(i * j.events / k));
+    const parts = await Promise.all(cuts.slice(0, -1).map((from, i) =>
+      pool[i].call('rosterPart', { job: j.job, from, to: cuts[i + 1] }).then(r => r.part, e => {
+        rosterPool = null; // a worker that failed is not reused
+        return { err: `roster worker: ${e.message}` };
+      })));
+    return api('rosterJoin', { parts });
+  }
 
   // ---------- phone-sized shape search ----------
   // A shape search that would take well over BUDGET_S here is offered cut to about that long
@@ -312,6 +339,7 @@
     origClick.call(a);
     setTimeout(() => URL.revokeObjectURL(a.href), 60000);
   }
+  window.JAGUAR_SAVE = (blob, name) => saveFile(blob, name);
   const nameFrom = (res, fallback) => /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] || fallback;
   async function download(href, fallback) {
     const res = await window.fetch(href);
