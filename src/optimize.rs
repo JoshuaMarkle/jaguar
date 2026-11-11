@@ -32,11 +32,13 @@ use crate::section::{
 };
 use anyhow::Result;
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
-#[derive(Debug, Clone, Serialize)]
+/// Serialize + Deserialize: the phone app moves candidates between Web Workers as JSON
+/// (`shapeopt::ShapeEval` carries them exactly).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Candidate {
     /// Hull length overall, in (from the hull table).
     pub length_in: f64,
@@ -198,7 +200,7 @@ pub fn gate_misses(p: &Params, c: &Candidate, search: bool, stations: usize) -> 
 }
 
 /// In-search re-checks of the best candidate at 2n-1 stations (`RunResult::recheck`).
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Recheck {
     /// Best candidates re-checked at 2n-1 stations.
     pub checked: usize,
@@ -1280,7 +1282,7 @@ pub const RESULT_FORMAT: &str = "jaguar-result/1";
 
 /// Progress events, emitted in order. The web server streams these to the
 /// browser; the CLI ignores them. Must be cheap and thread-safe to call.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)] // short-lived, passed by value to a callback
 pub enum Progress {

@@ -69,7 +69,7 @@ pub fn run_controlled(
     on_progress: &(dyn Fn(Progress) + Sync),
     ctl: &optimize::RunControl,
 ) -> Result<RunResult> {
-    let mut r = match (&params.hull.file, &params.shape_search) {
+    let r = match (&params.hull.file, &params.shape_search) {
         (Some(f), _) => {
             let h = hull::Hull::load(f)?.prepared(&params.hull)?;
             optimize::run_controlled(params, &h, on_progress, ctl)?
@@ -77,6 +77,27 @@ pub fn run_controlled(
         (None, Some(_)) => shapeopt::run_controlled(params, on_progress, ctl)?,
         (None, None) => anyhow::bail!("give either hull.file or [shape_search]"),
     };
+    Ok(finish(params, r))
+}
+
+/// One step of [`run`] for a shape search whose shapes are scored elsewhere (the phone app's
+/// Web Workers, `shapeopt::run_step`): the same result as [`run`] once every shape it asks for
+/// is given. Only for `[shape_search]` without `hull.file`; a fixed hull is one [`run`].
+pub fn run_shape_step(
+    params: &Params,
+    prep: &shapeopt::Prep,
+    evals: &[shapeopt::ShapeEval],
+    stopped: bool,
+) -> Result<shapeopt::Step> {
+    anyhow::ensure!(params.hull.file.is_none(), "a fixed hull (hull.file) is not a shape search");
+    Ok(match shapeopt::run_step(params, prep, evals, stopped)? {
+        shapeopt::Step::Done(r) => shapeopt::Step::Done(Box::new(finish(params, *r))),
+        need => need,
+    })
+}
+
+/// The winner's post-search checks and pictures, once per run.
+fn finish(params: &Params, mut r: RunResult) -> RunResult {
     optimize::verify_stands(params, &mut r);
     optimize::winner_case_calcs(params, &mut r);
     optimize::winner_curves(params, &mut r);
@@ -86,5 +107,5 @@ pub fn run_controlled(
     {
         cl.fails.push(format!("verification: {f}"));
     }
-    Ok(r)
+    r
 }

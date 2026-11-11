@@ -47,7 +47,74 @@ use crate::hull::Grid;
 use crate::mix::StrengthFit;
 use crate::params::{DesignMethod, Material, Punching, PunchingMethod, Turning};
 use crate::section::{self, Sections};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+/// The stable check ids, in the order `checks` lists them.
+pub const CHECK_NAMES: [&str; 5] = ["bending_tension", "bending_compression", "shear", "punching", "biaxial"];
+
+/// A check id read back from JSON (the phone app moves candidates between workers):
+/// one of [`CHECK_NAMES`], anything else is an error.
+fn check_name(s: &str) -> Result<&'static str, String> {
+    CHECK_NAMES.into_iter().find(|n| *n == s).ok_or_else(|| format!("unknown check {s:?}"))
+}
+
+/// [`CheckResult`] / [`Verdict`] as read from JSON, names still owned.
+#[derive(Deserialize)]
+struct CheckResultJson {
+    name: String,
+    demand: f64,
+    capacity: f64,
+    dc: f64,
+    x_in: Option<f64>,
+}
+
+// By hand: a derive would tie `'de` to the `&'static str` names.
+impl<'de> Deserialize<'de> for CheckResult {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        CheckResultJson::deserialize(d)?.try_into().map_err(serde::de::Error::custom)
+    }
+}
+
+impl<'de> Deserialize<'de> for Verdict {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        VerdictJson::deserialize(d)?.try_into().map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<CheckResultJson> for CheckResult {
+    type Error = String;
+    fn try_from(j: CheckResultJson) -> Result<Self, String> {
+        Ok(CheckResult {
+            name: check_name(&j.name)?,
+            demand: j.demand,
+            capacity: j.capacity,
+            dc: j.dc,
+            x_in: j.x_in,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct VerdictJson {
+    dc: f64,
+    governing_check: String,
+    x_governing_in: f64,
+    freeboard_in: f64,
+    checks: Vec<CheckResult>,
+}
+
+impl TryFrom<VerdictJson> for Verdict {
+    type Error = String;
+    fn try_from(j: VerdictJson) -> Result<Self, String> {
+        Ok(Verdict {
+            dc: j.dc,
+            governing_check: check_name(&j.governing_check)?,
+            x_governing_in: j.x_governing_in,
+            freeboard_in: j.freeboard_in,
+            checks: j.checks,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CheckResult {

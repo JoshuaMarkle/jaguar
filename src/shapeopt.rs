@@ -32,6 +32,11 @@
 //!
 //! Deterministic: shapes are indexed in generation order and every ranking
 //! breaks ties by index, so thread scheduling never changes the result.
+//!
+//! Stepped (the phone app, docs/SPEC.md "Phone app"): [`run_step`] replays the search with
+//! the shapes scored so far ([`ShapeEval`], scored anywhere by [`score_shape`]) and stops at the
+//! first batch that misses one, returning the missing [`ShapeJob`]s. Once every shape it asks for
+//! is given it returns the same result as [`run_controlled`].
 
 use crate::hull::{Grid, Hull, linspace};
 use crate::hullgen::{END_FRAC, ShapeMetrics, ShapeParams, Turn, generate, keel_z, metrics};
@@ -43,6 +48,7 @@ use crate::race;
 use crate::resistance::{displaced_volume_in3, level_draft_in, resistance, turn};
 use crate::units::{IN3_PER_FT3, WATER_PCF};
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -314,6 +320,184 @@ struct Eval {
     recheck: crate::optimize::Recheck,
 }
 
+/// f64s through JSON bit for bit (the phone app's workers trade shapes as JSON): each float as
+/// the string `"f64:<hex bits>"`, read back through a `serde_json::Value`, which never re-parses
+/// a decimal. (serde_json's `float_roundtrip` would do it too, but it changes how every hull file
+/// parses: a last-bit change that moves seat ties.)
+mod exact {
+    use serde_json::{Number, Value};
+
+    pub fn encode(v: Value) -> Value {
+        match v {
+            Value::Number(n) if n.is_f64() => Value::String(to_hex(n.as_f64().expect("is_f64"))),
+            Value::Array(a) => Value::Array(a.into_iter().map(encode).collect()),
+            Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, encode(v))).collect()),
+            v => v,
+        }
+    }
+
+    pub fn decode(v: Value) -> Result<Value, String> {
+        Ok(match v {
+            Value::String(s) if s.starts_with("f64:") => {
+                Value::Number(Number::from_f64(from_hex(&s)?).ok_or_else(|| format!("{s}: not finite"))?)
+            }
+            Value::Array(a) => Value::Array(a.into_iter().map(decode).collect::<Result<_, _>>()?),
+            Value::Object(o) => {
+                Value::Object(o.into_iter().map(|(k, v)| Ok((k, decode(v)?))).collect::<Result<_, String>>()?)
+            }
+            v => v,
+        })
+    }
+
+    /// One f64 as `"f64:<hex bits>"` (a string: JavaScript numbers cannot hold 64-bit integers).
+    pub fn to_hex(x: f64) -> String {
+        format!("f64:{:016x}", x.to_bits())
+    }
+
+    pub fn from_hex(s: &str) -> Result<f64, String> {
+        let h = s.strip_prefix("f64:").ok_or_else(|| format!("{s}: not f64:<hex>"))?;
+        u64::from_str_radix(h, 16).map(f64::from_bits).map_err(|e| format!("{s}: {e}"))
+    }
+
+    /// `[f64; N]` as [`to_hex`] strings.
+    pub mod bits {
+        use serde::{Deserialize, Deserializer, Serializer};
+
+        pub fn serialize<S: Serializer, const N: usize>(v: &[f64; N], s: S) -> Result<S::Ok, S::Error> {
+            s.collect_seq(v.iter().map(|&x| super::to_hex(x)))
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(d: D) -> Result<[f64; N], D::Error> {
+            let v = Vec::<String>::deserialize(d)?
+                .iter()
+                .map(|s| super::from_hex(s))
+                .collect::<Result<Vec<f64>, _>>()
+                .map_err(serde::de::Error::custom)?;
+            v.try_into().map_err(|_| serde::de::Error::custom(format!("need {N} factors")))
+        }
+    }
+}
+
+/// One shape to score: its index in generation order and its factors (as their bits in JSON).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ShapeJob {
+    pub index: usize,
+    #[serde(with = "exact::bits")]
+    pub v: [f64; SHAPE_DIMS],
+}
+
+/// A scored shape as it travels between workers (JSON), exactly: the score as
+/// [`exact::to_hex`] (a shape with no passing wall scores +inf, which JSON has no number for),
+/// the rest through [`exact`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShapeEval {
+    pub job: ShapeJob,
+    score: String,
+    /// `(rep, rep.shape.metrics, recheck)` [`exact`]-encoded; the metrics apart, as a shape read
+    /// from JSON drops them (canoe.toml may not set them).
+    payload: serde_json::Value,
+}
+
+impl ShapeEval {
+    fn new(job: ShapeJob, mut e: Eval) -> Result<ShapeEval> {
+        let metrics = e.rep.shape.as_mut().and_then(|s| s.metrics.take());
+        let payload = exact::encode(serde_json::to_value((&e.rep, &metrics, &e.recheck))?);
+        Ok(ShapeEval { job, score: exact::to_hex(e.score), payload })
+    }
+
+    fn eval(&self) -> Result<Eval> {
+        let v = exact::decode(self.payload.clone())
+            .map_err(|e| anyhow::anyhow!("shape {}: {e}", self.job.index))?;
+        let (mut rep, metrics, recheck): (Candidate, Option<ShapeMetrics>, crate::optimize::Recheck) =
+            serde_json::from_value(v).with_context(|| format!("shape {}", self.job.index))?;
+        if let Some(s) = &mut rep.shape {
+            s.metrics = metrics;
+        }
+        let score =
+            exact::from_hex(&self.score).map_err(|e| anyhow::anyhow!("shape {}: {e}", self.job.index))?;
+        Ok(Eval { score, rep, recheck })
+    }
+
+    /// The shape's representative candidate (progress display).
+    pub fn candidate(&self) -> Result<Candidate> {
+        Ok(self.eval()?.rep)
+    }
+}
+
+/// What every shape's score needs, worked out once per search: the straight/turn normalizers
+/// and the race paths.
+pub struct Prep {
+    refs: Option<Refs>,
+    plan: Option<race::Plan>,
+}
+
+/// Check the `[shape_search]` and work out its [`Prep`].
+pub fn prepare(params: &Params) -> Result<Prep> {
+    let ss = params.shape_search.as_ref().context("no [shape_search] in params")?;
+    for (n, [lo, hi]) in ss.bounds() {
+        anyhow::ensure!(lo.is_finite() && hi.is_finite() && lo <= hi, "shape_search.{n}: need min <= max");
+    }
+    anyhow::ensure!(ss.samples >= 1, "shape_search.samples must be >= 1");
+    let refs = if params.objective.kind == ObjectiveKind::Drag && params.objective.straight_weight < 1.0 {
+        Some(refs(params, ss)?)
+    } else {
+        None
+    };
+    let plan = if params.objective.kind == ObjectiveKind::Race { Some(race_plan(params, ss)?) } else { None };
+    Ok(Prep { refs, plan })
+}
+
+/// Score one shape (a phone-app worker): what [`run_controlled`]'s workers do for it.
+pub fn score_shape(params: &Params, prep: &Prep, job: &ShapeJob) -> Result<ShapeEval> {
+    let ss = params.shape_search.as_ref().context("no [shape_search] in params")?;
+    let e = eval_shape(params, ss, prep.refs, prep.plan.as_ref(), &job.v, job.index)?;
+    ShapeEval::new(job.clone(), e)
+}
+
+/// A batch of shapes [`run_step`] has no score for yet.
+#[derive(Debug)]
+struct NeedShapes(Vec<ShapeJob>);
+
+impl std::fmt::Display for NeedShapes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} shapes to score", self.0.len())
+    }
+}
+
+impl std::error::Error for NeedShapes {}
+
+/// Where the shapes of a batch get their scores.
+enum Exec<'a> {
+    /// Worker threads here ([`on_workers`]).
+    Threads,
+    /// Scored elsewhere. Stopped: shapes not given are not started.
+    Given { evals: &'a [ShapeEval], stopped: bool },
+}
+
+/// [`run_step`]'s answer.
+pub enum Step {
+    /// Score these (any order, anywhere), then call again with them added.
+    Need(Vec<ShapeJob>),
+    Done(Box<RunResult>),
+}
+
+/// One step of a shape search whose shapes are scored elsewhere (see the module docs).
+/// `stopped` = the user ended the search: what is given is all there is, as [`run_controlled`]
+/// after `RunControl::stop`.
+pub fn run_step(params: &Params, prep: &Prep, evals: &[ShapeEval], stopped: bool) -> Result<Step> {
+    let ctl = RunControl::default();
+    if stopped {
+        ctl.stop();
+    }
+    match search(params, prep, &|_| {}, &ctl, Exec::Given { evals, stopped }) {
+        Ok(r) => Ok(Step::Done(Box::new(r))),
+        Err(e) => match e.downcast::<NeedShapes>() {
+            Ok(n) => Ok(Step::Need(n.0)),
+            Err(e) => Err(e),
+        },
+    }
+}
+
 /// Normalizers for the straight/turning blend: straight drag and steady-turn
 /// drag (N) of the fixed reference shape, the midpoint of the bounds.
 #[derive(Clone, Copy)]
@@ -540,18 +724,20 @@ pub fn run_controlled(
     on_progress: &(dyn Fn(Progress) + Sync),
     ctl: &RunControl,
 ) -> Result<RunResult> {
+    let prep = prepare(params)?;
+    search(params, &prep, on_progress, ctl, Exec::Threads)
+}
+
+fn search(
+    params: &Params,
+    prep: &Prep,
+    on_progress: &(dyn Fn(Progress) + Sync),
+    ctl: &RunControl,
+    exec: Exec,
+) -> Result<RunResult> {
     let ss = params.shape_search.as_ref().context("no [shape_search] in params")?;
     let b = ss.bounds();
-    for (n, [lo, hi]) in b {
-        anyhow::ensure!(lo.is_finite() && hi.is_finite() && lo <= hi, "shape_search.{n}: need min <= max");
-    }
-    anyhow::ensure!(ss.samples >= 1, "shape_search.samples must be >= 1");
-    let refs = if params.objective.kind == ObjectiveKind::Drag && params.objective.straight_weight < 1.0 {
-        Some(refs(params, ss)?)
-    } else {
-        None
-    };
-    let plan = if params.objective.kind == ObjectiveKind::Race { Some(race_plan(params, ss)?) } else { None };
+    let (refs, plan) = (prep.refs, prep.plan.as_ref());
     let free = free_dims(ss);
 
     let mut shapes: Vec<[f64; SHAPE_DIMS]> = Vec::new();
@@ -566,16 +752,37 @@ pub fn run_controlled(
         let base = shapes.len();
         let total = base + batch.len();
         on_progress(Progress::Started { total });
-        let out: Vec<Option<Result<Eval>>> = on_workers(batch.len(), ctl, &|i| {
-            let (v, index) = (&batch[i], base + i);
-            on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
-            let e = eval_shape(params, ss, refs, plan.as_ref(), v, index);
-            if let Ok(e) = &e {
-                let k = done.fetch_add(1, Ordering::SeqCst) + 1;
-                on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
+        let out: Vec<Option<Result<Eval>>> = match &exec {
+            Exec::Threads => on_workers(batch.len(), ctl, &|i| {
+                let (v, index) = (&batch[i], base + i);
+                on_progress(Progress::Shape { index, shapes: total, shape: to_shape(v) });
+                let e = eval_shape(params, ss, refs, plan, v, index);
+                if let Ok(e) = &e {
+                    let k = done.fetch_add(1, Ordering::SeqCst) + 1;
+                    on_progress(Progress::Candidate { done: k, total, candidate: e.rep.clone() });
+                }
+                e
+            })?,
+            Exec::Given { evals, stopped } => {
+                let mut out = Vec::with_capacity(batch.len());
+                let mut need = Vec::new();
+                for (i, v) in batch.iter().enumerate() {
+                    let index = base + i;
+                    match evals.iter().find(|e| e.job.index == index) {
+                        Some(e) => {
+                            anyhow::ensure!(e.job.v == *v, "shape {index} was scored with other factors");
+                            out.push(Some(e.eval()));
+                        }
+                        None if *stopped => out.push(None),
+                        None => need.push(ShapeJob { index, v: *v }),
+                    }
+                }
+                if !need.is_empty() {
+                    return Err(NeedShapes(need).into());
+                }
+                out
             }
-            e
-        })?;
+        };
         // Ended: only the shapes that were started (each finishes) are kept.
         for (v, e) in batch.into_iter().zip(out) {
             if let Some(e) = e {

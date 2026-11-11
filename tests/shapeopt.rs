@@ -339,3 +339,50 @@ fn stem_radius_taller_than_the_mold_rejects_the_design_not_the_run() {
     assert!(wh.name.ends_with("-f4"), "the winner carries the radius: {}", wh.name);
     assert!(wh.stem.as_ref().is_some_and(|s| s.top_in() <= w.candidate.depth_in));
 }
+
+/// The phone app's stepped search (`jaguar::run_shape_step`): every shape scored on its own,
+/// moved through JSON, handed back in a shuffled order, gives the same result.json as `run`.
+#[test]
+fn stepped_shape_search_matches_the_threaded_one() {
+    use jaguar::shapeopt::{ShapeEval, Step, prepare, score_shape};
+    let p = small(true);
+    let want = serde_json::to_string(&jaguar::run(&p, &|_| {}).unwrap()).unwrap();
+    let prep = prepare(&p).unwrap();
+    let mut evals: Vec<ShapeEval> = Vec::new();
+    let mut steps = 0;
+    let got = loop {
+        steps += 1;
+        match jaguar::run_shape_step(&p, &prep, &evals, false).unwrap() {
+            Step::Done(r) => break serde_json::to_string(&r).unwrap(),
+            Step::Need(jobs) => {
+                assert!(!jobs.is_empty());
+                // Scored last first, each through its JSON (what a Web Worker sends back).
+                for job in jobs.iter().rev() {
+                    let e = score_shape(&p, &prep, job).unwrap();
+                    evals.push(serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap());
+                }
+            }
+        }
+    };
+    assert!(steps >= 2, "the samples, then at least one refine round");
+    assert_eq!(got, want);
+}
+
+/// Ended by the user: the shapes given are all there is (`ended_early`); none at all is no answer.
+#[test]
+fn stepped_shape_search_ended_keeps_what_was_scored() {
+    use jaguar::shapeopt::{Step, prepare, score_shape};
+    let p = small(true);
+    let prep = prepare(&p).unwrap();
+    let err = jaguar::run_shape_step(&p, &prep, &[], true).err().expect("nothing scored");
+    assert!(err.downcast_ref::<jaguar::optimize::RunEnded>().is_some(), "{err:#}");
+    let Step::Need(jobs) = jaguar::run_shape_step(&p, &prep, &[], false).unwrap() else {
+        panic!("needs shapes")
+    };
+    let some: Vec<_> = jobs.iter().take(3).map(|j| score_shape(&p, &prep, j).unwrap()).collect();
+    let Step::Done(r) = jaguar::run_shape_step(&p, &prep, &some, true).unwrap() else {
+        panic!("ended = done")
+    };
+    assert_eq!(r.candidates.len(), 3);
+    assert!(r.ended_early.as_deref().is_some_and(|m| m.contains("after 3 shapes")), "{:?}", r.ended_early);
+}

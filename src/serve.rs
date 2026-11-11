@@ -137,6 +137,7 @@ use crate::optimize::{self, Candidate, Progress};
 use crate::params::Params;
 use crate::report;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -174,6 +175,8 @@ struct Shared {
     planned: Option<usize>,
     /// Size of the first wave of work (worker threads, at most the total): no estimate before.
     wave: usize,
+    /// Host-run mode ([`Embedded`]): the canoe.toml text of the run the host has not taken yet.
+    job: Option<String>,
 }
 
 impl Shared {
@@ -227,6 +230,9 @@ struct App {
     seen: Arc<Mutex<Instant>>,
     /// Set by `POST /api/quit`: the server stops after replying.
     quit: AtomicBool,
+    /// Host-run mode ([`Embedded`]): runs are done by the host on this many workers, not on a
+    /// thread here.
+    host_workers: Option<usize>,
 }
 
 type Reply = (u16, &'static str, String);
@@ -268,6 +274,7 @@ impl App {
             desktop: None,
             seen: Arc::new(Mutex::new(Instant::now())),
             quit: AtomicBool::new(false),
+            host_workers: None,
         })
     }
 
@@ -1080,9 +1087,13 @@ impl App {
                 params: Some(params.clone()),
                 started: Some(Instant::now()),
                 planned: params.shape_search.as_ref().map(crate::shapeopt::planned_shapes),
-                wave: rayon::current_num_threads(),
+                wave: self.host_workers.unwrap_or_else(rayon::current_num_threads),
+                job: self.host_workers.map(|_| body.clone()),
                 ..Default::default()
             };
+        }
+        if self.host_workers.is_some() {
+            return json_reply(202, serde_json::json!({ "ok": true }));
         }
         let shared = Arc::clone(&self.shared);
         let out = self.result_path.clone();
@@ -1142,11 +1153,91 @@ fn utc_stamp(t: std::time::SystemTime) -> String {
     format!("{y:04}-{m:02}-{d:02}_{:02}{:02}{:02}", rem / 3600, rem % 3600 / 60, rem % 60)
 }
 
-/// Save `result` to the history `dir` as `<UTC time>_<hull>.json` (compact) plus its
-/// `.meta.json` summary; returns the file name. Written to a temporary name and renamed, so
-/// the list never shows half a file.
-fn save_run(result: &optimize::RunResult, dir: &Path, now: std::time::SystemTime) -> Result<String> {
-    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+/// A finished run as the texts the server keeps: result.json (pretty) and the history copy
+/// (compact) with its summary. Made where the run ran (the phone app: a Web Worker), written
+/// where the files are ([`RunRecord::keep`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunRecord {
+    pretty: String,
+    compact: String,
+    meta: serde_json::Value,
+    /// History file name without the `.json` and the `_<n>` a same-second clash adds.
+    stem: String,
+}
+
+/// How a run ended, as the host reports it ([`Embedded::finish`]).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RunOutcome {
+    Done {
+        record: RunRecord,
+    },
+    /// Ended by the user with no answer (`optimize::RunEnded`).
+    Stopped,
+    Error {
+        error: String,
+    },
+}
+
+impl RunOutcome {
+    /// The outcome of `run` (Err(`RunEnded`) = stopped), its record made at `now`.
+    pub fn of(run: Result<optimize::RunResult>, now: std::time::SystemTime) -> RunOutcome {
+        match run.and_then(|r| RunRecord::new(&r, now)) {
+            Ok(record) => RunOutcome::Done { record },
+            Err(e) if e.downcast_ref::<optimize::RunEnded>().is_some() => RunOutcome::Stopped,
+            Err(e) => RunOutcome::Error { error: format!("{e:#}") },
+        }
+    }
+}
+
+impl RunRecord {
+    pub fn new(result: &optimize::RunResult, now: std::time::SystemTime) -> Result<RunRecord> {
+        let (stem, meta) = run_summary(result, now);
+        Ok(RunRecord {
+            pretty: serde_json::to_string_pretty(result)?,
+            compact: serde_json::to_string(result)?,
+            meta,
+            stem,
+        })
+    }
+
+    /// Write result.json (`out`) and the history copy next to it; returns the history file name
+    /// (None, with a note on stderr, when only that copy failed: a convenience, not the run).
+    fn keep(&self, out: &Path) -> Result<Option<String>> {
+        std::fs::write(out, &self.pretty).with_context(|| format!("writing {}", out.display()))?;
+        Ok(match self.save(&out.with_file_name(RUNS_DIR)) {
+            Ok(name) => Some(name),
+            Err(e) => {
+                eprintln!("JAGUAR: run not saved to the history: {e:#}");
+                None
+            }
+        })
+    }
+
+    /// Save to the history `dir` as `<stem>.json` (`_2`, `_3`.. when taken) plus its
+    /// `.meta.json` summary; returns the file name. Written to a temporary name and renamed, so
+    /// the list never shows half a file.
+    fn save(&self, dir: &Path) -> Result<String> {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let stem = &self.stem;
+        let name = (1..)
+            .map(|n| if n == 1 { format!("{stem}.json") } else { format!("{stem}_{n}.json") })
+            .find(|n| !dir.join(n).exists())
+            .expect("an unused name");
+        let path = dir.join(&name);
+        let write = |p: &Path, text: &str| -> Result<()> {
+            let tmp = p.with_extension("tmp");
+            std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
+            std::fs::rename(&tmp, p).with_context(|| format!("renaming to {}", p.display()))
+        };
+        write(&meta_path(&path), &self.meta.to_string())?;
+        write(&path, &self.compact)?;
+        Ok(name)
+    }
+}
+
+/// History file stem `<UTC time>_<hull>` and the `.meta.json` summary of `result`.
+fn run_summary(result: &optimize::RunResult, now: std::time::SystemTime) -> (String, serde_json::Value) {
     let design = result.winner.as_ref().or(result.closest.as_ref().map(|c| &c.design));
     let hull = result
         .winner_hull
@@ -1161,10 +1252,6 @@ fn save_run(result: &optimize::RunResult, dir: &Path, now: std::time::SystemTime
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
     let stamp = utc_stamp(now);
-    let name = (1..)
-        .map(|n| if n == 1 { format!("{stamp}_{stem}.json") } else { format!("{stamp}_{stem}_{n}.json") })
-        .find(|n| !dir.join(n).exists())
-        .expect("an unused name");
     let c = design.map(|w| &w.candidate);
     let status = match (&result.winner, &result.closest) {
         (Some(w), _) if w.verified => "verified",
@@ -1191,15 +1278,7 @@ fn save_run(result: &optimize::RunResult, dir: &Path, now: std::time::SystemTime
         "race_s": c.and_then(|c| c.race_s),
         "drag_n": c.and_then(|c| c.drag_n),
     });
-    let path = dir.join(&name);
-    let write = |p: &Path, text: &str| -> Result<()> {
-        let tmp = p.with_extension("tmp");
-        std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, p).with_context(|| format!("renaming to {}", p.display()))
-    };
-    write(&meta_path(&path), &meta.to_string())?;
-    write(&path, &serde_json::to_string(result)?)?;
-    Ok(name)
+    (format!("{stamp}_{stem}"), meta)
 }
 
 /// Saved prefs (text, params) if the file exists and parses, else None.
@@ -1236,10 +1315,12 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
     if let Some(d) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(d).with_context(|| format!("creating {}", d.display()))?;
     }
-    // Unique per write: requests run on their own threads.
+    // Unique per write: requests run on their own threads. WASI (the phone app) has no process
+    // ids (`process::id` panics there) and one engine per file system.
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let pid = if cfg!(target_os = "wasi") { 0 } else { std::process::id() };
     let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+    tmp.push(format!(".tmp{pid}_{}", N.fetch_add(1, Ordering::SeqCst)));
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming to {}", path.display()))?;
@@ -1280,57 +1361,62 @@ fn lock(s: &Mutex<Shared>) -> std::sync::MutexGuard<'_, Shared> {
     s.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf, ctl: &optimize::RunControl) {
-    let sh = Arc::clone(&shared);
-    let outcome =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(String, Option<String>)> {
-            let on_progress = |p: Progress| {
-                let mut s = lock(&sh);
-                match p {
-                    Progress::Started { total } => s.total = total,
-                    Progress::Candidate { done, total, candidate } => {
-                        s.done = s.done.max(done);
-                        s.total = total;
-                        s.candidates.push(candidate);
-                    }
-                    Progress::Shape { index, shapes, .. } => s.shape = Some((index, shapes)),
-                    Progress::Verifying { .. } => {}
-                }
-            };
-            let result = crate::run_controlled(&params, &on_progress, ctl)?;
-            report::write_json(&result, &out)?;
-            // The history copy is a convenience: a failure to save it does not fail the run.
-            let saved = match save_run(&result, &out.with_file_name(RUNS_DIR), std::time::SystemTime::now()) {
-                Ok(name) => Some(name),
-                Err(e) => {
-                    eprintln!("JAGUAR: run not saved to the history: {e:#}");
-                    None
-                }
-            };
-            Ok((serde_json::to_string_pretty(&result)?, saved))
-        }));
-    let mut s = lock(&shared);
-    match outcome {
-        Ok(Ok((json, saved))) => {
+/// A progress event into the run state `/api/status` reports.
+fn record_progress(s: &mut Shared, p: Progress) {
+    match p {
+        Progress::Started { total } => s.total = total,
+        Progress::Candidate { done, total, candidate } => {
+            s.done = s.done.max(done);
+            s.total = total;
+            s.candidates.push(candidate);
+        }
+        Progress::Shape { index, shapes, .. } => s.shape = Some((index, shapes)),
+        Progress::Verifying { .. } => {}
+    }
+}
+
+/// The run's end into the run state: a finished run is written to `out` (result.json) and the
+/// history first.
+fn record_outcome(shared: &Mutex<Shared>, out: &Path, outcome: RunOutcome) {
+    let kept = match outcome {
+        RunOutcome::Done { record } => {
+            record.keep(out).map(|saved| (record.pretty, saved)).map_err(|e| format!("{e:#}"))
+        }
+        RunOutcome::Stopped => {
+            lock(shared).state = "stopped";
+            return;
+        }
+        RunOutcome::Error { error } => Err(error),
+    };
+    let mut s = lock(shared);
+    match kept {
+        Ok((json, saved)) => {
             s.result = Some(json);
             s.run_file = saved;
             s.state = "done";
         }
-        Ok(Err(e)) if e.downcast_ref::<optimize::RunEnded>().is_some() => s.state = "stopped",
-        Ok(Err(e)) => {
-            s.error = Some(format!("{e:#}"));
-            s.state = "error";
-        }
-        Err(panic) => {
-            let msg = panic
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| panic.downcast_ref::<&str>().map(|m| m.to_string()))
-                .unwrap_or_else(|| "unknown panic".into());
-            s.error = Some(format!("optimizer panicked: {msg}"));
+        Err(e) => {
+            s.error = Some(e);
             s.state = "error";
         }
     }
+}
+
+fn run_job(params: Params, shared: Arc<Mutex<Shared>>, out: PathBuf, ctl: &optimize::RunControl) {
+    let sh = Arc::clone(&shared);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let on_progress = |p: Progress| record_progress(&mut lock(&sh), p);
+        RunOutcome::of(crate::run_controlled(&params, &on_progress, ctl), std::time::SystemTime::now())
+    }));
+    let outcome = outcome.unwrap_or_else(|panic| {
+        let msg = panic
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| panic.downcast_ref::<&str>().map(|m| m.to_string()))
+            .unwrap_or_else(|| "unknown panic".into());
+        RunOutcome::Error { error: format!("optimizer panicked: {msg}") }
+    });
+    record_outcome(&shared, &out, outcome);
 }
 
 /// Answer requests until the server is unblocked (`POST /api/quit` in desktop mode, or the
@@ -1348,6 +1434,43 @@ fn serve_on(server: Arc<tiny_http::Server>, app: Arc<App>) {
     }
 }
 
+/// One answer of the HTTP API, whatever carries it (tiny_http here, the phone app's fetch shim).
+#[derive(Debug, Clone, Serialize)]
+pub struct Response {
+    pub status: u16,
+    pub content_type: &'static str,
+    /// A download's file name (`Content-Disposition: attachment`).
+    pub filename: Option<String>,
+    /// `X-Jaguar-Warnings` (drawing sheets).
+    pub warnings: Vec<String>,
+    #[serde(skip)]
+    pub body: Vec<u8>,
+}
+
+impl Response {
+    fn text((status, content_type, text): Reply) -> Response {
+        Response { status, content_type, filename: None, warnings: vec![], body: text.into_bytes() }
+    }
+}
+
+/// Answer one request. A mesh upload is binary; every other body is text.
+fn dispatch(app: &App, method: &str, url: &str, raw: &[u8]) -> Response {
+    let (path, query) = url.split_once('?').unwrap_or((url, ""));
+    match (method, path) {
+        ("POST", "/api/import-mesh") => Response::text(app.import_mesh(query, raw)),
+        ("GET", "/api/export") => {
+            let (status, content_type, filename, body) = app.export(query);
+            Response { status, content_type, filename, warnings: vec![], body }
+        }
+        ("POST", "/api/drawing") => {
+            let (status, content_type, filename, body, warnings) =
+                app.drawing(query, &String::from_utf8_lossy(raw));
+            Response { status, content_type, filename, warnings, body }
+        }
+        _ => Response::text(app.handle(method, url, &String::from_utf8_lossy(raw))),
+    }
+}
+
 /// Read one request, answer it.
 fn respond(mut req: tiny_http::Request, app: &App) {
     *app.seen.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
@@ -1355,62 +1478,84 @@ fn respond(mut req: tiny_http::Request, app: &App) {
     if req.as_reader().read_to_end(&mut raw).is_err() {
         raw.clear();
     }
-    let url = req.url().to_string();
-    // A mesh upload is binary; every other body is text.
-    if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/import-mesh") {
-        let (status, ctype, text) = app.import_mesh(url.split_once('?').map_or("", |q| q.1), &raw);
-        let header =
-            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header");
-        let _ =
-            req.respond(tiny_http::Response::from_string(text).with_status_code(status).with_header(header));
-        return;
-    }
-    let body = String::from_utf8_lossy(&raw).into_owned();
-    if req.method().as_str() == "GET" && url.split('?').next() == Some("/api/export") {
-        let (status, ctype, file, bytes) = app.export(url.split_once('?').map_or("", |q| q.1));
-        let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
-            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
-        );
-        if let Some(f) = file {
-            let cd = format!("attachment; filename=\"{f}\"");
-            if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
-                resp = resp.with_header(h);
-            }
-        }
-        let _ = req.respond(resp);
-        return;
-    }
-    if req.method().as_str() == "POST" && url.split('?').next() == Some("/api/drawing") {
-        let (status, ctype, file, bytes, warnings) =
-            app.drawing(url.split_once('?').map_or("", |q| q.1), &body);
-        let mut resp = tiny_http::Response::from_data(bytes).with_status_code(status).with_header(
-            tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes()).expect("static header"),
-        );
-        if let Some(f) = file {
-            let cd = format!("attachment; filename=\"{f}\"");
-            if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
-                resp = resp.with_header(h);
-            }
-        }
-        // Header text must be ASCII: anything else becomes '?'.
-        let w: String = warnings
-            .join(" | ")
-            .chars()
-            .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '?' })
-            .collect();
-        if !w.is_empty()
-            && let Ok(h) = tiny_http::Header::from_bytes(&b"X-Jaguar-Warnings"[..], w.as_bytes())
-        {
+    let r = dispatch(app, req.method().as_str(), req.url(), &raw);
+    let mut resp = tiny_http::Response::from_data(r.body).with_status_code(r.status).with_header(
+        tiny_http::Header::from_bytes(&b"Content-Type"[..], r.content_type.as_bytes())
+            .expect("static header"),
+    );
+    if let Some(f) = r.filename {
+        let cd = format!("attachment; filename=\"{f}\"");
+        if let Ok(h) = tiny_http::Header::from_bytes(&b"Content-Disposition"[..], cd.as_bytes()) {
             resp = resp.with_header(h);
         }
-        let _ = req.respond(resp);
-        return;
     }
-    let (status, ctype, text) = app.handle(req.method().as_str(), req.url(), &body);
-    let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], ctype.as_bytes())
-        .expect("static header is valid");
-    let resp = tiny_http::Response::from_string(text).with_status_code(status).with_header(header);
+    // Header text must be ASCII: anything else becomes '?'.
+    let w: String = r
+        .warnings
+        .join(" | ")
+        .chars()
+        .map(|c| if c.is_ascii() && !c.is_ascii_control() { c } else { '?' })
+        .collect();
+    if !w.is_empty()
+        && let Ok(h) = tiny_http::Header::from_bytes(&b"X-Jaguar-Warnings"[..], w.as_bytes())
+    {
+        resp = resp.with_header(h);
+    }
     let _ = req.respond(resp);
+}
+
+/// The web UI's server with no socket and no threads (the phone app, `jaguar-wasm`, docs/SPEC.md
+/// "Phone app"): requests are answered in-process ([`Embedded::request`], the same answers as
+/// `serve`), and a run is done by the host: `POST /api/run` leaves its canoe.toml text for
+/// [`Embedded::take_job`]; the host reports with [`Embedded::progress`] and ends it with
+/// [`Embedded::finish`]. Pause and stop are recorded as usual; the host reads them from
+/// [`Embedded::control`].
+pub struct Embedded(App);
+
+impl Embedded {
+    /// Serve `params_path`'s folder with prefs at `prefs_path`; runs go to `workers` host
+    /// workers (the time estimate waits for that many).
+    pub fn new(params_path: &Path, prefs_path: PathBuf, workers: usize) -> Result<Embedded> {
+        let mut app = App::new(params_path, prefs_path)?;
+        app.host_workers = Some(workers.max(1));
+        app.restore_last();
+        Ok(Embedded(app))
+    }
+
+    pub fn request(&self, method: &str, url: &str, body: &[u8]) -> Response {
+        dispatch(&self.0, method, url, body)
+    }
+
+    /// The canoe.toml text of a run just started (once), with the CLI canoe.toml's `[race]` added
+    /// as the server does: the host parses it with the canoe.toml's folder.
+    pub fn take_job(&self) -> Option<String> {
+        self.0.lock().job.take()
+    }
+
+    pub fn progress(&self, p: Progress) {
+        let mut s = self.0.lock();
+        if s.state == "running" {
+            record_progress(&mut s, p);
+        }
+    }
+
+    /// End the run going (ignored when none is): a finished one is written to result.json and
+    /// the history, as `serve` does.
+    pub fn finish(&self, outcome: RunOutcome) {
+        if self.0.lock().state != "running" {
+            return;
+        }
+        record_outcome(&self.0.shared, &self.0.result_path, outcome);
+    }
+
+    /// (paused, stopped) of the run going; (false, false) when none is.
+    pub fn control(&self) -> (bool, bool) {
+        let s = self.0.lock();
+        if s.state != "running" {
+            return (false, false);
+        }
+        (s.ctl.paused(), s.ctl.stopped())
+    }
 }
 
 pub fn serve(params_path: &Path, port: u16, prefs: Option<PathBuf>) -> Result<()> {
@@ -1954,6 +2099,67 @@ mod tests {
         assert_eq!(b.handle("GET", "/api/result", "").0, 200);
         assert_eq!(b.handle("DELETE", &format!("/api/runs?{q}"), "").0, 404);
         assert_eq!(b.handle("PUT", "/api/runs", "").0, 405);
+    }
+
+    /// Host-run mode (the phone app): `POST /api/run` starts nothing here; the host takes the
+    /// job, reports progress, and its outcome is kept exactly as a run on a thread here is.
+    #[test]
+    fn embedded_runs_are_done_by_the_host() {
+        let (a, p) = app_on(|_| {});
+        let e = Embedded::new(&a.params_path, a.prefs_path.clone(), 3).unwrap();
+        let get = |url: &str| -> serde_json::Value {
+            let r = e.request("GET", url, b"");
+            assert_eq!(r.status, 200, "{url}");
+            serde_json::from_slice(&r.body).unwrap()
+        };
+        assert!(e.take_job().is_none());
+        let text = toml::to_string(&p).unwrap();
+        assert_eq!(e.request("POST", "/api/run", text.as_bytes()).status, 202);
+        assert_eq!(e.request("POST", "/api/run", text.as_bytes()).status, 409);
+        let job = e.take_job().expect("the run is left for the host");
+        assert!(e.take_job().is_none(), "taken once");
+        assert_eq!(get("/api/status")["state"], "running");
+        assert_eq!(e.control(), (false, false));
+        assert_eq!(e.request("POST", "/api/pause", b"").status, 200);
+        assert_eq!(e.control(), (true, false));
+        assert_eq!(e.request("POST", "/api/resume", b"").status, 200);
+
+        // The host runs the job: what it parses is the posted run.
+        let hp = Params::parse(&job, &a.base_dir).unwrap();
+        let on =
+            |pr: Progress| e.progress(serde_json::from_str(&serde_json::to_string(&pr).unwrap()).unwrap());
+        let run = crate::run(&hp, &on);
+        let st = get("/api/status?since=0");
+        assert!(st["done"].as_u64().unwrap() > 0 && !st["candidates"].as_array().unwrap().is_empty());
+        let outcome = RunOutcome::of(run, std::time::SystemTime::now());
+        e.finish(serde_json::from_str(&serde_json::to_string(&outcome).unwrap()).unwrap());
+        assert_eq!(get("/api/status")["state"], "done");
+        let shown = e.request("GET", "/api/result", b"");
+        assert_eq!(shown.status, 200);
+        assert_eq!(std::fs::read(&a.result_path).unwrap(), shown.body, "result.json is the shown result");
+        let want = serde_json::to_string_pretty(&crate::run(&p, &|_| {}).unwrap()).unwrap();
+        assert_eq!(String::from_utf8(shown.body).unwrap(), want, "same result as a run here");
+        let runs = get("/api/runs");
+        assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+        assert_eq!(runs["current"], runs["runs"][0]["file"]);
+        assert_eq!(
+            e.request("GET", "/api/export?format=stl", b"").filename.as_deref().map(|f| f.ends_with(".stl")),
+            Some(true)
+        );
+
+        // Ended with no answer, or failed: nothing written, the last result stays.
+        for (outcome, state) in
+            [(RunOutcome::Stopped, "stopped"), (RunOutcome::Error { error: "x".into() }, "error")]
+        {
+            assert_eq!(e.request("POST", "/api/run", text.as_bytes()).status, 202);
+            e.take_job().unwrap();
+            e.finish(outcome);
+            assert_eq!(get("/api/status")["state"], state);
+            assert_eq!(e.request("GET", "/api/result", b"").status, 200);
+            assert_eq!(get("/api/runs")["runs"].as_array().unwrap().len(), 1);
+        }
+        e.finish(RunOutcome::Stopped);
+        assert_eq!(get("/api/status")["state"], "error", "no run going: ignored");
     }
 
     #[test]

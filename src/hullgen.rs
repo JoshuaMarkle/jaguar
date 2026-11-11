@@ -53,7 +53,7 @@ pub struct ShapeParams {
 }
 
 /// Buildability and turning measurements of one shape (docs/SHAPE_SEARCH.md).
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ShapeMetrics {
     /// Design-waterline entry half-angle at the bow, deg: chord of the
     /// waterline half-breadth over the first `END_FRAC` of length.
@@ -75,7 +75,7 @@ pub struct ShapeMetrics {
 }
 
 /// Steady turn of a slender hull (computed by `resistance::turn`).
-#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Turn {
     /// Extra resistance of holding the turn, N: cross-flow power / speed.
     pub drag_n: f64,
