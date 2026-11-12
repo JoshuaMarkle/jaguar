@@ -164,6 +164,12 @@ try {
   await sleep(3000);
   const phone = await evaluate(`({ w: document.documentElement.scrollWidth, run: document.getElementById('run').getBoundingClientRect().right })`);
   check(phone.w <= 390 && phone.run <= 390, `phone width: page ${phone.w} px, Run ends at ${Math.round(phone.run)} px`);
+  // Landscape (Android phone on its side): the same one-column phone layout, no sideways scroll.
+  await send('Emulation.setDeviceMetricsOverride', { width: 915, height: 412, deviceScaleFactor: 2.6, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } });
+  await sleep(1500);
+  const land = await evaluate(`(() => { const v = document.getElementById('view').getBoundingClientRect(), r = document.getElementById('right').getBoundingClientRect();
+    return { w: document.documentElement.scrollWidth, stacked: r.top >= v.bottom - 1, view: Math.round(v.height), run: document.getElementById('run').getBoundingClientRect().right }; })()`);
+  check(land.w <= 915 && land.stacked && land.view >= 200 && land.run <= 915, `landscape: page ${land.w} px, one column (${land.stacked}), 3D view ${land.view} px tall`);
 } catch (e) {
   console.log('FAIL', e.message);
   process.exitCode = 1;

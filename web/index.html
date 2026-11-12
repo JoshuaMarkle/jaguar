@@ -313,10 +313,11 @@
   }
   .tip { position: fixed; z-index: 1002; padding: var(--s2) var(--s3); background: var(--canvas); color: var(--ink);
     border: 1px solid var(--hair); border-radius: var(--r-md); font-size: 13px; line-height: 1.4; white-space: pre-line; }
-  /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow window) ----------
+  /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow or short window: a phone
+     either way up) ----------
      One column that scrolls: top bar (one row, scrolls sideways) | 3D view | result | charts |
      inputs. Touch-sized controls; 16px inputs so iOS does not zoom in on focus. */
-  @media (max-width: 760px) {
+  @media (max-width: 760px), (max-height: 500px) {
     :root { --ctl-h: 34px; --label-w: 112px; --unit-w: 30px; }
     body { display: flex; flex-direction: column; height: auto; min-height: 100%; overflow: visible; }
     #top { position: sticky; top: 0; z-index: 20; height: var(--top); flex: none; background: var(--canvas); overflow-x: auto; scrollbar-width: none; }

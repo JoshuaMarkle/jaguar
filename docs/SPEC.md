@@ -898,7 +898,8 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
 * **Touch screens** (no hover; any page, not only the phone app): help kept in a tooltip shows when
   its label or text is tapped (a tapped field label shows its help instead of focusing the field);
   "hover" hints read "tap".
-* **Narrow screens** (760 px and less: a phone; also a narrow desktop window): one column that
+* **Narrow or short screens** (760 px wide or 500 px tall and less: a phone in portrait or
+  landscape; also such a desktop window; the app does not lock the orientation): one column that
   scrolls, 3D view, result, charts, then inputs; the top bar stays on one row (scrolls sideways),
   name, Run and the run status first; touch-sized controls; Seating's side view and charts grow
   with the page and its key wraps under the bars. Wider windows are unchanged.

@@ -70,6 +70,7 @@ put('manifest.webmanifest', JSON.stringify({
   start_url: './',
   scope: './',
   display: 'standalone',
+  orientation: 'any', // portrait or landscape: the layout follows (index.html phone rules)
   background_color: '#ffffff',
   theme_color: '#ffffff',
   icons: [
