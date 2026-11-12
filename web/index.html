@@ -266,7 +266,7 @@
   #stsum td, #stsum th { padding: 4px 4px 4px 0; border-bottom: 1px solid var(--hair-soft); text-align: left; font-weight: 450; }
   #stsum th { color: var(--muted); } #stsum tr[data-c] { cursor: pointer; } #stsum tr[data-c]:hover { background: #fafafa; }
   #stsum tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
-  @media (max-width: 900px) {
+  @media (max-width: 900px), (max-height: 500px) {
     #seating { grid-template-columns: 1fr; overflow-y: auto; display: block; }
     #seating[hidden] { display: none; }
     #seating > aside, #seating > section { border: 0 !important; border-bottom: 1px solid var(--hair) !important; }
@@ -305,7 +305,7 @@
   .rtag { display: inline-block; padding: 0 5px; border-radius: var(--r-xs); background: var(--soft); color: var(--ink-soft); font-size: 10px; }
   .rtag.steer { background: var(--accent); color: var(--canvas); }
   .rtag.est { background: #fdf3cd; color: #6b5400; }
-  @media (max-width: 900px) {
+  @media (max-width: 900px), (max-height: 500px) {
     #roster { display: block; overflow-y: auto; }
     #roster[hidden] { display: none; }
     #roster > section:first-child { border-right: 0; border-bottom: 1px solid var(--hair); }

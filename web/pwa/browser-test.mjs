@@ -169,6 +169,12 @@ try {
   await sleep(1500);
   const land = await evaluate(`(() => { const v = document.getElementById('view').getBoundingClientRect(), r = document.getElementById('right').getBoundingClientRect();
     return { w: document.documentElement.scrollWidth, stacked: r.top >= v.bottom - 1, view: Math.round(v.height), run: document.getElementById('run').getBoundingClientRect().right }; })()`);
+  await evaluate(`document.getElementById('seatbtn').click()`);
+  await sleep(2500);
+  const seat = await evaluate(`(() => { const v = document.getElementById('stview').getBoundingClientRect(), s = document.querySelector('#seating > section, #seating > aside:last-child').getBoundingClientRect();
+    return { w: document.getElementById('seating').scrollWidth, cols: getComputedStyle(document.getElementById('seating')).display }; })()`);
+  check(seat.w <= 915 && seat.cols === 'block', `landscape Seating: one column (${seat.cols}), ${seat.w} px`);
+  await evaluate(`document.getElementById('seatbtn').click()`);
   check(land.w <= 915 && land.stacked && land.view >= 200 && land.run <= 915, `landscape: page ${land.w} px, one column (${land.stacked}), 3D view ${land.view} px tall`);
 } catch (e) {
   console.log('FAIL', e.message);
