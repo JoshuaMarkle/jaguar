@@ -261,7 +261,9 @@
   .strow > span:first-child { color: var(--ink-soft); }
   #stview { position: relative; flex: 1; min-height: 0; padding: 0 var(--s4); overflow-y: auto; }
   #stplots svg { display: block; user-select: none; margin-top: var(--s2); }
-  #stview svg { display: block; user-select: none; touch-action: none; }
+  /* A finger swiping up or down over the side view and the charts scrolls the page; one moving
+     sideways drags a knee (side view). */
+  #stview svg { display: block; user-select: none; touch-action: pan-y; }
   #stlimits { padding: var(--s2) var(--s4) var(--s3); border-top: 1px solid var(--hair-soft); color: var(--ink-soft); display: grid; gap: 2px; }
   .stv { display: grid; gap: 2px; padding: var(--s2) var(--s3); background: var(--soft); border-radius: var(--r-md); border-left: 3px solid var(--success); }
   .stv.bad { border-left-color: var(--error); } .stv.near { border-left-color: var(--warning); } .stv b { font-weight: 650; }
@@ -3963,7 +3965,8 @@ function stPlots() {
     { title: 'Bending moment M', unit: 'lb·ft', code: P.moment_lbin.map(v => v / 12), real: P.moment_real_lbin.map(v => v / 12), f: v => v.toFixed(0) },
     { title: 'D/C along the hull', unit: '', code: P.dc, real: P.dc_real, f: v => v.toFixed(2), ref: 1, dc: true },
   ];
-  const H = 150, top = 24, bot = H - 22;
+  // Narrow (a phone): the key or the reading gets its own line under the title.
+  const two = W < 560, H = two ? 166 : 150, top = two ? 40 : 24, bot = H - 22;
   const pins = ST.pins || [], hx = ST.hx;
   box.innerHTML = defs.map(d => {
     const showReal = !same(d.code, d.real);
@@ -3989,7 +3992,7 @@ function stPlots() {
       if (showReal) o += `<circle cx="${x}" cy="${sy(stInterp(P.x_in, d.real, hx))}" r="2.5" fill="${C.muted}"/>`;
     }
     const head = `<text x="${X0}" y="14" font-size="12" font-weight="650" fill="${C.ink}">${d.title}${d.unit ? ` <tspan font-weight="450" fill="${C.muted}">${d.unit}</tspan>` : ''}</text>`
-      + `<text x="${X1}" y="14" font-size="11" fill="${C.ink}" text-anchor="end">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : (HOVER ? 'hover to read · click to pin' : 'tap to read')}</tspan>`}</text>`;
+      + `<text x="${two ? X0 : X1}" y="${two ? 31 : 14}" font-size="11" fill="${C.ink}" text-anchor="${two ? 'start' : 'end'}">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : (HOVER ? 'hover to read · click to pin' : 'tap to read')}</tspan>`}</text>`;
     return `<svg class="stplot" width="${W * ST.geo.fs}" height="${H * ST.geo.fs}" viewBox="0 0 ${W} ${H}">${head}${o}<rect x="${X0}" y="${top}" width="${X1 - X0}" height="${bot - top}" fill="transparent" style="cursor:crosshair"/></svg>`;
   }).join('') + (pins.length ? `<div class="hint" style="padding:0 0 var(--s2) ${X0}px">${pins.length} pinned reading(s) · <a href="#" id="stunpin">clear pins</a></div>` : '');
 }
@@ -3998,12 +4001,17 @@ function stPlots() {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * ST.geo.W, { X0, X1 } = ST.geo;
     return x < X0 || x > X1 ? null : (x - X0) / (X1 - X0) * ST.sum.length_in; };
   let raf = 0;
-  $('stplots').addEventListener('pointermove', e => { const x = at(e); if (x === ST.hx) return; ST.hx = x; cancelAnimationFrame(raf); raf = requestAnimationFrame(stPlots); });
-  $('stplots').addEventListener('pointerleave', () => { ST.hx = null; stPlots(); });
+  // Mouse: the reading follows the pointer, a click pins it. Touch: a tap shows the reading (line
+  // and value in the chart's header, nothing over the curves); the same spot again, or a tap off
+  // the charts' plot area, clears it. A finger moving over the charts scrolls the page.
+  $('stplots').addEventListener('pointermove', e => { if (e.pointerType === 'touch') return; const x = at(e); if (x === ST.hx) return; ST.hx = x; cancelAnimationFrame(raf); raf = requestAnimationFrame(stPlots); });
+  $('stplots').addEventListener('pointerleave', e => { if (e.pointerType === 'touch') return; ST.hx = null; stPlots(); });
   $('stplots').addEventListener('click', e => {
     if (e.target.id === 'stunpin') { e.preventDefault(); ST.pins = []; stPlots(); return; }
-    const x = at(e); if (x == null) return;
+    const x = at(e);
     const tol = 6 / (ST.geo.X1 - ST.geo.X0) * ST.sum.length_in;
+    if (!HOVER) { ST.hx = x == null || (ST.hx != null && Math.abs(ST.hx - x) < tol) ? null : x; stPlots(); return; }
+    if (x == null) return;
     ST.pins = ST.pins || [];
     const k = ST.pins.findIndex(p => Math.abs(p - x) < tol);
     if (k >= 0) ST.pins.splice(k, 1); else ST.pins.push(Math.round(x * 2) / 2);
