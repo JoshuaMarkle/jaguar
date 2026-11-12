@@ -143,6 +143,14 @@
     background: var(--canvas); border: 1px solid var(--hair); border-radius: var(--r-md); }
   .split .pop a { display: flex; justify-content: space-between; gap: var(--s3); padding: 6px var(--s2); border-radius: var(--r-xs); color: var(--ink); text-decoration: none; white-space: nowrap; }
   .split .pop a:hover { background: var(--soft); }
+  /* Phone top bar's More menu (the items it holds are moved in by placeTop). */
+  #topmore { position: relative; }
+  #topmore > summary { list-style: none; display: flex; align-items: center; }
+  #topmore > summary::-webkit-details-marker { display: none; }
+  #topmore .pop { position: absolute; z-index: 40; top: calc(100% + 4px); right: 0; min-width: 240px; max-width: calc(100vw - 32px);
+    display: grid; gap: var(--s2); padding: var(--s2); background: var(--canvas); border: 1px solid var(--hair); border-radius: var(--r-md); }
+  #topmore .pop > * { display: flex; align-items: center; justify-content: flex-start; }
+  #topmore .pop .objpick .lbl, #topmore #resetprefs .long { display: inline; }
 
   /* Segmented control (docs/DESIGN.md): soft track, active option is a white segment. */
   .seg { display: flex; gap: 2px; padding: 2px; background: var(--soft); border-radius: var(--r-sm); }
@@ -315,19 +323,24 @@
     border: 1px solid var(--hair); border-radius: var(--r-md); font-size: 13px; line-height: 1.4; white-space: pre-line; }
   /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow or short window: a phone
      either way up) ----------
-     One column that scrolls: top bar (one row, scrolls sideways) | 3D view | result | charts |
-     inputs. Touch-sized controls; 16px inputs so iOS does not zoom in on focus. */
+     One column that scrolls: top bar | 3D view | result | charts | inputs. The top bar is two
+     rows that fit the screen: Run, Seating, Roster and More (objective, reset, project), then
+     the run status with Pause / End. Touch-sized controls; 16px inputs so iOS does not zoom in
+     on focus. The bar's height is --top (set from it, for the Seating and Roster screens). */
   @media (max-width: 760px), (max-height: 500px) {
     :root { --ctl-h: 34px; --label-w: 112px; --unit-w: 30px; }
     body { display: flex; flex-direction: column; height: auto; min-height: 100%; overflow: visible; }
-    #top { position: sticky; top: 0; z-index: 20; height: var(--top); flex: none; background: var(--canvas); overflow-x: auto; scrollbar-width: none; }
-    #top::-webkit-scrollbar { display: none; }
-    #top .spacer, #top .brand span { display: none; }
-    #top .runbox { flex: 0 0 200px; }
-    /* The bar scrolls sideways: name, Run and its controls first, the rest after. */
-    #top .brand { order: -3; flex-shrink: 0; }
-    #top #run { order: -2; }
-    #top .runbox, #top #runctl { order: -1; }
+    #top { position: sticky; top: 0; z-index: 20; height: auto; flex: none; flex-wrap: wrap; row-gap: 6px; column-gap: var(--s2);
+      padding: 6px var(--s4); background: var(--canvas); }
+    #top .spacer, #top .sep, #top .brand, #top #prefnote, #run .long { display: none; }
+    #top #run { order: 1; }
+    #top #seatbtn { order: 2; }
+    #top #rosterbtn { order: 3; }
+    #top #topmore { order: 4; margin-left: auto; }
+    #top .runbox { order: 10; flex: 1 1 60%; min-width: 0; }
+    #top #runctl { order: 11; display: contents; }
+    #top #runctl[hidden] { display: none; }
+    #top #runctl .btn { order: 11; }
     #gutter-side { display: none; }
     .split .pop { left: auto; right: 0; max-width: calc(100vw - 32px); }
     #view { order: 1; height: 44vh; min-height: 260px; flex: none; }
@@ -338,7 +351,8 @@
     #left, #right { flex: none; }
     #left .scroll, #right .scroll { flex: none; overflow: visible; }
     input, select, textarea { font-size: 16px; }
-    .btn { min-height: 32px; }
+    /* Finger-sized: every button and tab at least 32 px tall (desktop sizes them 22-26 px). */
+    button, .btn, .seg button, summary.btn, select, input:not([type=checkbox]):not([type=radio]) { min-height: 32px; }
     /* Seating: the side view and its charts grow with the page (no box scrolling inside it). */
     #stview { height: auto; overflow: visible; }
   }
@@ -357,7 +371,8 @@
   <div class="runbox"><div class="statusline"><span id="status">idle</span><span id="eta"></span></div><progress id="prog" value="0" max="1"></progress></div>
   <button type="button" class="btn soft" id="seatbtn" title="Seating: place a crew on the finished canoe (the last result) and see every check, each paddler's safe range, and the best seats. Race-day tool: the wall is not changed.">Seating</button>
   <button type="button" class="btn soft" id="rosterbtn" title="Roster: list the team (weight, gender, gym watts, steering) and fill every race event with its fastest crew that is safe on the finished canoe.">Roster</button>
-  <button id="run" class="btn primary">Run optimization</button>
+  <button id="run" class="btn primary">Run<span class="long"> optimization</span></button>
+  <details class="menu" id="topmore" hidden><summary class="btn soft" title="Optimize for, reset, and saving or opening a project">More</summary><div class="pop" id="topmorepop"></div></details>
   <span id="runctl" hidden>
     <button type="button" class="btn soft" id="pauserun" title="Hold the run after the candidates or hull shapes being checked now. Resume carries on where it stopped.">Pause</button>
     <button type="button" class="btn soft" id="endrun" title="End the run. Shape search: no new shapes; the best hull found so far is verified and shown as the result. Fixed hull: the run is cancelled and the last result stays.">End</button></span>
@@ -1246,31 +1261,48 @@ function placeCam() {
   camera.position.set(target.x + radius * Math.sin(phi) * Math.cos(theta), target.y + radius * Math.cos(phi), target.z + radius * Math.sin(phi) * Math.sin(theta));
   camera.lookAt(target);
 }
-let drag = null;
-// Left-drag orbits; right-drag, middle-drag or Shift+drag pans (moves the point the camera
-// looks at across the screen); the wheel zooms.
-renderer.domElement.addEventListener('mousedown', e => {
-  e.preventDefault(); stopTween();
-  drag = { x: e.clientX, y: e.clientY, pan: e.button === 1 || e.button === 2 || e.shiftKey };
+// Mouse: left-drag orbits; right-drag, middle-drag or Shift+drag pans (moves the point the camera
+// looks at across the screen); the wheel zooms. Touch: one finger orbits; two fingers pan as they
+// move and zoom as they pinch. Pointer events, captured, so a drag may leave the view.
+const panBy = (dx, dy) => {
+  // One pixel moves the target by the width of a pixel at the target's distance.
+  const s = 2 * radius * Math.tan(camera.fov * Math.PI / 360) / Math.max(view.clientHeight, 1);
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
+  const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  target.addScaledVector(right, -dx * s).addScaledVector(up, dy * s);
+};
+const orbitBy = (dx, dy) => {
+  theta += dx * 0.01;
+  phi = Math.min(PHI_MAX, Math.max(PHI_MIN, phi - dy * 0.01));
+};
+const viewPts = new Map(); // pointerId -> { x, y, pan }
+const cv3 = renderer.domElement;
+cv3.style.touchAction = 'none';
+cv3.addEventListener('pointerdown', e => {
+  e.preventDefault(); stopTween(); cv3.setPointerCapture(e.pointerId);
+  viewPts.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.pointerType === 'mouse' && (e.button === 1 || e.button === 2 || e.shiftKey) });
 });
-renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
-window.addEventListener('mouseup', () => drag = null);
-window.addEventListener('mousemove', e => {
-  if (!drag) return;
-  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  if (drag.pan) {
-    // One pixel moves the target by the width of a pixel at the target's distance.
-    const s = 2 * radius * Math.tan(camera.fov * Math.PI / 360) / Math.max(view.clientHeight, 1);
-    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0);
-    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
-    target.addScaledVector(right, -dx * s).addScaledVector(up, dy * s);
-  } else {
-    theta += dx * 0.01;
-    phi = Math.min(PHI_MAX, Math.max(PHI_MIN, phi - dy * 0.01));
+cv3.addEventListener('pointermove', e => {
+  const p = viewPts.get(e.pointerId); if (!p) return;
+  if (viewPts.size === 1) {
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    if (p.pan) panBy(dx, dy); else orbitBy(dx, dy);
+  } else if (viewPts.size === 2) {
+    const [a, b] = [...viewPts.values()];
+    const mid = () => [(a.x + b.x) / 2, (a.y + b.y) / 2], dist = () => Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const [mx, my] = mid(), d0 = dist();
+    p.x = e.clientX; p.y = e.clientY;
+    const [nx, ny] = mid();
+    panBy(nx - mx, ny - my);
+    radius = Math.max(1, radius * d0 / dist());
   }
-  drag.x = e.clientX; drag.y = e.clientY; placeCam();
+  p.x = e.clientX; p.y = e.clientY; placeCam();
 });
-renderer.domElement.addEventListener('wheel', e => { e.preventDefault(); stopTween(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
+const viewUp = e => viewPts.delete(e.pointerId);
+cv3.addEventListener('pointerup', viewUp);
+cv3.addEventListener('pointercancel', viewUp);
+cv3.addEventListener('contextmenu', e => e.preventDefault());
+cv3.addEventListener('wheel', e => { e.preventDefault(); stopTween(); radius *= e.deltaY > 0 ? 1.1 : 0.9; placeCam(); }, { passive: false });
 
 // ---------- view cube ----------
 // A small cube in the top right turns with the camera; click a face, edge or corner to look at
@@ -1349,6 +1381,26 @@ function stepTween() {
   target.lerpVectors(a.target, b.target, s); placeCam();
   if (u >= 1) tween = null;
 }
+// Phone layout (the media query of the phone CSS): the top bar's less used items go into its
+// More menu, so Run, Seating and Roster always fit; the bar's height becomes --top (the Seating
+// and Roster screens start under it). Back in place when the window is wide again.
+const PHONE = matchMedia('(max-width: 760px), (max-height: 500px)');
+const topSlots = new Map(); // element -> the placeholder where it lives on a wide screen
+function placeTop() {
+  const items = [document.querySelector('#top .objpick'), $('resetprefs'), $('pwabtns')].filter(Boolean);
+  for (const el of items) if (!topSlots.has(el)) { const m = document.createComment('slot'); el.before(m); topSlots.set(el, m); }
+  $('topmore').hidden = !PHONE.matches;
+  for (const [el, slot] of topSlots) {
+    if (PHONE.matches) $('topmorepop').appendChild(el); else slot.after(el);
+  }
+  if (!PHONE.matches) { $('topmore').open = false; document.documentElement.style.removeProperty('--top'); }
+  else document.documentElement.style.setProperty('--top', $('top').offsetHeight + 'px');
+}
+PHONE.addEventListener('change', placeTop);
+addEventListener('DOMContentLoaded', placeTop); // after the phone app's shim adds its project buttons
+new ResizeObserver(() => { if (PHONE.matches) document.documentElement.style.setProperty('--top', $('top').offsetHeight + 'px'); }).observe($('top'));
+$('topmorepop').addEventListener('click', e => { if (e.target.closest('button')) $('topmore').open = false; });
+placeTop();
 // Touch screens have no hover: help that lives in a title shows when its label or text is tapped
 // (controls keep their tap; their visible text says what they do).
 const HOVER = matchMedia('(hover: hover)').matches;

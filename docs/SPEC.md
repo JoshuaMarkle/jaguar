@@ -900,9 +900,12 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
   "hover" hints read "tap".
 * **Narrow or short screens** (760 px wide or 500 px tall and less: a phone in portrait or
   landscape; also such a desktop window; the app does not lock the orientation): one column that
-  scrolls, 3D view, result, charts, then inputs; the top bar stays on one row (scrolls sideways),
-  name, Run and the run status first; touch-sized controls; Seating's side view and charts grow
-  with the page and its key wraps under the bars. Wider windows are unchanged.
+  scrolls, 3D view, result, charts, then inputs. The top bar is two rows that fit: Run, Seating,
+  Roster and **More** (optimize for, reset, Save / Open project), then the run status with Pause /
+  End. Buttons and fields at least 32 px tall; Seating's side view and charts grow with the page
+  and its key wraps under the bars. Wider windows are unchanged.
+* **3D view by touch:** one finger orbits, two fingers pan as they move and zoom as they pinch
+  (the mouse as before: left orbits, right / middle / Shift pans, wheel zooms).
 * **Offline and updates:** a service worker caches every file at install, one cache per build
   (version + content hash). A new build waits until the page's "Reload" (refused while a run goes).
 * **Tests:** `make pwa-browser-test` drives the built app in headless Chrome (every release).
