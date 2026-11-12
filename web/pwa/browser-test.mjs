@@ -105,9 +105,11 @@ try {
   const p2 = await evaluate(`fetch('/api/status').then(r => r.json())`);
   check(p1.paused && p2.done === p1.done && p1.done > 0, `pause holds the shape search at ${p1.done}/${p1.total} (${p2.done})`);
   await evaluate(`fetch('/api/resume', { method: 'POST' })`);
-  await sleep(4000);
-  const p3 = await evaluate(`fetch('/api/status').then(r => r.json())`);
-  check(!p3.paused && p3.done > p2.done, `resume goes on: ${p3.done}`);
+  // Until 4 more shapes are scored (the device's seconds per shape is saved from 4 timed
+  // shapes); a slow machine (CI) takes a while.
+  let p3 = {};
+  for (let i = 0; i < 300; i++) { await sleep(500); p3 = await evaluate(`fetch('/api/status').then(r => r.json())`); if (p3.done >= p2.done + 4) break; }
+  check(!p3.paused && p3.done >= p2.done + 4, `resume goes on: ${p2.done} -> ${p3.done}`);
   await evaluate(`fetch('/api/stop', { method: 'POST' })`);
   let sst = {};
   for (let i = 0; i < 600; i++) { await sleep(500); sst = await evaluate(`fetch('/api/status').then(r => r.json())`); if (sst.state !== 'running') break; }
@@ -139,7 +141,7 @@ try {
   await sleep(1500);
   const lag = await evaluate(`(async () => { const t = performance.now(); await fetch('/api/status'); return performance.now() - t; })()`);
   let ro = {};
-  for (let i = 0; i < 240 && !ro.status; i++) { await sleep(500); ro = await evaluate('window.__roster'); }
+  for (let i = 0; i < 600 && !ro.status; i++) { await sleep(500); ro = await evaluate('window.__roster'); }
   check(ro.status === 200 && ro.n > 0, `roster assigned: ${ro.n} events in ${ro.s?.toFixed(1)} s`);
   check(lag < 1000, `the app answers during the roster (${Math.round(lag)} ms)`);
   const runs = await evaluate(`fetch('/api/runs').then(r => r.json()).then(j => j.runs.length)`);
