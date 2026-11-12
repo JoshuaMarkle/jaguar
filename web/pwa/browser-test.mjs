@@ -39,10 +39,23 @@ const server = createServer(async (req, res) => {
 }).listen(8123);
 
 const profile = mkdtempSync(join(tmpdir(), 'jaguar-e2e-'));
-const proc = spawn(chrome, ['--headless=new', '--remote-debugging-port=9333', `--user-data-dir=${profile}`, '--no-first-run', '--no-sandbox', 'about:blank'], { stdio: 'ignore' });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-let ver;
-for (let i = 0; i < 50 && !ver; i++) { try { ver = await (await fetch('http://127.0.0.1:9333/json/version')).json(); } catch { await sleep(200); } }
+// Chrome can take a while to come up on a loaded CI machine: wait for its DevTools port, start it
+// once more if it dies or never answers, and show what it printed if it still does not.
+let proc, said = '', ver;
+for (let attempt = 1; attempt <= 2 && !ver; attempt++) {
+  proc = spawn(chrome, ['--headless=new', '--remote-debugging-port=9333', `--user-data-dir=${profile}-${attempt}`, '--no-first-run', '--no-sandbox', '--disable-gpu', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let gone = false;
+  proc.on('exit', () => { gone = true; });
+  proc.stderr.on('data', d => { said = (said + d).slice(-2000); });
+  for (let i = 0; i < 300 && !ver && !gone; i++) { try { ver = await (await fetch('http://127.0.0.1:9333/json/version')).json(); } catch { await sleep(200); } }
+  if (!ver) proc.kill();
+}
+if (!ver) {
+  console.log(`FAIL Chrome did not start (${chrome}):\n${said}`);
+  server.close();
+  process.exit(1);
+}
 const targets = await (await fetch('http://127.0.0.1:9333/json')).json();
 const page = targets.find(t => t.type === 'page');
 const ws = new WebSocket(page.webSocketDebuggerUrl);
