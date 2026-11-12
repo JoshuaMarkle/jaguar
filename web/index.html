@@ -7,6 +7,7 @@
 <style>
   /* Tokens from docs/DESIGN.md, scaled down for a dense tool UI (CAD/Blender-like, not a marketing page). */
   :root {
+    --fs: 1; /* type scale: phones raise it (below), charts and the seating side view follow */
     --ink: #141414; --ink-soft: #262626; --muted: #707070; --faint: #adadad;
     --canvas: #ffffff; --soft: #f3f3f3; --field: #f0f0f0; --hair-soft: #f0f0f0; --hair: #e0e0e0;
     --accent: #0066ff; --success: #24a148; --warning: #f1c21b; --error: #da1e28;
@@ -22,7 +23,7 @@
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   /* App shell: top bar | inputs (left) | 3D view over charts (centre) | result (right). */
-  body { margin: 0; font: 450 12px/1.4 var(--font); color: var(--ink); background: var(--canvas);
+  body { margin: 0; font: 450 calc(12px * var(--fs))/1.4 var(--font); color: var(--ink); background: var(--canvas);
     display: grid; grid-template-columns: var(--side) minmax(0, 1fr) var(--res); grid-template-rows: var(--top) minmax(0, 1fr) var(--plot);
     overflow: hidden; -webkit-font-smoothing: antialiased; }
   button, input, select { font: inherit; color: inherit; }
@@ -30,7 +31,7 @@
   /* ---------- top bar ---------- */
   #top { grid-column: 1 / 4; display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s4); border-bottom: 1px solid var(--hair); min-width: 0; }
   #top .brand { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; white-space: nowrap; }
-  #top .brand b { font-weight: 650; font-size: 15px; }
+  #top .brand b { font-weight: 650; font-size: calc(15px * var(--fs)); }
   #top .brand span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
   #top .spacer { flex: 1; }
   #top .sep { width: 1px; align-self: stretch; margin: var(--s3) 0; background: var(--hair-soft); }
@@ -54,7 +55,7 @@
   #left { grid-column: 1; border-right: 1px solid var(--hair); }
   #right { grid-column: 3; border-left: 1px solid var(--hair); }
   .panehead { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2); }
-  .panehead b { font-weight: 650; font-size: 13px; }
+  .panehead b { font-weight: 650; font-size: calc(13px * var(--fs)); }
   .panehead .hint { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panehead > b, .panehead > .btn { flex-shrink: 0; }
   #groups { margin: 0 var(--s4) var(--s2); }
@@ -98,7 +99,7 @@
   .row, .kv { display: grid; grid-template-columns: var(--label-w) minmax(0, 1fr) var(--unit-w); align-items: center; column-gap: var(--s2); min-height: var(--ctl-h); }
   .row > label { color: var(--ink-soft); overflow-wrap: anywhere; line-height: 1.2; padding: 2px 0; cursor: help; }
   .row > .unit { color: var(--muted); }
-  .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: 11px; margin-top: -2px; }
+  .row > .sub { grid-column: 2 / 4; color: var(--muted); font-size: calc(11px * var(--fs)); margin-top: -2px; }
   .multi { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--s1); }
   .multi input { padding: 0 6px; }
   .lcp { display: grid; gap: var(--s1); }
@@ -174,12 +175,12 @@
   #drawdlg { position: fixed; inset: 0; background: rgba(20,20,20,0.25); display: flex; align-items: center; justify-content: center; z-index: 50; }
   #drawdlg .box { background: var(--canvas); border: 1px solid var(--hair); border-radius: var(--r-md); padding: var(--s4); width: min(760px, 94vw); max-height: 90vh; overflow: auto; }
   #drawdlg .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2) var(--s3); }
-  #drawdlg label { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+  #drawdlg label { display: flex; flex-direction: column; gap: 2px; font-size: calc(12px * var(--fs)); color: var(--muted); }
   #drawdlg label.chk { flex-direction: row; align-items: center; gap: var(--s1); }
-  #drawdlg textarea { width: 100%; min-height: 140px; font-family: ui-monospace, monospace; font-size: 11px; }
+  #drawdlg textarea { width: 100%; min-height: 140px; font-family: ui-monospace, monospace; font-size: calc(11px * var(--fs)); }
   #drawdlg .acts { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); align-items: center; }
-  .muted { color: var(--muted); } .hint { color: var(--muted); font-size: 11px; }
-  .badge { display: inline-block; height: 20px; line-height: 18px; padding: 0 var(--s2); border-radius: var(--r-xs); font-size: 11px; font-weight: 600; border: 1px solid var(--ink); }
+  .muted { color: var(--muted); } .hint { color: var(--muted); font-size: calc(11px * var(--fs)); }
+  .badge { display: inline-block; height: 20px; line-height: 18px; padding: 0 var(--s2); border-radius: var(--r-xs); font-size: calc(11px * var(--fs)); font-weight: 600; border: 1px solid var(--ink); }
   .badge.success { background: var(--success); border-color: var(--success); color: var(--canvas); }
   .badge.warn { background: var(--warning); border-color: var(--warning); color: var(--ink); }
   .badge.error { background: var(--error); border-color: var(--error); color: var(--canvas); }
@@ -187,7 +188,7 @@
   #prefnote.bad { color: var(--error); }
   .group { margin-top: var(--s2); color: var(--muted); }
 
-  .tbl { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; margin-top: var(--s1); }
+  .tbl { width: 100%; border-collapse: collapse; font-size: calc(11px * var(--fs)); font-variant-numeric: tabular-nums; margin-top: var(--s1); }
   .tbl th { font-weight: 450; color: var(--muted); text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
   .tbl td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--hair-soft); white-space: nowrap; }
   .tbl th:first-child, .tbl td:first-child { text-align: left; padding-left: 0; }
@@ -216,7 +217,7 @@
   #viewlabel:empty { display: none; }
   #viewcube { position: absolute; right: var(--s3); top: var(--s3); display: flex; flex-direction: column; align-items: center; gap: var(--s1); }
   #viewcube canvas { display: block; }
-  #viewcube button { height: 22px; padding: 0 var(--s2); border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--canvas); color: var(--ink); cursor: pointer; font: inherit; font-size: 11px; }
+  #viewcube button { height: 22px; padding: 0 var(--s2); border: 1px solid var(--hair); border-radius: var(--r-sm); background: var(--canvas); color: var(--ink); cursor: pointer; font: inherit; font-size: calc(11px * var(--fs)); }
   #viewcube button:hover { background: var(--soft); }
   #viewlabel { position: absolute; left: var(--s3); top: var(--s3); background: var(--canvas); border-radius: var(--r-sm); padding: 3px 8px; color: var(--ink-soft); }
   #plotwrap { grid-column: 2; grid-row: 3; position: relative; border-top: 1px solid var(--hair); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -228,11 +229,12 @@
   #plotctl input.mfgn { width: 60px; height: 24px; }
   #plotctl input.mfgn.wide { width: 110px; }
   #plot { width: 100%; flex: 1; min-height: 0; display: block; }
+  .plotscroll { display: contents; } /* phones: the chart's own sideways scroller */
   /* Chart tabs, grouped: one segmented track per group (search, structure, hull, race). */
   /* Desktop mode (double-clicked JAGUAR): shown once the server has stopped. */
   #stopped { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; background: var(--canvas); text-align: center; }
   #stopped.on { display: grid; }
-  #stopped b { display: block; font-size: 15px; font-weight: 650; margin-bottom: var(--s2); }
+  #stopped b { display: block; font-size: calc(15px * var(--fs)); font-weight: 650; margin-bottom: var(--s2); }
   #tabs { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: var(--s2) var(--s3) 0; }
   #tabs .tg { display: flex; align-items: center; }
   #tabs .seg button { flex: none; height: 22px; padding: 0 10px; }
@@ -244,7 +246,7 @@
   #seating > aside:first-child { border-right: 1px solid var(--hair); }
   #seating > aside:last-child { border-left: 1px solid var(--hair); }
   #seating .body { padding: var(--s3) var(--s4); display: grid; gap: var(--s1); align-content: start; }
-  #seating h4 { margin: var(--s3) 0 var(--s1); font-weight: 650; font-size: 12px; }
+  #seating h4 { margin: var(--s3) 0 var(--s1); font-weight: 650; font-size: calc(12px * var(--fs)); }
   #stcrews { margin: 0 var(--s4) var(--s2); flex-wrap: wrap; }
   #stcrews button { flex: none; padding: 0 10px; }
   .stp { display: grid; grid-template-columns: 20px minmax(0, 1fr) 50px 56px 74px 22px; align-items: center; gap: var(--s2); min-height: 30px; border-bottom: 1px solid var(--hair-soft); }
@@ -253,7 +255,7 @@
   .stp input, .stp select { padding: 0 6px; }
   .stp select { padding-right: 18px; background-position: right 6px center; }
   .stn { width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--canvas); display: flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 600; cursor: pointer; }
+    font-size: calc(11px * var(--fs)); font-weight: 600; cursor: pointer; }
   .stp.sel .stn { background: var(--accent); }
   .strow { display: grid; grid-template-columns: minmax(0, 1fr) 64px 22px; align-items: center; gap: var(--s2); min-height: var(--ctl-h); }
   .strow > span:first-child { color: var(--ink-soft); }
@@ -288,7 +290,7 @@
   #roster > section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
   #roster > section:first-child { border-right: 1px solid var(--hair); }
   #roster .body { padding: var(--s3) var(--s4); display: grid; gap: var(--s2); align-content: start; }
-  #roster h4 { margin: var(--s3) 0 0; font-weight: 650; font-size: 12px; }
+  #roster h4 { margin: var(--s3) 0 0; font-weight: 650; font-size: calc(12px * var(--fs)); }
   .rtable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   #rtable { table-layout: fixed; min-width: 640px; }
   .rtable th { color: var(--muted); font-weight: 450; text-align: left; padding: 0 4px 4px 0; white-space: nowrap; }
@@ -297,7 +299,7 @@
   .rtable select { padding-right: 18px; background-position: right 6px center; }
   .rtable td.n { color: var(--muted); width: 18px; }
   .rchips { display: flex; flex-wrap: wrap; gap: 4px; }
-  .rchip { height: 20px; padding: 0 6px; border-radius: var(--r-xs); border: 1px solid var(--hair); background: var(--canvas); cursor: pointer; font-size: 11px; color: var(--muted); }
+  .rchip { height: 20px; padding: 0 6px; border-radius: var(--r-xs); border: 1px solid var(--hair); background: var(--canvas); cursor: pointer; font-size: calc(11px * var(--fs)); color: var(--muted); }
   .rchip.in { background: var(--ink); border-color: var(--ink); color: var(--canvas); }
   .rchip.out { text-decoration: line-through; color: var(--faint); background: var(--soft); border-color: transparent; }
   .rchip.no { display: none; }
@@ -310,7 +312,7 @@
   .rcard .rhead .t { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; }
   .rcrew { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
   .rcrew td { padding: 2px 6px 2px 0; border-top: 1px solid var(--hair-soft); }
-  .rtag { display: inline-block; padding: 0 5px; border-radius: var(--r-xs); background: var(--soft); color: var(--ink-soft); font-size: 10px; }
+  .rtag { display: inline-block; padding: 0 5px; border-radius: var(--r-xs); background: var(--soft); color: var(--ink-soft); font-size: calc(10px * var(--fs)); }
   .rtag.steer { background: var(--accent); color: var(--canvas); }
   .rtag.est { background: #fdf3cd; color: #6b5400; }
   @media (max-width: 900px), (max-height: 500px) {
@@ -320,7 +322,7 @@
     .rwrap { overflow-x: auto; }
   }
   .tip { position: fixed; z-index: 1002; padding: var(--s2) var(--s3); background: var(--canvas); color: var(--ink);
-    border: 1px solid var(--hair); border-radius: var(--r-md); font-size: 13px; line-height: 1.4; white-space: pre-line; }
+    border: 1px solid var(--hair); border-radius: var(--r-md); font-size: calc(13px * var(--fs)); line-height: 1.4; white-space: pre-line; }
   /* ---------- phone (the phone app, docs/SPEC.md "Phone app"; any narrow or short window: a phone
      either way up) ----------
      One column that scrolls: top bar | 3D view | result | charts | inputs. The top bar is two
@@ -328,7 +330,7 @@
      the run status with Pause / End. Touch-sized controls; 16px inputs so iOS does not zoom in
      on focus. The bar's height is --top (set from it, for the Seating and Roster screens). */
   @media (max-width: 760px), (max-height: 500px) {
-    :root { --ctl-h: 34px; --label-w: 112px; --unit-w: 30px; }
+    :root { --fs: 1.17; --ctl-h: 36px; --label-w: 128px; --unit-w: 34px; }
     body { display: flex; flex-direction: column; height: auto; min-height: 100%; overflow: visible; }
     #top { position: sticky; top: 0; z-index: 20; height: auto; flex: none; flex-wrap: wrap; row-gap: 6px; column-gap: var(--s2);
       padding: 6px var(--s4); background: var(--canvas); }
@@ -343,18 +345,29 @@
     #top #runctl .btn { order: 11; }
     #gutter-side { display: none; }
     .split .pop { left: auto; right: 0; max-width: calc(100vw - 32px); }
-    #view { order: 1; height: 44vh; min-height: 260px; flex: none; }
+    #view { order: 1; height: 34vh; min-height: 200px; flex: none; }
+    #view canvas { touch-action: pan-y !important; }
+    /* No orientation cube: on a touch screen the canoe is turned by hand. Home stays. */
+    #viewcube canvas { display: none !important; } /* three.js sets an inline display */
     #right { order: 2; border: 0; border-top: 1px solid var(--hair); }
-    #plotwrap { order: 3; height: 52vh; min-height: 320px; flex: none; }
+    #plotwrap { order: 3; height: 56vh; min-height: 340px; flex: none; }
+    .plotscroll { display: block; flex: 1; min-height: 0; overflow-x: auto; overflow-y: hidden; }
+    #plot { min-width: calc(520px * var(--fs)); height: 100%; }
     #gutter-plot { display: none; }
     #left { order: 4; border: 0; border-top: 1px solid var(--hair); }
     #left, #right { flex: none; }
     #left .scroll, #right .scroll { flex: none; overflow: visible; }
-    input, select, textarea { font-size: 16px; }
+    @supports (-webkit-touch-callout: none) { input, select, textarea { font-size: 16px; } }
     /* Finger-sized: every button and tab at least 32 px tall (desktop sizes them 22-26 px). */
     button, .btn, .seg button, summary.btn, select, input:not([type=checkbox]):not([type=radio]) { min-height: 32px; }
     /* Seating: the side view and its charts grow with the page (no box scrolling inside it). */
     #stview { height: auto; overflow: visible; }
+  }
+  /* Phone on its side: the bar on one row; the canoe half the screen, a chart the whole of it. */
+  @media (max-height: 500px) and (min-width: 761px) {
+    #top .runbox { flex: 1 1 200px; order: 5; }
+    #view { height: 52vh; min-height: 0; }
+    #plotwrap { height: calc(100vh - var(--top)); min-height: 0; }
   }
 </style>
 <script src="/vendor/three.min.js"></script>
@@ -486,6 +499,9 @@ const C = { ink: '#141414', soft: '#262626', muted: '#707070', faint: '#adadad',
   success: '#24a148', warning: '#f1c21b', error: '#da1e28' };
 const FONT = getComputedStyle(document.documentElement).getPropertyValue('--font').trim();
 const font = (px, w = 450) => `${w} ${px}px ${FONT}`;
+// The type scale (--fs): charts and the seating side view are drawn at size / scale and shown
+// at full size, so their text grows with the page's on a phone.
+const uiScale = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fs')) || 1;
 
 function parseTomlBits(text) {
   // Just enough to read gates.dc_search and search.depth_in max for drawing.
@@ -1411,7 +1427,8 @@ if (!HOVER) {
   document.addEventListener('click', ev => {
     hideTip();
     const t = ev.target.closest?.('[title]');
-    if (!t || !t.title.trim() || t.closest('button, a, input, select, textarea, summary, .btn, [data-k]')) return;
+    const ctl = 'button, a, input, select, textarea, summary, .btn, [data-k]';
+    if (!t || !t.title.trim() || t.closest(ctl) || ev.target.closest(ctl)) return;
     if (t.tagName === 'LABEL') ev.preventDefault(); // help, not focus: the field itself is the next tap
     tip = document.createElement('div');
     tip.className = 'tip';
@@ -1425,9 +1442,22 @@ if (!HOVER) {
   }, true);
   addEventListener('scroll', hideTip, true);
 }
+{ const p = $('plot'), sc = document.createElement('div'); sc.className = 'plotscroll'; p.before(sc); sc.appendChild(p); }
+// Home distance: a narrow (phone, portrait) view backs off so the whole canoe fits across it; a
+// wide strip (a phone on its side) comes closer, the canoe's length still inside it.
+function homeRadius() {
+  const asp = Math.max(camera.aspect, 0.1);
+  return hull.length * 1.1 * (asp < 1.6 ? 1.6 / asp : asp > 2.4 ? Math.max(0.8, 2.4 / asp) : 1);
+}
 function resize() {
   const w = view.clientWidth, h = view.clientHeight;
   renderer.setSize(w, h); camera.aspect = w / Math.max(h, 1); camera.updateProjectionMatrix();
+  // Turned (a phone rotated): a camera still at the home view is framed again for the new shape.
+  if (hull && homeView) {
+    const atHome = !tween && theta === homeView.theta && phi === homeView.phi && radius === homeView.radius && target.equals(homeView.target);
+    homeView.radius = homeRadius();
+    if (atHome) { radius = homeView.radius; placeCam(); }
+  }
   const c = $('plot'), dpr = window.devicePixelRatio || 1;
   c.width = Math.round(c.clientWidth * dpr); c.height = Math.round(c.clientHeight * dpr); drawPlot(); drawMix();
 }
@@ -1506,8 +1536,7 @@ function buildCanoe() {
     water.rotation.x = -Math.PI / 2; water.position.y = draft; scene.add(water);
   }
   target.set(hull.length / 2, depth / 2, 0);
-  // A narrow (phone, portrait) view backs off so the whole canoe fits across it.
-  radius = hull.length * 1.1 * Math.max(1, 1.6 / Math.max(camera.aspect, 0.1)); stopTween(); placeCam();
+  radius = homeRadius(); stopTween(); placeCam();
   homeView = { theta, phi, radius, target: target.clone() };
 }
 
@@ -1779,8 +1808,8 @@ function caseKnees(ctx, a, r, ks) {
 const caseLegend = ks => ks.map(k => { const [col, dash] = caseStyle(k.i); return [col, k.name, dash]; });
 const diag = () => { const d = result && result.winner && result.winner.diagrams; return d && d.x_in && d.x_in.length ? d : null; };
 function drawPlot() {
-  const c = $('plot'), ctx = c.getContext('2d'), dpr = window.devicePixelRatio || 1, W = c.width / dpr, H = c.height / dpr;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const c = $('plot'), ctx = c.getContext('2d'), k = (window.devicePixelRatio || 1) * uiScale(), W = c.width / k, H = c.height / k;
+  ctx.setTransform(k, 0, 0, k, 0, 0);
   ctx.clearRect(0, 0, W, H); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   ctx.font = font(11); ctx.textAlign = 'left';
   ({ cands: plotCands, hull: plotHull, stress: plotStress, dcx: plotDcx, fb: plotFreeboard, checks: plotChecks, map: plotMap, xsec: plotXsec, zones: plotZones, shape: plotShape, race: plotRace, power: plotPower, gz: plotGz, mfg: plotMfg })[tab](ctx, W, H);
@@ -3440,9 +3469,9 @@ function mixTable() {
 const finalOf = (p, k) => p[k] == null ? null : p[k] / p.fraction_of_final;
 function drawMix() {
   const cv = $('mixplot'); if (!cv || !mixFit) return;
-  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
-  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
-  const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+  const dpr = window.devicePixelRatio || 1, fs = uiScale(), W = cv.clientWidth / fs, H = cv.clientHeight / fs;
+  cv.width = Math.round(cv.clientWidth * dpr); cv.height = Math.round(cv.clientHeight * dpr);
+  const ctx = cv.getContext('2d'); ctx.setTransform(dpr * fs, 0, 0, dpr * fs, 0, 0); ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
   plotMix(ctx, W, H);
 }
 function plotMix(ctx, W, H) {
@@ -3821,12 +3850,12 @@ function stDraw() {
   // True scale: one pixel size for length and height (the canoe is long and shallow), drawn at the
   // panel's pixel width so text stays readable.
   const box = $('stview'), L = s.length_in, D = s.depth_in, n = c.p.length;
-  const W = Math.max(320, box.clientWidth - 32), X0 = 28, X1 = W - 28, k = (X1 - X0) / L;
+  const fs = uiScale(), W = Math.max(320, box.clientWidth - 32) / fs, X0 = 28, X1 = W - 28, k = (X1 - X0) / L;
   // Narrow (a phone): the scale line and the bars' key each get their own lines.
   const narrow = W < 560, top = 64, bot = top + D * k, H = bot + 72 + 16 * n + (narrow ? 34 : 0);
   const sx = x => X0 + x * k, sz = z => bot - z * k;
-  ST.geo = { X0, X1, W };
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W); svg.setAttribute('height', H);
+  ST.geo = { X0, X1, W, fs };
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', W * fs); svg.setAttribute('height', H * fs);
   const keelAt = x => {
     const xs = s.x_in, j = Math.max(1, Math.min(xs.length - 1, xs.findIndex(v => v >= x)));
     const t = (x - xs[j - 1]) / (xs[j] - xs[j - 1] || 1);
@@ -3961,7 +3990,7 @@ function stPlots() {
     }
     const head = `<text x="${X0}" y="14" font-size="12" font-weight="650" fill="${C.ink}">${d.title}${d.unit ? ` <tspan font-weight="450" fill="${C.muted}">${d.unit}</tspan>` : ''}</text>`
       + `<text x="${X1}" y="14" font-size="11" fill="${C.ink}" text-anchor="end">${hx != null ? esc(read(hx)) : `<tspan fill="${C.muted}">${showReal ? 'solid: code (factored) · dashed: real load' : (HOVER ? 'hover to read · click to pin' : 'tap to read')}</tspan>`}</text>`;
-    return `<svg class="stplot" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${head}${o}<rect x="${X0}" y="${top}" width="${X1 - X0}" height="${bot - top}" fill="transparent" style="cursor:crosshair"/></svg>`;
+    return `<svg class="stplot" width="${W * ST.geo.fs}" height="${H * ST.geo.fs}" viewBox="0 0 ${W} ${H}">${head}${o}<rect x="${X0}" y="${top}" width="${X1 - X0}" height="${bot - top}" fill="transparent" style="cursor:crosshair"/></svg>`;
   }).join('') + (pins.length ? `<div class="hint" style="padding:0 0 var(--s2) ${X0}px">${pins.length} pinned reading(s) · <a href="#" id="stunpin">clear pins</a></div>` : '');
 }
 {

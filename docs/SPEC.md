@@ -904,8 +904,14 @@ workflow) as a Progressive Web App: no server, no network after the first visit.
   Roster and **More** (optimize for, reset, Save / Open project), then the run status with Pause /
   End. Buttons and fields at least 32 px tall; Seating's side view and charts grow with the page
   and its key wraps under the bars. Wider windows are unchanged.
-* **3D view by touch:** one finger orbits, two fingers pan as they move and zoom as they pinch
-  (the mouse as before: left orbits, right / middle / Shift pans, wheel zooms).
+* **3D view by touch:** a sideways swipe orbits, an up / down swipe scrolls the page, two fingers
+  pan as they move and zoom as they pinch (the mouse as before: left orbits, right / middle /
+  Shift pans, wheel zooms). On a phone the view is shorter (about a third of the screen upright,
+  half on its side), has no orientation cube (Home stays), and re-frames the canoe when the phone
+  turns while it is at the home view.
+* **One type scale:** every text size is a multiple of `--fs` (1 on a desktop, 1.17 on a phone);
+  the charts and the Seating side view are drawn at it too, so labels, fields, results and charts
+  keep the desktop's proportions. A chart narrower than its layout scrolls sideways in its box.
 * **Offline and updates:** a service worker caches every file at install, one cache per build
   (version + content hash). A new build waits until the page's "Reload" (refused while a run goes).
 * **Tests:** `make pwa-browser-test` drives the built app in headless Chrome (every release).

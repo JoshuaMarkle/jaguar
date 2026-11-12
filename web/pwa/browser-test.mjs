@@ -166,6 +166,21 @@ try {
   await sleep(3000);
   const phone = await evaluate(`({ w: document.documentElement.scrollWidth, run: document.getElementById('run').getBoundingClientRect().right })`);
   check(phone.w <= 390 && phone.run <= 390, `phone width: page ${phone.w} px, Run ends at ${Math.round(phone.run)} px`);
+  // A finger swiping up on the canoe scrolls the page (only sideways swipes turn the canoe).
+  await evaluate('window.scrollTo(0, 0)');
+  const vc = await evaluate(`(() => { const r = document.getElementById('view').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  const touch = (type, pts) => send('Input.dispatchTouchEvent', { type, touchPoints: pts });
+  await touch('touchStart', [{ x: vc[0], y: vc[1] }]);
+  for (let d = 15; d <= 300; d += 15) { await touch('touchMove', [{ x: vc[0], y: vc[1] - d }]); await sleep(16); }
+  await touch('touchEnd', []);
+  await sleep(800);
+  const sy = await evaluate('scrollY');
+  check(sy > 100, `a swipe up on the canoe scrolls the page (${Math.round(sy)} px)`);
+  const fonts = await evaluate(`[...new Set([...document.querySelectorAll('#left label, #left input, #right .kv, #top button')].filter(e => e.offsetParent).map(e => getComputedStyle(e).fontSize))]`);
+  check(fonts.length === 1, `one text size for labels, fields, results and the bar: ${fonts.join(', ')}`);
+  const cube = await evaluate(`[getComputedStyle(document.querySelector('#viewcube canvas')).display, !!document.querySelector('#viewcube button')?.offsetParent]`);
+  check(cube[0] === 'none' && cube[1], `no orientation cube on a phone, Home kept (${cube})`);
   // Landscape (Android phone on its side): the same one-column phone layout, no sideways scroll.
   await send('Emulation.setDeviceMetricsOverride', { width: 915, height: 412, deviceScaleFactor: 2.6, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } });
   await sleep(1500);
